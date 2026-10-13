@@ -68,7 +68,8 @@ from the legacy are not in V2):
   consolidation = 0.85
 
 Target sessions:
-  Uses preferred_days_per_week → max_days_per_week → typical_runs_per_week.
+  Explicit sessions_preference (2..6) precedes profile/observed frequency.
+  Otherwise uses preferred_days_per_week → max_days_per_week → typical_runs_per_week.
   In no_history / deep_reprise: capped at REPRISE_MAX_SESSIONS (3) to preserve
   PR77 "simple comeback" principle.
 
@@ -250,19 +251,23 @@ def _phase_multiplier(phase: PeriodizationPhase) -> float:
 def _clamp_sessions(
     runner_profile: RunnerProfile,
     continuity_state: str,
+    sessions_preference: Optional[int] = None,
 ) -> int:
     """Return the target session count, respecting constraints."""
-    # Priority: preferred_days_per_week > max_days_per_week > typical_runs_per_week
     base: Optional[float] = (
         runner_profile.preferred_days_per_week
         or runner_profile.max_days_per_week
         or runner_profile.typical_runs_per_week
     )
+    if _valid_sessions_preference(sessions_preference):
+        base = sessions_preference
     sessions = int(round(base)) if base is not None else 3
 
-    # In no_history / deep_reprise: cap to REPRISE_MAX_SESSIONS (PR77 principle).
+    # Apply reprise safety before reconciliation, not only when generating sessions.
     if continuity_state in ("no_history", "deep_reprise"):
         sessions = min(sessions, REPRISE_MAX_SESSIONS)
+    elif continuity_state == "partial_reprise":
+        sessions = min(sessions, 4)
 
     # Never zero sessions.
     sessions = max(1, sessions)
@@ -272,6 +277,10 @@ def _clamp_sessions(
         sessions = min(sessions, runner_profile.max_days_per_week)
 
     return sessions
+
+
+def _valid_sessions_preference(value: Optional[int]) -> bool:
+    return type(value) is int and 2 <= value <= 6
 
 
 def _prior_weekly_km(training_history: TrainingHistory) -> float:
@@ -542,6 +551,7 @@ def build_weekly_target(
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
     reference_date: date,
+    sessions_preference: Optional[int] = None,
 ) -> WeeklyTarget:
     """Build an immutable WeeklyTarget from explicit V2 inputs.
 
@@ -562,6 +572,8 @@ def build_weekly_target(
         Current periodization phase snapshot.
     reference_date:
         Anchor date — must be supplied explicitly by the caller.
+    sessions_preference:
+        Explicit session prescription (2..6), subject to availability/reprise caps.
     """
     reason_codes: list[str] = []
     continuity = training_state.continuity_state
@@ -612,7 +624,19 @@ def build_weekly_target(
         allow_intensity = True
 
     # ── Sessions ──────────────────────────────────────────────────────────
-    target_sessions = _clamp_sessions(runner_profile, continuity)
+    target_sessions = _clamp_sessions(runner_profile, continuity, sessions_preference)
+    if _valid_sessions_preference(sessions_preference):
+        reason_codes.append("SESSIONS_PREFERENCE_APPLIED")
+        if (
+            continuity in ("no_history", "deep_reprise") and sessions_preference > REPRISE_MAX_SESSIONS
+        ) or (continuity == "partial_reprise" and sessions_preference > 4):
+            reason_codes.append("SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY")
+        if (
+            runner_profile.max_days_per_week is not None
+            and target_sessions == runner_profile.max_days_per_week
+            and target_sessions < sessions_preference
+        ):
+            reason_codes.append("SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS")
 
     # ── Confidence ────────────────────────────────────────────────────────
     confidence = training_state.overall_confidence

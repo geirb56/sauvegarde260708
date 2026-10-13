@@ -5,6 +5,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -13,6 +14,7 @@ from services.run_index_history import (  # noqa: E402
     build_snapshot_document,
     get_run_index_history_payload,
     select_snapshot_dates,
+    upsert_run_index_snapshot,
 )
 
 
@@ -191,11 +193,12 @@ def test_backfill_run_index_history_creates_progressive_snapshots():
     result = asyncio.run(backfill_run_index_history(db, "runner-1", reference_date=date(2026, 7, 9)))
 
     history = sorted(db.run_index_scores.docs, key=lambda doc: doc["date"])
+    scored_history = [doc for doc in history if doc["run_index"] is not None]
     assert result["snapshots_targeted"] == len(history)
     assert len(history) >= 30
     assert len({doc["date"] for doc in history}) == len(history)
-    assert len({doc["run_index"] for doc in history}) > 1
-    assert history[0]["run_index"] < history[-1]["run_index"]
+    assert len({doc["run_index"] for doc in scored_history}) > 1
+    assert scored_history[0]["run_index"] < scored_history[-1]["run_index"]
 
 
 def test_backfill_run_index_history_is_idempotent():
@@ -212,7 +215,7 @@ def test_backfill_run_index_history_is_idempotent():
 def test_empty_history_snapshot_has_low_confidence():
     snapshot = build_snapshot_document("runner-1", [], date(2026, 7, 9))
 
-    assert snapshot["run_index"] == 0
+    assert snapshot["run_index"] is None
     assert snapshot["confidence_score"] == 0
 
 
@@ -235,7 +238,8 @@ def test_history_payload_returns_complete_12_month_view():
     assert len(payload["history"]) == 13
     assert payload["history"][0]["date"].startswith("2025-07")
     assert payload["history"][-1]["date"] == "2026-07-09"
-    assert payload["history"][0]["run_index"] < payload["history"][-1]["run_index"]
+    scored_history = [entry for entry in payload["history"] if entry["run_index"] is not None]
+    assert scored_history[0]["run_index"] < scored_history[-1]["run_index"]
     assert {"speed", "endurance", "consistency", "efficiency"} <= set(payload["history"][0].keys())
 
 
@@ -259,6 +263,104 @@ def test_history_payload_marks_partial_12_month_view_for_recent_user():
     assert payload["available_from"] >= "2026-04-01"
 
 
+def test_history_payload_refreshes_stale_today_snapshot_from_canonical_source():
+    reference_date = date(2026, 7, 9)
+    db = FakeDB(_progressive_workouts())
+    db.run_index_scores.docs.extend([
+        {
+            "user_id": "runner-1",
+            "date": "2026-06-25",
+            "run_index": 401,
+            "speed_score": 41,
+            "endurance_score": 42,
+            "consistency_score": 43,
+            "efficiency_score": 44,
+        },
+        {
+            "user_id": "runner-1",
+            "date": reference_date.isoformat(),
+            "run_index": 123,
+            "speed_score": 12,
+            "endurance_score": 12,
+            "consistency_score": 12,
+            "efficiency_score": 12,
+        },
+    ])
+
+    payload = asyncio.run(
+        get_run_index_history_payload(
+            db,
+            "runner-1",
+            period="6m",
+            reference_date=reference_date,
+        )
+    )
+
+    refreshed_today = next(doc for doc in db.run_index_scores.docs if doc["date"] == reference_date.isoformat())
+    assert refreshed_today["run_index"] != 123
+    assert payload["current_run_index"] == refreshed_today["run_index"]
+    assert any(entry["date"] == "2026-06-25" and entry["run_index"] == 401 for entry in payload["history"])
+
+
+def test_history_current_is_navigation_order_independent():
+    reference_date = date(2026, 7, 9)
+    progress_first_db = FakeDB(_progressive_workouts())
+    progress_first_db.run_index_scores.docs.append(
+        {
+            "user_id": "runner-1",
+            "date": "2026-06-25",
+            "run_index": 333,
+            "speed_score": 33,
+            "endurance_score": 34,
+            "consistency_score": 35,
+            "efficiency_score": 36,
+        }
+    )
+    payload_progress_first = asyncio.run(
+        get_run_index_history_payload(
+            progress_first_db,
+            "runner-1",
+            period="6m",
+            reference_date=reference_date,
+        )
+    )
+
+    dashboard_first_db = FakeDB(_progressive_workouts())
+    dashboard_first_db.run_index_scores.docs.append(
+        {
+            "user_id": "runner-1",
+            "date": "2026-06-25",
+            "run_index": 333,
+            "speed_score": 33,
+            "endurance_score": 34,
+            "consistency_score": 35,
+            "efficiency_score": 36,
+        }
+    )
+    dashboard_today = asyncio.run(
+        upsert_run_index_snapshot(
+            dashboard_first_db,
+            "runner-1",
+            snapshot_date=reference_date,
+        )
+    )
+    payload_dashboard_first = asyncio.run(
+        get_run_index_history_payload(
+            dashboard_first_db,
+            "runner-1",
+            period="6m",
+            reference_date=reference_date,
+        )
+    )
+
+    progress_today = next(
+        doc for doc in progress_first_db.run_index_scores.docs if doc["date"] == reference_date.isoformat()
+    )
+    assert payload_progress_first["current_run_index"] == progress_today["run_index"]
+    assert payload_dashboard_first["current_run_index"] == dashboard_today["run_index"]
+    assert payload_progress_first["current_run_index"] == payload_dashboard_first["current_run_index"]
+
+
 def test_historical_snapshot_changes_with_progression():
     workouts = _progressive_span_workouts(total_days=180, step_days=14)
 
@@ -269,3 +371,134 @@ def test_historical_snapshot_changes_with_progression():
     assert current_snapshot["date"] == "2026-07-09"
     assert past_snapshot["run_index"] != current_snapshot["run_index"]
     assert past_snapshot["run_index"] < current_snapshot["run_index"]
+
+
+def test_history_payload_maps_current_snapshot_pillars_and_evolution():
+    reference_date = date(2026, 7, 9)
+    db = FakeDB()
+    db.run_index_scores.docs.extend([
+        {
+            "user_id": "runner-1",
+            "date": "2026-06-25",
+            "run_index": 510,
+            "speed_score": 51,
+            "endurance_score": 52,
+            "consistency_score": 53,
+            "efficiency_score": 54,
+        },
+        {
+            "user_id": "runner-1",
+            "date": "2026-07-09",
+            "run_index": 520,
+            "speed_score": 52,
+            "endurance_score": 53,
+            "consistency_score": 54,
+            "efficiency_score": 55,
+        },
+    ])
+    current_snapshot = {
+        "user_id": "runner-1",
+        "date": "2026-07-09",
+        "run_index": 620,
+        "speed_score": 62,
+        "endurance_score": 63,
+        "consistency_score": 64,
+        "efficiency_score": 65,
+    }
+
+    async def _fake_load_activities(_db, _user_id):
+        return []
+
+    async def _fake_upsert(_db, _user_id, activities=None, snapshot_date=None):
+        return dict(current_snapshot)
+
+    with patch("services.run_index_history.load_garmin_domain_activities", new=_fake_load_activities), patch(
+        "services.run_index_history.upsert_run_index_snapshot", new=_fake_upsert
+    ):
+        payload = asyncio.run(
+            get_run_index_history_payload(
+                db,
+                "runner-1",
+                period="6m",
+                reference_date=reference_date,
+            )
+        )
+
+    assert payload["current_run_index"] == current_snapshot["run_index"]
+    assert payload["pillars"]["speed"]["current"] == current_snapshot["speed_score"]
+    assert payload["pillars"]["endurance"]["current"] == current_snapshot["endurance_score"]
+    assert payload["pillars"]["consistency"]["current"] == current_snapshot["consistency_score"]
+    assert payload["pillars"]["efficiency"]["current"] == current_snapshot["efficiency_score"]
+    assert payload["pillars"]["speed"]["evolution"] == current_snapshot["speed_score"] - 51
+    assert payload["pillars"]["endurance"]["evolution"] == current_snapshot["endurance_score"] - 52
+    assert payload["pillars"]["consistency"]["evolution"] == current_snapshot["consistency_score"] - 53
+    assert payload["pillars"]["efficiency"]["evolution"] == current_snapshot["efficiency_score"] - 54
+
+    assert payload["history"]
+    for entry in payload["history"]:
+        assert entry["speed"] == entry["speed_score"]
+        assert entry["endurance"] == entry["endurance_score"]
+        assert entry["consistency"] == entry["consistency_score"]
+        assert entry["efficiency"] == entry["efficiency_score"]
+
+
+def test_history_payload_preserves_none_for_current_pillars_and_evolution():
+    reference_date = date(2026, 7, 9)
+    db = FakeDB()
+    db.run_index_scores.docs.extend([
+        {
+            "user_id": "runner-1",
+            "date": "2026-06-25",
+            "run_index": 510,
+            "speed_score": 51,
+            "endurance_score": 52,
+            "consistency_score": 53,
+            "efficiency_score": None,
+        },
+        {
+            "user_id": "runner-1",
+            "date": "2026-07-09",
+            "run_index": 520,
+            "speed_score": 52,
+            "endurance_score": 53,
+            "consistency_score": 54,
+            "efficiency_score": 55,
+        },
+    ])
+    current_snapshot = {
+        "user_id": "runner-1",
+        "date": "2026-07-09",
+        "run_index": 620,
+        "speed_score": None,
+        "endurance_score": 63,
+        "consistency_score": None,
+        "efficiency_score": 65,
+    }
+
+    async def _fake_load_activities(_db, _user_id):
+        return []
+
+    async def _fake_upsert(_db, _user_id, activities=None, snapshot_date=None):
+        return dict(current_snapshot)
+
+    with patch("services.run_index_history.load_garmin_domain_activities", new=_fake_load_activities), patch(
+        "services.run_index_history.upsert_run_index_snapshot", new=_fake_upsert
+    ):
+        payload = asyncio.run(
+            get_run_index_history_payload(
+                db,
+                "runner-1",
+                period="6m",
+                reference_date=reference_date,
+            )
+        )
+
+    assert payload["current_run_index"] == current_snapshot["run_index"]
+    assert payload["pillars"]["speed"]["current"] is None
+    assert payload["pillars"]["speed"]["current"] != 0
+    assert payload["pillars"]["consistency"]["current"] is None
+    assert payload["pillars"]["consistency"]["current"] != 0
+    assert payload["pillars"]["speed"]["evolution"] is None
+    assert payload["pillars"]["consistency"]["evolution"] is None
+    assert payload["pillars"]["efficiency"]["evolution"] is None
+    assert payload["pillars"]["endurance"]["evolution"] == current_snapshot["endurance_score"] - 52

@@ -21,10 +21,14 @@ metrics in the /run-index path:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-from garmin.readiness_adapter import build_readiness_v2_from_garmin_data, get_rhr_v2_baseline
+from garmin.readiness_adapter import (
+    _CURRENT_SIGNAL_MAX_AGE_DAYS,
+    build_readiness_v2_from_garmin_data,
+    get_rhr_v2_baseline,
+)
 from training_v2.training_load import build_training_load
 
 logger = logging.getLogger(__name__)
@@ -62,16 +66,37 @@ def _mean(values: List[float]) -> Optional[float]:
     return sum(vals) / len(vals)
 
 
-def _latest_with(metrics_docs: List[dict], key: str) -> Optional[dict]:
+def _latest_with(
+    metrics_docs: List[dict],
+    key: str,
+    reference_date: Optional[date] = None,
+) -> Optional[dict]:
     """Return the most recent metrics doc whose `key` is a real (non-null) value.
 
-    metrics_docs is sorted newest-first. This guarantees a REAL device value
-    (e.g. HRV) is used whenever the device actually reported one, instead of
-    falling back to the degraded model just because the very latest day is empty.
+    metrics_docs is sorted newest-first.  When *reference_date* is supplied,
+    only documents dated within ``_CURRENT_SIGNAL_MAX_AGE_DAYS`` of
+    *reference_date* are considered.  A doc whose date cannot be parsed, or
+    that is older than the staleness window, is silently skipped — stale data
+    must never be presented as a current measurement.
     """
+    cutoff: Optional[date] = None
+    if reference_date is not None:
+        cutoff = reference_date - timedelta(days=_CURRENT_SIGNAL_MAX_AGE_DAYS)
+
     for doc in metrics_docs:
-        if doc.get(key) is not None:
-            return doc
+        if doc.get(key) is None:
+            continue
+        if cutoff is not None:
+            raw_date = doc.get("date")
+            if raw_date is None:
+                continue
+            try:
+                doc_date = date.fromisoformat(str(raw_date)[:10])
+            except ValueError:
+                continue
+            if doc_date < cutoff or doc_date > reference_date:
+                continue
+        return doc
     return None
 
 
@@ -110,17 +135,33 @@ async def compute_run_index(
         .limit(200)
         .to_list(length=200)
     )
+    # Current garmin_capabilities.has_hrv reflects observed data availability,
+    # not a definitive hardware capability. Keep readiness capability neutral
+    # until a dedicated provider-level "unsupported" signal exists.
+    hrv_supported = None
+
+    # --- Native Garmin VO₂max ---
+    # Fetched from gccli health max-metrics during sync and stored in garmin_vo2max.
+    # Select the most recent valid point by measurement date (sparse history).
+    vo2max_doc = await db.garmin_vo2max.find_one(
+        {"user_id": user_id, "vo2max_running": {"$ne": None}},
+        {"_id": 0, "vo2max_running": 1, "vo2max_running_precise": 1, "date": 1},
+        sort=[("date", -1)],
+    )
+    vo2max_running: Optional[float] = (vo2max_doc or {}).get("vo2max_running")
+    vo2max_running_precise: Optional[float] = (vo2max_doc or {}).get("vo2max_running_precise")
+    vo2max_date: Optional[str] = (vo2max_doc or {}).get("date")
 
     if not metrics_docs and not activities:
         return None
 
     today = reference_date if reference_date is not None else datetime.now(timezone.utc).date()
 
-    # Use the most RECENT REAL (non-null) reading per metric. If the device
-    # actually reported HRV, that real value is used (never recomputed/faked).
-    hrv_doc = _latest_with(metrics_docs, "hrv")
-    rhr_doc = _latest_with(metrics_docs, "resting_hr")
-    sleep_doc = _latest_with(metrics_docs, "sleep_hours")
+    # Use the most RECENT REAL (non-null) reading per metric within the
+    # staleness window.  A device value from >7 days ago is treated as absent.
+    hrv_doc = _latest_with(metrics_docs, "hrv", today)
+    rhr_doc = _latest_with(metrics_docs, "resting_hr", today)
+    sleep_doc = _latest_with(metrics_docs, "sleep_hours", today)
 
     hrv_today = hrv_doc.get("hrv") if hrv_doc else None
     rhr_today = rhr_doc.get("resting_hr") if rhr_doc else None
@@ -138,12 +179,13 @@ async def compute_run_index(
     if hrv_baseline is None and have_hrv:
         hrv_baseline = hrv_today
 
-    # Sleep efficiency derived from sleep score when present, else a neutral default.
+    # Sleep efficiency derived from sleep score when present; None when absent.
+    # No fabricated default — absent sleep data stays absent (None ≠ 0).
     if sleep_score_raw is not None:
-        sleep_efficiency = sleep_score_raw / 100.0 if sleep_score_raw > 1.0 else float(sleep_score_raw)
+        sleep_efficiency: Optional[float] = sleep_score_raw / 100.0 if sleep_score_raw > 1.0 else float(sleep_score_raw)
     else:
-        sleep_efficiency = 0.85
-    sleep_hours_val = sleep_hours if sleep_hours is not None else 7.0
+        sleep_efficiency = None
+    sleep_hours_val: Optional[float] = sleep_hours
 
     # --- Training Load V2 — single source of truth (R3.5) ---
     # build_training_load() is called exactly once; the snapshot is shared
@@ -160,11 +202,28 @@ async def compute_run_index(
         if (have_rhr and rhr_baseline is not None)
         else None
     )
-    sleep_penalty = max(0.0, 8.0 - sleep_hours_val) + (1.0 - sleep_efficiency) * 2.0
+    # sleep_penalty: only computed from real device data; None when sleep is absent.
+    # Hours term (max(0, 8 - h)) is computed whenever hours are available.
+    # Efficiency term is added only when sleep_score is present; when absent the
+    # term is zero (i.e. the efficiency component is omitted entirely — no invented
+    # neutral value, just hours-only penalty).
+    if sleep_hours_val is not None:
+        hours_penalty = max(0.0, 8.0 - sleep_hours_val)
+        # When sleep_efficiency is None the device did not report a sleep score;
+        # we omit the efficiency component (0.0 contribution) rather than assuming
+        # any particular efficiency level.
+        eff_penalty = (1.0 - sleep_efficiency) * 2.0 if sleep_efficiency is not None else 0.0
+        sleep_penalty: Optional[float] = hours_penalty + eff_penalty
+    else:
+        sleep_penalty = None
 
     # --- Run Readiness V2 ---
     _v2_result = build_readiness_v2_from_garmin_data(
-        metrics_docs, activities, today, load_snapshot=load_snapshot
+        metrics_docs,
+        activities,
+        today,
+        load_snapshot=load_snapshot,
+        hrv_supported=hrv_supported,
     )
     run_readiness_v2: Optional[float] = _v2_result.score
     readiness_v2_confidence: str = _v2_result.confidence.value
@@ -197,14 +256,18 @@ async def compute_run_index(
         recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
 
     # --- Statuses ---
-    hrv_status = "green"
+    hrv_status = "gray"
     if hrv_delta is not None:
         hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = (
         "gray" if rhr_delta is None
         else ("green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red"))
     )
-    sleep_status = "green" if sleep_penalty <= 1.0 else ("yellow" if sleep_penalty <= 2.5 else "red")
+    sleep_status = (
+        "gray"
+        if sleep_penalty is None
+        else ("green" if sleep_penalty <= 1.0 else ("yellow" if sleep_penalty <= 2.5 else "red"))
+    )
     # Load status is derived from the V2 snapshot status label (no fallback colour).
     load_status = _acwr_status_to_color(load_snapshot.status)
 
@@ -227,9 +290,14 @@ async def compute_run_index(
               "es": f"FC en reposo {sign}{rhr_delta:.1f} bpm vs referencia ({rhr_today:.0f} bpm)",
               "en": f"RHR {sign}{rhr_delta:.1f} bpm vs baseline ({rhr_today:.0f} bpm)"}
         reasons.append(_t.get(lang, _t["fr"]))
-    _t = {"fr": f"Sommeil {sleep_hours_val:.1f} h", "es": f"Sueño {sleep_hours_val:.1f} h",
-          "en": f"Sleep {sleep_hours_val:.1f} h"}
-    reasons.append(_t.get(lang, _t["fr"]))
+    if sleep_hours_val is not None:
+        _t = {"fr": f"Sommeil {sleep_hours_val:.1f} h", "es": f"Sueño {sleep_hours_val:.1f} h",
+              "en": f"Sleep {sleep_hours_val:.1f} h"}
+        reasons.append(_t.get(lang, _t["fr"]))
+    else:
+        _t = {"fr": "Données sommeil absentes", "es": "Datos de sueño ausentes",
+              "en": "Sleep data absent"}
+        reasons.append(_t.get(lang, _t["fr"]))
     if acwr is not None:
         _t = {"fr": f"Charge d'entraînement (ACWR) {acwr:.2f}",
               "es": f"Carga de entrenamiento (ACWR) {acwr:.2f}",
@@ -274,7 +342,14 @@ async def compute_run_index(
             act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
             if act_dt is not None and act_dt.date() <= hist_day:
                 hist_activities.append(a)
-        hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
+        hist_v2 = build_readiness_v2_from_garmin_data(
+            hist_metrics,
+            hist_activities,
+            hist_day,
+            # Historical readiness must be no-lookahead: current device
+            # capability is not projected backwards to prior days.
+            hrv_supported=None,
+        )
         doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
         hist_load_snapshot = build_training_load(hist_activities, hist_day)
         doc_training_load: Optional[float] = hist_load_snapshot.acwr
@@ -304,9 +379,9 @@ async def compute_run_index(
             "rhr_baseline": round(float(rhr_baseline), 1) if rhr_baseline is not None else None,
             "rhr_delta": round(rhr_delta, 1) if rhr_delta is not None else None,
             "rhr_status": rhr_status,
-            "sleep_hours": round(sleep_hours_val, 1),
-            "sleep_efficiency": round(sleep_efficiency, 2),
-            "sleep_score": round(sleep_penalty, 2),
+            "sleep_hours": round(sleep_hours_val, 1) if sleep_hours_val is not None else None,
+            "sleep_efficiency": round(sleep_efficiency, 2) if sleep_efficiency is not None else None,
+            "sleep_score": round(sleep_penalty, 2) if sleep_penalty is not None else None,
             "sleep_status": sleep_status,
             # training_load now mirrors snapshot.acwr (Optional); frontend must
             # accept null (no chronic load = unavailable, never a fake 1.0).
@@ -327,6 +402,11 @@ async def compute_run_index(
                 "status": load_snapshot.status,
                 "confidence": load_snapshot.confidence,
             },
+            # Native Garmin running VO₂max.  None when the device does
+            # not produce this metric or before the first sync with max-metrics.
+            "vo2max_running": vo2max_running,
+            "vo2max_running_precise": vo2max_running_precise,
+            "vo2max_date": vo2max_date,
         },
         "history": history,
     }

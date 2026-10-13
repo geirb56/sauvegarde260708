@@ -28,6 +28,7 @@ import path from "path";
 
 import Dashboard from "@/pages/Dashboard";
 import { LanguageProvider } from "@/context/LanguageContext";
+import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
 jest.mock("sonner", () => ({
@@ -48,6 +49,10 @@ jest.mock("@/context/SubscriptionContext", () => ({
 }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+beforeEach(() => {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -291,9 +296,9 @@ describe("Test 7: recommendation_color absent → gray", () => {
 
     const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
-    // Gray accent is #6b7280 → rgb(107, 114, 128) in jsdom
+    // Preserve the gray badge surface; useful text uses the readable tertiary token.
     const style = badge.getAttribute("style") || "";
-    expect(style).toContain("rgb(107, 114, 128)");
+    expect(badge.style.background).toContain("rgba(107, 114, 128,");
     // Must NOT be green
     expect(style).not.toContain("rgb(34, 197, 94)");
 
@@ -317,8 +322,8 @@ describe("Test 8: recommendation_color unknown → gray", () => {
     const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
     const style = badge.getAttribute("style") || "";
-    // Unknown color → gray: #6b7280 → rgb(107, 114, 128) in jsdom
-    expect(style).toContain("rgb(107, 114, 128)");
+    // Unknown color retains the gray surface rather than becoming green.
+    expect(badge.style.background).toContain("rgba(107, 114, 128,");
     expect(style).not.toContain("rgb(34, 197, 94)");
 
     unmount();
@@ -334,7 +339,7 @@ describe("Test 9: recommendation_color known → matching accent", () => {
   it.each([
     ["green", "rgb(34, 197, 94)"],
     ["yellow", "rgb(245, 158, 11)"],
-    ["red", "rgb(239, 68, 68)"],
+    ["red", "rgba(239, 68, 68,"],
   ])("color=%s → accent %s in badge style", async (color, expectedRgb) => {
     const cardio = buildCardio({ recommendation_color: color });
     cardio.recommendation_color = color;
@@ -346,6 +351,26 @@ describe("Test 9: recommendation_color known → matching accent", () => {
     expect(badge).not.toBeNull();
     const style = badge.getAttribute("style") || "";
     expect(style).toContain(expectedRgb);
+
+    unmount();
+  });
+});
+
+describe("Test 9b: recommendation label is a freshness state, never a workout directive", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("ignores legacy recommendation wording and shows color-based readiness state", async () => {
+    const cardio = buildCardio({ recommendation_color: "green" });
+    cardio.recommendation = "SÉANCE INTENSE";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain("High readiness");
+    expect(badge.textContent).not.toContain("SÉANCE INTENSE");
+    expect(badge.textContent).not.toContain("RUN HARD");
 
     unmount();
   });
@@ -375,12 +400,14 @@ describe("Test 10: history null entry ignored", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 11 — history: 0 entry kept
+// Test 11 — READINESS_HISTORY_ON_DASHBOARD = NO
+// The 30-day history chart was removed from the Dashboard (C202).
+// Verify it is never rendered regardless of history data.
 // ---------------------------------------------------------------------------
-describe("Test 11: history 0 score is kept (not filtered)", () => {
+describe("Test 11: READINESS_HISTORY_ON_DASHBOARD = NO", () => {
   afterEach(() => jest.clearAllMocks());
 
-  it("chart renders when history contains score of 0", async () => {
+  it("readiness history chart is never rendered on Dashboard (removed in C202)", async () => {
     const history = [
       { date: "2025-07-01", run_readiness: 0 },
       { date: "2025-07-02", run_readiness: 45 },
@@ -391,7 +418,7 @@ describe("Test 11: history 0 score is kept (not filtered)", () => {
     await wait();
 
     const chart = container.querySelector('[data-testid="readiness-chart"]');
-    expect(chart).not.toBeNull();
+    expect(chart).toBeNull();
 
     unmount();
   });
@@ -503,6 +530,17 @@ describe("Test 15: Training V2 components untouched", () => {
     );
     expect(src.length).toBeGreaterThan(100);
     expect(src).toContain("TrainingPlanV2");
+  });
+
+  describe("Test 15b: readiness zones use non-prescriptive labels", () => {
+    it("i18n readiness zone labels no longer describe workout prescriptions", () => {
+      const { translations } = require("@/lib/i18n");
+      expect(translations.en.dashboard.readinessZones.intense).toBe("High");
+      expect(translations.en.dashboard.readinessZones.easy).toBe("Moderate");
+      expect(translations.en.dashboard.readinessZones.rest).toBe("Low");
+      expect(translations.fr.dashboard.readinessZones.intense).toBe("Élevée");
+      expect(translations.es.dashboard.readinessZones.intense).toBe("Alta");
+    });
   });
 });
 

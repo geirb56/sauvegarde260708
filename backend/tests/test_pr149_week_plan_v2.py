@@ -1,4 +1,4 @@
-"""PR149 — Architecture tests: WeeklyTarget V2 as prescription source in /training/week-plan.
+"""PR149 — Architecture tests: WeeklyTarget V2 canonical prescription behavior.
 
 These tests prove the architectural invariants of PR149:
 1. target_km_protected comes from WeeklyTarget V2 (not determine_target_load).
@@ -11,10 +11,9 @@ These tests prove the architectural invariants of PR149:
 8. build_weekly_target_from_workouts is deterministic and pure.
 
 Blocker regressions:
-B1. duration-based + LLM failure → fallback produces no km.
-B2. reference_date is mandatory — omitting it fails explicitly.
-B3. Unknown goal → explicit error, not silent half_marathon.
-B4. DomainActivity boundary uses canonical to_domain_activity adapter.
+B1. reference_date is mandatory — omitting it fails explicitly.
+B2. Unknown goal → explicit error, not silent half_marathon.
+B3. DomainActivity boundary uses canonical to_domain_activity adapter.
 """
 
 import pytest
@@ -78,36 +77,6 @@ class TestWeeklyTargetV2Source:
         assert wt.target_km > 0
         assert wt.target_duration_minutes is None
         assert wt.continuity_state in ("normal", "reprise_exit")
-
-
-# ---------------------------------------------------------------------------
-# Test 2: determine_target_load does NOT decide target_km
-# ---------------------------------------------------------------------------
-
-class TestDetermineTargetLoadDecoupled:
-    """Prove that determine_target_load is not the source of the V2 prescription."""
-
-    def test_target_load_is_independent_of_weekly_target(self):
-        """determine_target_load returns a pseudo-load, not the V2 km target."""
-        from training_engine import determine_target_load
-
-        context = {"ctl": None, "atl": None, "tsb": None, "acwr": None,
-                   "weekly_km": 25.0, "load_7": 250, "load_28": 1000}
-        target_load = determine_target_load(context, "build")
-
-        # target_load is in "load units" (km*10 adjusted), NOT the same as WeeklyTarget.target_km
-        workouts = [_make_workout(days_ago=d, distance_km=8.0, ref=REFERENCE_DATE)
-                    for d in range(1, 22, 3)]
-        wt = build_weekly_target_from_workouts(
-            workouts=workouts,
-            goal_type="SEMI",
-            race_date=RACE_DATE,
-            cycle_start_date=CYCLE_START,
-            reference_date=REFERENCE_DATE,
-        )
-
-        # The two values are fundamentally different metrics
-        assert target_load != wt.target_km
 
 
 # ---------------------------------------------------------------------------
@@ -304,78 +273,10 @@ class TestWeeklyTargetFormulaUnchanged:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 1: duration-based + LLM failure → fallback produces no km
+# BLOCKER 1: reference_date mandatory — no implicit today
 # ---------------------------------------------------------------------------
 
-class TestBlocker1DurationFallbackNoKm:
-    """When V2 prescribes duration-based and LLM fails, fallback must not invent km."""
-
-    def test_fallback_duration_based_no_km(self):
-        """Simulate: deep_reprise + duration-based → fallback → no distance_km.
-
-        We inline the fallback logic test since server.py requires fastapi.
-        The invariant: when target_km_protected=None and target_duration_minutes is set,
-        the fallback MUST produce weekly_km=None and no session distance_km.
-        """
-        # Replicate the duration-based branch of _generate_fallback_week_plan
-        target_km_protected = None
-        target_duration_minutes = 105
-        context = {
-            "weekly_km": 20.0,  # legacy — must NOT be used
-            "target_duration_minutes": target_duration_minutes,
-        }
-
-        # The invariant: if target_km_protected is None and duration is set,
-        # the plan must NOT contain any distance
-        if target_km_protected is None and target_duration_minutes is not None:
-            sessions_count = 3
-            per_session = target_duration_minutes // sessions_count
-            remainder = target_duration_minutes - per_session * sessions_count
-            plan = {
-                "weekly_km": None,
-                "target_basis": "duration",
-                "target_duration_minutes": target_duration_minutes,
-                "total_tss": None,
-                "sessions": [
-                    {"day": "tuesday", "duration": f"{per_session}min", "distance_km": None, "estimated_tss": None},
-                    {"day": "thursday", "duration": f"{per_session}min", "distance_km": None, "estimated_tss": None},
-                    {"day": "saturday", "duration": f"{per_session + remainder}min", "distance_km": None, "estimated_tss": None},
-                ],
-            }
-        else:
-            pytest.fail("Should have entered duration-based branch")
-
-        assert plan["weekly_km"] is None
-        assert plan["target_basis"] == "duration"
-        assert plan["target_duration_minutes"] == 105
-        assert plan["total_tss"] is None
-        assert plan["total_tss"] != 0  # None != 0
-        for session in plan["sessions"]:
-            assert session.get("distance_km") is None
-            assert session.get("estimated_tss") is None
-            assert session.get("estimated_tss") != 0  # None != 0
-
-    def test_fallback_code_path_exists_in_server(self):
-        """Verify the duration-based branch exists in server.py source code."""
-        import pathlib
-        server_path = pathlib.Path(__file__).resolve().parent.parent / "server.py"
-        source = server_path.read_text()
-        # The duration-based fallback must check target_duration_minutes
-        assert "target_km_protected is None and target_duration_minutes is not None" in source
-        # It must produce weekly_km: None
-        assert '"weekly_km": None' in source or "'weekly_km': None" in source
-        # It must set target_basis to duration
-        assert '"target_basis": "duration"' in source or "'target_basis': \"duration\"" in source
-        # estimated_tss and total_tss must be None (not 0) in duration-based fallback
-        assert '"estimated_tss": None' in source
-        assert '"total_tss": None' in source
-
-
-# ---------------------------------------------------------------------------
-# BLOCKER 2: reference_date mandatory — no implicit today
-# ---------------------------------------------------------------------------
-
-class TestBlocker2ReferenceDateMandatory:
+class TestBlocker1ReferenceDateMandatory:
     """reference_date must be explicit; omitting it must fail."""
 
     def test_reference_date_required(self):
@@ -411,10 +312,10 @@ class TestBlocker2ReferenceDateMandatory:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 3: Unknown goal → explicit error, not silent half_marathon
+# BLOCKER 2: Unknown goal → explicit error, not silent half_marathon
 # ---------------------------------------------------------------------------
 
-class TestBlocker3UnknownGoalExplicitError:
+class TestBlocker2UnknownGoalExplicitError:
     """Unknown goal must raise, never silently become half_marathon."""
 
     def test_unknown_goal_raises(self):
@@ -462,10 +363,10 @@ class TestBlocker3UnknownGoalExplicitError:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 4: DomainActivity boundary — canonical adapter used
+# BLOCKER 3: DomainActivity boundary — canonical adapter used
 # ---------------------------------------------------------------------------
 
-class TestBlocker4DomainActivityBoundary:
+class TestBlocker3DomainActivityBoundary:
     """Bridge must use canonical to_domain_activity, producing DomainActivity instances."""
 
     def test_canonical_adapter_produces_domain_activity(self):

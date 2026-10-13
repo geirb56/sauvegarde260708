@@ -35,3 +35,6 @@ frontend/node_modules/.cache/default-development/8.pack
 frontend/node_modules/.cache/default-development/12.pack
 frontend/node_modules/.cache/default-development/14.pack
 frontend/node_modules/.cache/default-development/15.pack
+
+tmp/
+**/node_modules/

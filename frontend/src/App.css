@@ -16,7 +16,7 @@
 /* Data label styling */
 .data-label {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: hsl(var(--muted-foreground));
@@ -33,7 +33,7 @@
 /* Workout type badge */
 .workout-type-badge {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     padding: 4px 8px;

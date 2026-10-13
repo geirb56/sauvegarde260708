@@ -1,35 +1,10 @@
-"""Performance Model V2 — Pure business logic for VMA estimation and race predictions.
+"""Performance Model V2 — Pure business logic for race predictions.
 
 This module is intentionally I/O-free:
   - No Mongo / database calls
   - No FastAPI / HTTP
   - No datetime.now() (reference_date is always an explicit parameter)
   - No references to the workouts collection
-
-VMA V2 — ACTIVE PATH:
-
-  SOURCE B — Individual HR-speed model (modèle individuel vitesse–FC):
-    Linear regression speed = a * HR + b on multiple clean running activities.
-    Requires >= 4 activities with average HR spanning >= 20 bpm.
-    FCmax from the robust observed Garmin max HR (see _resolve_fcmax_robust).
-    Extrapolation target: 95% of FCmax (aerobic ceiling, conservative).
-    If R² < 0.30 or slope <= 0: vma_kmh = null.
-
-  SOURCE A — Explicit performance: REMOVED.
-    No Garmin field identifies an activity as a race or test.
-    All related code has been deleted.
-
-  If SOURCE B yields insufficient data or quality: vma_kmh = null.
-
-FCmax policy:
-  FCMAX_RUNTIME_SOURCE = ROBUST_OBSERVED_GARMIN_MAX_HR
-  FCMAX_OUTLIER_PROTECTION = YES (active when n >= 3 observations)
-  USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
-  No 220-age formula, no population fallback, no hr_max+5.
-
-  Robust estimator: for n >= 3, if the highest observed max_hr is > 10% above
-  the second-highest, it is treated as a Garmin artefact and discarded.
-  For n < 3: raw max (no outlier protection, documented).
 
 Race predictions — ROAD ONLY:
   RIEGEL_SOURCE = QUALIFIED_OBSERVED_ACTIVITY_ONLY
@@ -42,23 +17,11 @@ Personal speed percentile uses a 90-day strictly-prior benchmark (no look-ahead,
 Without HR: qualification is still possible, but only via a stricter speed-only fallback and
 the resulting prediction confidence is capped at MEDIUM.
 
-VMA / Predictions independence:
-  RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
-  Race predictions are computed from #188-qualified performances and the
-  performance curve only. Qualification can depend on FCmax through relative HR.
-  VMA output and derived VO2max never directly alter race times.
-
-VMA history:
-  VMA_WINDOW_DAYS = 42 (rolling window, non-cumulative)
-  Each snapshot uses only activities within the 42-day window ending at snapshot_date.
-  estimate_vma() applies this window internally.
-  NO look-ahead.
-
 duration_s semantics:
   GARMIN_DURATION_SOURCE = summaryDTO.movingDuration (preferred) → summaryDTO.duration (fallback)
   Performance duration authority: _performance_duration_s() prefers moving_duration_s when
   moving_duration_s > 0 and moving_duration_s <= duration_s (or duration_s absent).
-  This is the single authority for speed, VMA, and Riegel calculations.
+  This is the single authority for speed and Riegel calculations.
 
 FORBIDDEN:
   - avg_speed-divided-by-0.70 fallback (removed)
@@ -74,7 +37,6 @@ Inputs:
     user_max_hr            — optional known FCmax from user profile (wired to None at runtime)
 
 Outputs (dataclasses, not Pydantic):
-    VMAEstimate
     RacePrediction
     PerformanceEstimate
 """
@@ -111,31 +73,18 @@ CURVE_MAX_EXTRAPOLATION_RATIO: float = 6.0
 CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO: float = 4.5
 CURVE_K_CONFLICT_WEIGHT_PENALTY: float = 0.60
 
-# PR #190 — k identifiability
+# PR #190/#191 — k identifiability / slope-evidence
 # Minimum quality-weighted variance of log(distance) required to trust a
 # data-driven k learned from N≥3 qualified performances.
-# Identifiability is measured exclusively on high- and medium-confidence
-# observations; speed-only/low-confidence points are excluded from this
-# calculation even if they span a wide distance range.
+# PR #191: identifiability is measured exclusively on HIGH-confidence
+# (slope-evidence) observations.  Medium/low observations are excluded
+# even if they span a wide distance range.
 # Threshold justification:
 #   - Two observations at 5 km and 21 km with equal weight → score ≈ 0.52 (identifiable)
 #   - Many observations all within 8–12 km → score ≈ 0.013 (not identifiable)
 #   - 0.05 corresponds roughly to needing meaningful spread like 5–15 km
-#     in the high/medium-confidence observation set.
+#     in the slope-evidence (high-confidence) observation set.
 K_IDENTIFIABILITY_MIN_WX_VAR: float = 0.05
-
-# PR #191 — slope evidence
-# A qualified performance (PR #188) is worth contributing to the performance
-# LEVEL (A), but it is only a defensible SLOPE-EVIDENCE observation for learning
-# the individual k when it is close to a maximal/representative effort for its
-# distance.  Garmin exposes no native race/max-effort signal, so slope evidence
-# reuses the existing PR #188 confidence tier: only "high" observations
-# (HR-supported near-maximal efforts) count as slope evidence.  Medium/low/
-# speed-only observations still contribute to A but never, on their own, define k.
-# At least this many slope-evidence observations (with sufficient distance
-# spread) are required before a data-driven k is trusted; otherwise k falls back
-# to the RIEGEL_K prior while A is still estimated from all qualified points.
-K_SLOPE_EVIDENCE_MIN_COUNT: int = 2
 
 # PR #190 — Huber quality-aware floors
 # Minimum Huber multiplier as a fraction of base_weight for high/medium
@@ -160,20 +109,6 @@ MIN_DISTANCE_M: float = 500.0
 # Minimum duration (s) for an effort to be informative
 MIN_INFORMATIVE_DURATION_S: float = 5 * 60   # 5 min
 
-# HR-speed model: activity filtering
-MIN_DURATION_HR_MODEL_S: float = 10 * 60     # 10 min — short sprints not representative
-MIN_AVG_HR: float = 90.0                      # bpm floor — below this is likely invalid
-MAX_AVG_HR: float = 220.0                     # bpm ceiling — above this is aberrant
-
-# HR-speed model: coverage requirements
-MIN_ACTIVITIES_HR_MODEL: int = 4
-MIN_DISTINCT_HR_LEVELS: int = 3
-MIN_HR_RANGE_BPM: float = 20.0               # min spread across observed HR values
-
-# HR-speed model: quality
-MIN_R2: float = 0.30                          # minimum R² — weak correlation → null
-MAX_EXTRAPOLATION_RATIO: float = 1.25         # max HR extrapolation beyond observed max
-
 # Staleness thresholds (days) for confidence
 CONFIDENCE_HIGH_DAYS = 21
 CONFIDENCE_MEDIUM_DAYS = 56
@@ -187,6 +122,8 @@ MAX_ROAD_ELEVATION_GAIN_PER_KM: float = 30.0  # m/km — above this, not road-eq
 
 # Performance qualification business constants
 PERSONAL_SPEED_WINDOW_DAYS: int = 90
+# Personal-k slope-evidence memory window (distinct from qualification window)
+SLOPE_EVIDENCE_WINDOW_DAYS: int = 90
 MIN_SPEED_BENCHMARK_RUNS: int = 5
 PERFORMANCE_HR_WEIGHT: float = 0.55
 PERFORMANCE_SPEED_WEIGHT: float = 0.45
@@ -201,9 +138,6 @@ PERFORMANCE_HIGH_CONFIDENCE_RELATIVE_HR: float = 0.85
 PERFORMANCE_HIGH_CONFIDENCE_SPEED_PERCENTILE: float = 90.0
 MIN_RIEGEL_RELATIVE_HR: float = PERFORMANCE_MIN_RELATIVE_HR
 
-# VMA rolling window (used for both CURRENT and HISTORY)
-VMA_WINDOW_DAYS: int = 42
-
 # Target race distances (m)
 RACE_DISTANCES_M = {
     "5K": 5_000.0,
@@ -215,15 +149,6 @@ RACE_DISTANCES_M = {
 # ---------------------------------------------------------------------------
 # Reason codes
 # ---------------------------------------------------------------------------
-
-REASON_HR_SPEED_MODEL_SOURCE = "HR_SPEED_MODEL_SOURCE"
-REASON_HR_RANGE_INSUFFICIENT = "HR_RANGE_INSUFFICIENT"
-REASON_HR_LEVELS_INSUFFICIENT = "HR_LEVELS_INSUFFICIENT"
-REASON_HR_MODEL_POOR_FIT = "HR_MODEL_POOR_FIT"
-REASON_EXTRAPOLATION_TOO_LARGE = "EXTRAPOLATION_TOO_LARGE"
-REASON_NO_FCMAX = "NO_FCMAX"
-REASON_NO_DATA = "NO_DATA"
-REASON_INSUFFICIENT_ACTIVITIES = "INSUFFICIENT_ACTIVITIES"
 
 REASON_PERF_QUALIFIED_HR_SPEED = "PERF_QUALIFIED_HR_SPEED"
 REASON_PERF_QUALIFIED_SPEED_ONLY = "PERF_QUALIFIED_SPEED_ONLY"
@@ -275,7 +200,6 @@ def _performance_duration_s(a: DomainActivity) -> Optional[float]:
     This function is the single authority for duration used in:
     - _speed_kmh()
     - _validate_activity() duration check
-    - _is_usable_for_hr_model() duration check
     - Riegel source duration in predict_races()
     """
     moving = a.moving_duration_s
@@ -353,79 +277,6 @@ def _is_road_comparable(a: DomainActivity, reference_date: date) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# HR-speed model filtering
-# ---------------------------------------------------------------------------
-
-
-def _is_usable_for_hr_model(a: DomainActivity, reference_date: date) -> bool:
-    """Additional filters for HR-speed model activities.
-
-    On top of _validate_activity, also requires:
-    - Not trail_running (road/track only for HR-speed model)
-    - HR present and plausible
-    - Duration >= MIN_DURATION_HR_MODEL_S (no short sprints)
-    - Elevation gain per km <= MAX_ROAD_ELEVATION_GAIN_PER_KM (trail/hilly → not comparable)
-    - Not a future activity
-    """
-    if not _validate_activity(a, reference_date):
-        return False
-    # trail_running excluded from road HR-speed model
-    act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
-    if act_type == "trail_running":
-        return False
-    hr = a.average_hr
-    if hr is None or hr < MIN_AVG_HR or hr > MAX_AVG_HR:
-        return False
-    dur = _performance_duration_s(a)
-    if (dur or 0) < MIN_DURATION_HR_MODEL_S:
-        return False
-    # Elevation: reject if data exists and per-km exceeds road threshold
-    if a.elevation_gain_m is not None and a.distance_m and a.distance_m > 0:
-        elev_per_km = a.elevation_gain_m / (a.distance_m / 1000.0)
-        if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
-            return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Linear regression: speed = a * HR + b
-# ---------------------------------------------------------------------------
-
-
-def _linear_regression(
-    xs: List[float], ys: List[float]
-) -> Tuple[float, float, float]:
-    """Ordinary least-squares: y = a*x + b.
-
-    Returns (a, b, r_squared).
-    r_squared in [-inf, 1]; negative means regression is worse than flat mean.
-    """
-    n = len(xs)
-    if n < 2:
-        return 0.0, 0.0, 0.0
-
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-
-    ss_xy = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
-    ss_xx = sum((xs[i] - mean_x) ** 2 for i in range(n))
-    ss_yy = sum((ys[i] - mean_y) ** 2 for i in range(n))
-
-    if ss_xx < 1e-12:
-        return 0.0, mean_y, 0.0
-
-    a = ss_xy / ss_xx
-    b = mean_y - a * mean_x
-
-    if ss_yy < 1e-12:
-        r2 = 1.0
-    else:
-        r2 = (ss_xy ** 2) / (ss_xx * ss_yy)
-
-    return a, b, r2
-
-
-# ---------------------------------------------------------------------------
 # FCmax resolution — robust observed Garmin max HR
 # ---------------------------------------------------------------------------
 
@@ -488,196 +339,6 @@ def _resolve_fcmax(
         return _resolve_fcmax_robust(observed)
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# HR-speed model (Source B)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _HRModelResult:
-    """Internal result of the HR-speed model."""
-    vma_kmh: Optional[float]
-    slope: Optional[float]           # a in speed = a*HR + b
-    intercept: Optional[float]       # b
-    r_squared: Optional[float]
-    n_activities: int
-    hr_range_bpm: float
-    max_observed_hr: float
-    target_hr: Optional[float]       # FCmax used for extrapolation
-    extrapolation_ratio: float       # target_hr / max_observed_hr
-    reason_code: str                 # why null if null
-
-
-def _fit_hr_speed_model(
-    activities: List[DomainActivity],
-    reference_date: date,
-    user_max_hr: Optional[float] = None,
-    resolved_fcmax: Optional[float] = None,
-) -> _HRModelResult:
-    """Fit a personal HR-speed linear model and extrapolate to aerobic VMA.
-
-    Requirements:
-    - >= MIN_ACTIVITIES_HR_MODEL usable activities
-    - >= MIN_DISTINCT_HR_LEVELS distinct HR levels
-    - HR range >= MIN_HR_RANGE_BPM
-    - R² >= MIN_R2
-    - Extrapolation ratio <= MAX_EXTRAPOLATION_RATIO
-
-    FCmax: resolved_fcmax when provided, else from user profile or observed max only (no 220-age).
-    Extrapolation target: 95% of FCmax (aerobic ceiling, not 100%).
-    """
-    usable = [a for a in activities if _is_usable_for_hr_model(a, reference_date)]
-
-    null_base = _HRModelResult(
-        vma_kmh=None, slope=None, intercept=None, r_squared=None,
-        n_activities=len(usable), hr_range_bpm=0.0,
-        max_observed_hr=0.0, target_hr=None, extrapolation_ratio=0.0,
-        reason_code=REASON_INSUFFICIENT_ACTIVITIES,
-    )
-
-    if len(usable) < MIN_ACTIVITIES_HR_MODEL:
-        return null_base
-
-    hrs = [a.average_hr for a in usable]  # type: ignore[misc]
-    speeds = [_speed_kmh(a) for a in usable]  # type: ignore[misc]
-
-    # HR range check
-    hr_min = min(hrs)
-    hr_max = max(hrs)
-    hr_range = hr_max - hr_min
-
-    if hr_range < MIN_HR_RANGE_BPM:
-        return _HRModelResult(
-            vma_kmh=None, slope=None, intercept=None, r_squared=None,
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_RANGE_INSUFFICIENT,
-        )
-
-    # Distinct HR levels check (bin into ~5 bpm buckets)
-    bucket_size = 5.0
-    buckets = set(int(hr / bucket_size) for hr in hrs)
-    if len(buckets) < MIN_DISTINCT_HR_LEVELS:
-        return _HRModelResult(
-            vma_kmh=None, slope=None, intercept=None, r_squared=None,
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_LEVELS_INSUFFICIENT,
-        )
-
-    # Linear regression
-    a, b, r2 = _linear_regression(hrs, speeds)
-
-    if r2 < MIN_R2:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_MODEL_POOR_FIT,
-        )
-
-    # Slope sanity: speed must increase with HR (positive slope)
-    if a <= 0:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_MODEL_POOR_FIT,
-        )
-
-    # FCmax resolution — use pre-resolved value when provided; else from all valid activities
-    fcmax = resolved_fcmax if resolved_fcmax is not None else _resolve_fcmax(activities, user_max_hr, reference_date)
-
-    # FCmax is mandatory for extrapolation; no synthetic fallback allowed
-    if fcmax is None:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_NO_FCMAX,
-        )
-
-    # Extrapolation target: 95% of FCmax (aerobic ceiling, conservative)
-    target_hr = fcmax * 0.95
-
-    extrapolation_ratio = target_hr / hr_max if hr_max > 0 else 999.0
-
-    if extrapolation_ratio > MAX_EXTRAPOLATION_RATIO:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=round(target_hr, 1),
-            extrapolation_ratio=round(extrapolation_ratio, 4),
-            reason_code=REASON_EXTRAPOLATION_TOO_LARGE,
-        )
-
-    # Predicted speed at target_hr
-    predicted_speed = a * target_hr + b
-
-    # Sanity bounds
-    if predicted_speed < MIN_SPEED_KMH or predicted_speed > MAX_SPEED_KMH:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=round(target_hr, 1),
-            extrapolation_ratio=round(extrapolation_ratio, 4),
-            reason_code=REASON_HR_MODEL_POOR_FIT,
-        )
-
-    vma = round(predicted_speed, 2)
-
-    return _HRModelResult(
-        vma_kmh=vma, slope=round(a, 5), intercept=round(b, 4),
-        r_squared=round(r2, 4),
-        n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-        max_observed_hr=round(hr_max, 1), target_hr=round(target_hr, 1),
-        extrapolation_ratio=round(extrapolation_ratio, 4),
-        reason_code=REASON_HR_SPEED_MODEL_SOURCE,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Confidence
-# ---------------------------------------------------------------------------
-
-
-def _hr_model_confidence(
-    model: _HRModelResult,
-    reference_date: date,
-    activities: List[DomainActivity],
-) -> str:
-    """Confidence for HR-speed model result.
-
-    HIGH:   n >= 6, r² >= 0.6, extrapolation <= 1.10, recent data
-    MEDIUM: n >= 4, r² >= 0.3, extrapolation <= 1.20
-    LOW:    barely valid
-    """
-    if model.vma_kmh is None:
-        return "insufficient"
-
-    # Recency of activities used in model
-    usable = [a for a in activities if _is_usable_for_hr_model(a, reference_date)]
-    most_recent_days = min(
-        (_days_ago(_activity_date(a) or date.min, reference_date) for a in usable),
-        default=999,
-    )
-
-    n = model.n_activities
-    r2 = model.r_squared or 0.0
-    ext = model.extrapolation_ratio
-
-    if n >= 6 and r2 >= 0.60 and ext <= 1.10 and most_recent_days <= CONFIDENCE_HIGH_DAYS:
-        return "high"
-    if n >= 4 and r2 >= 0.40 and ext <= 1.20 and most_recent_days <= CONFIDENCE_MEDIUM_DAYS:
-        return "medium"
-    return "low"
 
 
 # ---------------------------------------------------------------------------
@@ -866,31 +527,6 @@ def evaluate_performance_quality(
 
 
 @dataclass(frozen=True)
-class VMAEstimate:
-    """VMA estimation result.
-
-    vma_kmh=None means insufficient data to estimate.
-    """
-    vma_kmh: Optional[float]
-    confidence: str              # "high" | "medium" | "low" | "insufficient"
-    method: Optional[str]
-    source_activity_date: Optional[date]
-    source_distance_m: Optional[float]
-    source_duration_s: Optional[float]
-    reason_code: str = REASON_NO_DATA
-    # HR-speed model details (None when not used)
-    hr_model_r_squared: Optional[float] = None
-    hr_model_n_activities: int = 0
-    hr_model_hr_range_bpm: float = 0.0
-    hr_model_extrapolation_ratio: float = 0.0
-    model_version: str = "v2"
-
-    @property
-    def has_data(self) -> bool:
-        return self.vma_kmh is not None
-
-
-@dataclass(frozen=True)
 class RacePrediction:
     """Predicted race time for a single distance."""
     distance_label: str
@@ -922,118 +558,10 @@ class RacePrediction:
 class PerformanceEstimate:
     """Top-level result for a user snapshot."""
     has_data: bool
-    vma: VMAEstimate
     predictions: List[RacePrediction] = field(default_factory=list)
     athlete_profile: dict = field(default_factory=dict)
     race_curve_diagnostics: Dict[str, Any] = field(default_factory=dict)
     model_version: str = "v2"
-
-
-# ---------------------------------------------------------------------------
-# VMA window helper
-# ---------------------------------------------------------------------------
-
-
-def _activities_in_vma_window(
-    activities: List[DomainActivity],
-    reference_date: date,
-    window_days: int = VMA_WINDOW_DAYS,
-) -> List[DomainActivity]:
-    """Return activities within [reference_date - (window_days-1), reference_date].
-
-    Window is inclusive on both ends.  A window_days of 42 covers days 0..41,
-    i.e. [reference_date - 41 days, reference_date].
-    """
-    window_start = date.fromordinal(reference_date.toordinal() - (window_days - 1))
-    return [
-        a for a in activities
-        if (_activity_date(a) or date.min) >= window_start
-        and (_activity_date(a) or date.max) <= reference_date
-    ]
-
-
-# ---------------------------------------------------------------------------
-# VMA estimation — dual-path
-# ---------------------------------------------------------------------------
-
-
-def estimate_vma(
-    activities: List[DomainActivity],
-    reference_date: Union[date, datetime],
-    user_max_hr: Optional[float] = None,
-) -> VMAEstimate:
-    """Estimate VMA from DomainActivity objects using the HR-speed model.
-
-    SOURCE A (explicit performance) is DISABLED — no Garmin field currently
-    identifies a race/test/competition.  Only SOURCE B (HR-speed linear model)
-    is used.
-
-    The model is fitted on activities within the VMA_WINDOW_DAYS (42-day) rolling
-    window ending at reference_date.  No look-ahead; no fallback to older data.
-
-    FCmax is resolved from the same 42-day window as the model activities.
-    This ensures that estimate_vma(all_activities, ref) ==
-    estimate_vma(_activities_in_vma_window(all_activities, ref), ref),
-    making CURRENT and HISTORY snapshots strictly identical.
-
-    Returns VMAEstimate(vma_kmh=None) when the model yields insufficient data.
-
-    220-age and hr_max+5 are forbidden.
-    """
-    if isinstance(reference_date, datetime):
-        reference_date = reference_date.date()
-
-    # Apply 42-day VMA window for model fitting
-    windowed = _activities_in_vma_window(activities, reference_date)
-
-    # FCmax resolved from the same 42-day window used for the model.
-    # Using the identical window for both ensures CURRENT == HISTORY snapshots
-    # are strictly deterministic: an activity outside the window cannot influence
-    # the FCmax used by the extrapolation step.
-    fcmax = _resolve_fcmax(windowed, user_max_hr, reference_date)
-
-    # --- Source A: DISABLED ---
-    # SOURCE_A_DISABLED = True: no Garmin field identifies explicit performances.
-
-    # --- Source B: HR-speed model (windowed activities, pre-resolved FCmax) ---
-    hr_model = _fit_hr_speed_model(windowed, reference_date, user_max_hr, resolved_fcmax=fcmax)
-    vma_b: Optional[float] = hr_model.vma_kmh
-    conf_b: Optional[str] = (
-        _hr_model_confidence(hr_model, reference_date, windowed)
-        if vma_b is not None else None
-    )
-    method_b: Optional[str] = (
-        f"hr_speed_model_n{hr_model.n_activities}_r2{hr_model.r_squared:.2f}"
-        if vma_b is not None and hr_model.r_squared is not None else None
-    )
-
-    if vma_b is None:
-        reason = hr_model.reason_code if hr_model.reason_code else REASON_NO_DATA
-        return VMAEstimate(
-            vma_kmh=None,
-            confidence="insufficient",
-            method=None,
-            source_activity_date=None,
-            source_distance_m=None,
-            source_duration_s=None,
-            reason_code=reason,
-            hr_model_n_activities=hr_model.n_activities,
-            hr_model_hr_range_bpm=hr_model.hr_range_bpm,
-        )
-
-    return VMAEstimate(
-        vma_kmh=vma_b,
-        confidence=conf_b or "low",
-        method=method_b,
-        source_activity_date=None,
-        source_distance_m=None,
-        source_duration_s=None,
-        reason_code=REASON_HR_SPEED_MODEL_SOURCE,
-        hr_model_r_squared=hr_model.r_squared,
-        hr_model_n_activities=hr_model.n_activities,
-        hr_model_hr_range_bpm=hr_model.hr_range_bpm,
-        hr_model_extrapolation_ratio=hr_model.extrapolation_ratio,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1312,16 +840,25 @@ class _CurveModel:
     observed_distance_min: float
     observed_distance_max: float
     # PR #190 — k identifiability diagnostics
+    # PR #191 — slope-evidence diagnostics
+    # slope_evidence = qualified observations with confidence == "high"
+    # Only these can authorise a data-driven k.
+    slope_evidence_count: int = 0
+    slope_evidence_distance_min: float = 0.0
+    slope_evidence_distance_max: float = 0.0
     # For N<3 (single_performance_riegel, two_point_prior_shrinkage_fit,
-    # same_distance_prior_k_fallback) k was never learned from data, so
-    # k_identifiable defaults to False and reason to "not_applicable".
+    # same_distance_prior_k_fallback, two_point_prior_k_low_slope_evidence_fallback)
+    # k was never learned from data, so k_identifiable defaults to False
+    # and reason to "not_applicable".
     k_identifiable: bool = False
     k_identifiability_score: float = 0.0
     k_identifiability_reason: str = "not_applicable"
-    # PR #191 — slope evidence diagnostics
-    slope_evidence_count: int = 0
-    slope_evidence_distance_min: Optional[float] = None
-    slope_evidence_distance_max: Optional[float] = None
+    anchor_applied: bool = False
+    anchor_distance_m: Optional[float] = None
+    anchor_duration_s: Optional[float] = None
+    anchor_days_ago: Optional[int] = None
+    anchor_quality_confidence: Optional[str] = None
+    anchor_eligible_count: int = 0
 
 
 def _recency_weight(days_ago: int) -> float:
@@ -1400,6 +937,41 @@ def _fixed_slope_log_intercept(
     return intercept
 
 
+def _robust_fixed_slope_log_intercept(
+    observations: List["_CurveObservation"],
+    xs: List[float],
+    ys: List[float],
+    base_ws: List[float],
+    slope: float,
+) -> Tuple[Optional[float], List[float]]:
+    """Estimate intercept for a fixed slope with light Huber reweighting."""
+    robust_ws = list(base_ws)
+    intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
+    if intercept is None:
+        return None, robust_ws
+
+    for _ in range(2):
+        residuals = [y - (intercept + slope * x) for x, y in zip(xs, ys)]
+        abs_res = sorted(abs(r) for r in residuals)
+        median_abs = abs_res[len(abs_res) // 2] if abs_res else 0.0
+        if median_abs <= 1e-9:
+            break
+
+        delta = 1.5 * median_abs
+        updated_ws = []
+        for obs, base_w, residual in zip(observations, base_ws, residuals):
+            abs_r = abs(residual)
+            huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
+            floor_mult = _huber_quality_floor(obs.quality.confidence)
+            updated_ws.append(base_w * max(huber_mult, floor_mult))
+        robust_ws = updated_ws
+        intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
+        if intercept is None:
+            return None, robust_ws
+
+    return intercept, robust_ws
+
+
 def _two_point_evidence_strength(ws: List[float]) -> float:
     """Return deterministic evidence strength in [0, 1] for N==2 shrinkage."""
     if len(ws) != 2:
@@ -1441,32 +1013,31 @@ def _compute_k_identifiability(
     observations: List["_CurveObservation"],
     robust_ws: List[float],
 ) -> Tuple[bool, float, str]:
-    """Measure whether the k slope is identifiable from the qualified observations.
+    """Measure whether the k slope is identifiable from slope-evidence observations.
 
-    PR #190 — identifiability diagnostic.
+    PR #191 — slope-evidence identifiability.
 
     Returns (k_identifiable, k_identifiability_score, k_identifiability_reason).
 
     The score is the quality-weighted variance of log(distance), computed using
-    ONLY slope-evidence observations (PR #188 "high" confidence tier).  Medium,
-    low and speed-only observations are excluded from this calculation even when
-    they span a wide distance range.
+    ONLY high-confidence (slope-evidence) observations.  Medium and low-confidence
+    observations are excluded from this calculation even when they span a wide
+    distance range.
 
-    Rationale: many low-quality points spread over 6–21 km can produce a large
-    naive distance variance, yet they carry little information about the true
-    slope because their time-vs-distance relationship reflects noise, not
-    genuine fatigue-distance physics.  Restricting the variance to high/medium
-    quality observations ensures the metric answers:
+    Rationale (PR #191): slope_evidence = confidence == "high".  Medium observations
+    may be sustained efforts rather than true multi-distance comparable performances,
+    so they do not carry enough information to personalise k.  Restricting the
+    variance to HIGH-quality observations ensures the metric answers:
 
-        "Can k be learned from defensible observations?"
+        "Can k be learned from defensible, genuinely comparable observations?"
 
     and not:
 
-        "Are there many points in total?"
+        "Are there many high/medium points in total?"
 
     The threshold K_IDENTIFIABILITY_MIN_WX_VAR (0.05) corresponds to needing
     observations with meaningful distance spread (roughly 5–15 km range) among
-    the high/medium-quality subset.  A tight 8–12 km cluster scores ≈ 0.013
+    the slope-evidence subset.  A tight 8–12 km cluster scores ≈ 0.013
     (not identifiable); a 5 km + semi spread scores ≈ 0.35 (identifiable).
 
     This is NOT a physiological prior on k — it measures available evidence,
@@ -1479,7 +1050,7 @@ def _compute_k_identifiability(
     ]
     sum_ident_w = sum(ident_ws)
     if sum_ident_w <= 0:
-        return False, 0.0, "no_slope_evidence_observations"
+        return False, 0.0, "no_slope_evidence_high_observations"
 
     x_bar = sum(iw * x for iw, x in zip(ident_ws, xs)) / sum_ident_w
     score = sum(
@@ -1493,6 +1064,34 @@ def _compute_k_identifiability(
         else "insufficient_slope_evidence_spread"
     )
     return identifiable, score, reason
+
+
+def _select_recent_curve_anchor(
+    observations: List[_CurveObservation],
+    slope: float,
+) -> Tuple[Optional[_CurveObservation], Optional[float], int]:
+    eligible = [
+        observation
+        for observation in observations
+        if 0 <= observation.days_ago <= CONFIDENCE_LOW_DAYS
+    ]
+    if not eligible:
+        return None, None, 0
+
+    anchor = min(
+        eligible,
+        key=lambda observation: (
+            math.log(observation.duration_s)
+            - slope * math.log(observation.distance_m),
+            observation.days_ago,
+            observation.distance_m,
+            observation.duration_s,
+        ),
+    )
+    anchor_intercept = (
+        math.log(anchor.duration_s) - slope * math.log(anchor.distance_m)
+    )
+    return anchor, anchor_intercept, len(eligible)
 
 
 def _build_performance_curve(
@@ -1535,164 +1134,162 @@ def _build_performance_curve(
         key=lambda o: (o.days_ago, o.distance_m, o.duration_s),
     )
     obs_distances = [o.distance_m for o in observations]
+    xs_all = [math.log(o.distance_m) for o in observations]
+    ys_all = [math.log(o.duration_s) for o in observations]
+    base_ws_all = [o.base_weight for o in observations]
+
+    # slope-evidence for personal-k: HIGH confidence + recency window only.
+    slope_evidence_obs = [
+        o for o in observations
+        if (
+            o.quality.confidence == "high"
+            and 0 <= o.days_ago <= SLOPE_EVIDENCE_WINDOW_DAYS
+        )
+    ]
+    slope_evidence_count = len(slope_evidence_obs)
+    _se_dists = [o.distance_m for o in slope_evidence_obs]
+    slope_evidence_distance_min = min(_se_dists) if _se_dists else 0.0
+    slope_evidence_distance_max = max(_se_dists) if _se_dists else 0.0
 
     if len(observations) == 1:
         obs = observations[0]
         a = obs.duration_s / (obs.distance_m ** RIEGEL_K)
+        anchor, _, anchor_eligible_count = _select_recent_curve_anchor(
+            observations, RIEGEL_K
+        )
         return _CurveModel(
             method="single_performance_riegel",
             a=a,
             k=RIEGEL_K,
             fit_quality=1.0,
             k_conflict=False,
-            k_fallback_applied=False,
-            k_raw=RIEGEL_K,
+            k_fallback_applied=True,
+            k_raw=None,
             two_point_evidence_strength=None,
             qualified_performance_count=len(qualified_pool),
             contributors=(obs,),
             observed_distance_min=min(obs_distances),
             observed_distance_max=max(obs_distances),
+            slope_evidence_count=slope_evidence_count,
+            slope_evidence_distance_min=slope_evidence_distance_min,
+            slope_evidence_distance_max=slope_evidence_distance_max,
+            k_identifiable=False,
+            k_identifiability_score=0.0,
+            k_identifiability_reason="insufficient_slope_evidence_count",
+            anchor_distance_m=anchor.distance_m if anchor else None,
+            anchor_duration_s=anchor.duration_s if anchor else None,
+            anchor_days_ago=anchor.days_ago if anchor else None,
+            anchor_quality_confidence=anchor.quality.confidence if anchor else None,
+            anchor_eligible_count=anchor_eligible_count,
         )
 
-    xs = [math.log(o.distance_m) for o in observations]
-    ys = [math.log(o.duration_s) for o in observations]
-    base_ws = [o.base_weight for o in observations]
-    fit = _weighted_linear_fit(xs, ys, base_ws)
-    if fit is None:
-        sum_w = sum(base_ws)
-        if sum_w <= 0:
-            return None
-        representative_distance = sum(w * o.distance_m for o, w in zip(observations, base_ws)) / sum_w
-        representative_duration = sum(w * o.duration_s for o, w in zip(observations, base_ws)) / sum_w
-        if representative_distance <= 0 or representative_duration <= 0:
-            return None
-        a = representative_duration / (representative_distance ** RIEGEL_K)
-        return _CurveModel(
-            method="same_distance_prior_k_fallback",
-            a=a,
-            k=RIEGEL_K,
-            fit_quality=None,
-            k_conflict=False,
-            k_fallback_applied=False,
-            k_raw=None,
-            two_point_evidence_strength=None,
-            qualified_performance_count=len(qualified_pool),
-            contributors=tuple(observations),
-            observed_distance_min=min(obs_distances),
-            observed_distance_max=max(obs_distances),
-        )
-    intercept, slope = fit
-
-    method = "weighted_log_fit"
-    robust_ws = list(base_ws)
+    method: str = "prior_k_low_slope_evidence_fallback"
     two_point_evidence_strength: Optional[float] = None
-    k_raw: Optional[float] = slope
-    if len(observations) == 2:
-        method = "two_point_prior_shrinkage_fit"
-        two_point_evidence_strength = _two_point_evidence_strength(base_ws)
-        slope = RIEGEL_K + two_point_evidence_strength * (slope - RIEGEL_K)
-        fixed_intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
-        if fixed_intercept is None:
-            return None
-        intercept = fixed_intercept
-    elif len(observations) >= 3:
-        method = "robust_weighted_log_fit"
-        final_robust_fit: Optional[Tuple[float, float]] = None
-        for _ in range(2):
-            robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
-            if robust_fit is None:
-                break
-            r_intercept, r_slope = robust_fit
-            residuals = [y - (r_intercept + r_slope * x) for x, y in zip(xs, ys)]
-            abs_res = sorted(abs(r) for r in residuals)
-            median_abs = abs_res[len(abs_res) // 2]
-            if median_abs <= 1e-9:
-                final_robust_fit = (r_intercept, r_slope)
-                break
-            delta = 1.5 * median_abs
-            updated_ws = []
-            # PR #190 — quality-aware Huber: apply floor per observation confidence.
-            # Prevents the Huber M-estimator from zeroing out slope signal carried
-            # by a minority of high-confidence HR-supported performances when a
-            # majority of low-quality speed-only observations dominate the residual
-            # distribution.
-            for obs, base_w, residual in zip(observations, base_ws, residuals):
-                abs_r = abs(residual)
-                huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
-                floor_mult = _huber_quality_floor(obs.quality.confidence)
-                updated_ws.append(base_w * max(huber_mult, floor_mult))
-            robust_ws = updated_ws
-        if final_robust_fit is None:
-            final_robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
-        if final_robust_fit is not None:
-            intercept, slope = final_robust_fit
-            k_raw = slope
-
-    # PR #191 — slope evidence: only PR #188 "high" tier observations are
-    # defensible evidence for learning the individual slope k.  They still all
-    # contribute to A; this subset only governs whether k may leave the prior.
-    slope_evidence_obs = [o for o in observations if o.quality.confidence == "high"]
-    slope_evidence_count = len(slope_evidence_obs)
-    slope_evidence_distance_min = (
-        min(o.distance_m for o in slope_evidence_obs) if slope_evidence_obs else None
-    )
-    slope_evidence_distance_max = (
-        max(o.distance_m for o in slope_evidence_obs) if slope_evidence_obs else None
-    )
-
-    # PR #190/#191 — identifiability check for N≥3 (robust_weighted_log_fit),
-    # measured on the slope-evidence subset only.  A data-driven k is trusted
-    # only when there are enough slope-evidence observations AND they span a
-    # meaningful distance range.
+    k_raw: Optional[float] = None
+    k_fallback_applied = False
+    slope = RIEGEL_K
     k_identifiable = False
     k_identifiability_score = 0.0
-    k_identifiability_reason = "not_applicable"
-    if len(observations) >= 3:
-        _ident, k_identifiability_score, _reason = _compute_k_identifiability(
-            observations, robust_ws
-        )
-        if slope_evidence_count < K_SLOPE_EVIDENCE_MIN_COUNT:
-            k_identifiable = False
-            k_identifiability_reason = "insufficient_slope_evidence_count"
-        else:
-            k_identifiable = _ident
-            k_identifiability_reason = _reason
+    if slope_evidence_count == 0:
+        k_identifiability_reason = "no_slope_evidence_high_observations"
+    elif slope_evidence_count == 1:
+        k_identifiability_reason = "insufficient_slope_evidence_count"
+    else:
+        k_identifiability_reason = "not_applicable"
 
-    # k_conflict is evaluated from k_raw (the data-driven slope) BEFORE any fallback.
-    # For N>=3, k_raw is the robust fit slope; evaluating it before applying any
-    # identifiability fallback ensures the conflict diagnosis reflects the actual fit.
-    # For N=2, slope is already shrunk toward the prior; k_raw holds the pre-shrinkage
-    # OLS value but the shrunk slope is the N=2 data-driven result, so we use slope there.
-    k_fallback_applied = False
-    _k_for_conflict = (k_raw if (len(observations) >= 3 and k_raw is not None) else slope)
+    if slope_evidence_count >= 2:
+        xs_se = [math.log(o.distance_m) for o in slope_evidence_obs]
+        ys_se = [math.log(o.duration_s) for o in slope_evidence_obs]
+        base_ws_se = [o.base_weight for o in slope_evidence_obs]
+        robust_ws_se = list(base_ws_se)
+
+        if slope_evidence_count >= 3:
+            for _ in range(2):
+                robust_fit_se = _weighted_linear_fit(xs_se, ys_se, robust_ws_se)
+                if robust_fit_se is None:
+                    break
+                r_intercept, r_slope = robust_fit_se
+                residuals = [y - (r_intercept + r_slope * x) for x, y in zip(xs_se, ys_se)]
+                abs_res = sorted(abs(r) for r in residuals)
+                median_abs = abs_res[len(abs_res) // 2] if abs_res else 0.0
+                if median_abs <= 1e-9:
+                    break
+                delta = 1.5 * median_abs
+                updated_ws = []
+                for obs, base_w, residual in zip(slope_evidence_obs, base_ws_se, residuals):
+                    abs_r = abs(residual)
+                    huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
+                    floor_mult = _huber_quality_floor(obs.quality.confidence)
+                    updated_ws.append(base_w * max(huber_mult, floor_mult))
+                robust_ws_se = updated_ws
+
+        slope_fit = _weighted_linear_fit(xs_se, ys_se, robust_ws_se)
+        if slope_fit is not None:
+            _, se_slope = slope_fit
+            k_raw = se_slope
+
+        k_identifiable, k_identifiability_score, k_identifiability_reason = (
+            _compute_k_identifiability(slope_evidence_obs, robust_ws_se)
+        )
+
+        if slope_evidence_count == 2:
+            method = "two_point_prior_k_low_slope_evidence_fallback"
+            two_point_evidence_strength = _two_point_evidence_strength(robust_ws_se)
+            if slope_fit is not None and k_identifiable:
+                method = "two_point_prior_shrinkage_fit"
+                slope = RIEGEL_K + two_point_evidence_strength * (k_raw - RIEGEL_K)
+            else:
+                slope = RIEGEL_K
+                k_fallback_applied = True
+        else:
+            method = "robust_weighted_log_fit"
+            if slope_fit is None or not k_identifiable:
+                method = "prior_k_low_slope_evidence_fallback"
+                slope = RIEGEL_K
+                k_fallback_applied = True
+            else:
+                slope = k_raw
+    else:
+        if len(observations) == 2:
+            method = "two_point_prior_k_low_slope_evidence_fallback"
+        else:
+            method = "prior_k_low_slope_evidence_fallback"
+        slope = RIEGEL_K
+        k_fallback_applied = True
+
+    _k_for_conflict = (
+        slope
+        if slope_evidence_count == 2
+        else (k_raw if k_raw is not None else slope)
+    )
     k_conflict = not (CURVE_K_MIN <= _k_for_conflict <= CURVE_K_MAX)
     if k_conflict:
-        # Contradictory observations: keep a coherent prior curve and lower trust.
-        robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in robust_ws]
-        log_a = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
-        if log_a is None:
-            return None
-        intercept = log_a
-        slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
+        slope = RIEGEL_K
         k_fallback_applied = True
-    elif len(observations) >= 3 and not k_identifiable:
-        # Insufficient slope evidence (too few high-tier efforts, or too little
-        # distance spread among them) to trust a data-driven k.  Fall back to the
-        # prior k and recompute the intercept (A) from the final robust weights.
-        # A still uses ALL qualified observations; only k is pinned to the prior.
-        log_a_ident = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
-        if log_a_ident is not None:
-            intercept = log_a_ident
-            slope = RIEGEL_K
-            method = "prior_k_low_slope_evidence_fallback"
-            k_fallback_applied = True
-            # k_raw retains the data-driven slope from the robust fit (diagnostic)
-        # If log_a_ident is None (degenerate weights), retain the data-driven k.
-        # k_identifiable remains False (honest: evidence is weak), but
-        # k_fallback_applied will be False since the slope was not actually replaced.
 
-    fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
+    level_base_ws = list(base_ws_all)
+    if k_conflict:
+        level_base_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in level_base_ws]
+
+    intercept, robust_ws = _robust_fixed_slope_log_intercept(
+        observations=observations,
+        xs=xs_all,
+        ys=ys_all,
+        base_ws=level_base_ws,
+        slope=slope,
+    )
+    if intercept is None:
+        return None
+
+    anchor, anchor_intercept, anchor_eligible_count = _select_recent_curve_anchor(
+        observations, slope
+    )
+    anchor_applied = anchor_intercept is not None and anchor_intercept < intercept
+    if anchor_applied:
+        intercept = anchor_intercept
+
+    fit_quality = _weighted_r2(xs_all, ys_all, robust_ws, intercept, slope)
     max_w = max(robust_ws) if robust_ws else 0.0
     contributors = tuple(
         _CurveObservation(
@@ -1740,6 +1337,12 @@ def _build_performance_curve(
         slope_evidence_count=slope_evidence_count,
         slope_evidence_distance_min=slope_evidence_distance_min,
         slope_evidence_distance_max=slope_evidence_distance_max,
+        anchor_applied=anchor_applied,
+        anchor_distance_m=anchor.distance_m if anchor else None,
+        anchor_duration_s=anchor.duration_s if anchor else None,
+        anchor_days_ago=anchor.days_ago if anchor else None,
+        anchor_quality_confidence=anchor.quality.confidence if anchor else None,
+        anchor_eligible_count=anchor_eligible_count,
     )
 
 
@@ -1832,17 +1435,6 @@ def _curve_prediction_confidence(
     if curve.k_conflict:
         penalty_steps += 1
 
-    # PR #191 — slope uncertainty penalty that GROWS with extrapolation.
-    # When k is pinned to the prior for lack of slope evidence, predictions near
-    # the observed distances (extrapolation_ratio ~ 1.0) remain trustworthy, but
-    # predictions far from the observed distances depend heavily on the prior k
-    # and must be penalized progressively.  No penalty for near-observation targets.
-    if curve.k_fallback_applied and curve.method == "prior_k_low_slope_evidence_fallback":
-        if extrapolation_ratio > 1.8:
-            penalty_steps += 2
-        elif extrapolation_ratio > 1.2:
-            penalty_steps += 1
-
     fit_q = curve.fit_quality
     if fit_q is None or fit_q < 0.40:
         penalty_steps += 2
@@ -1873,11 +1465,33 @@ def _curve_prediction_confidence(
     elif effective_contributors < 1.60:
         penalty_steps += 1
 
+    # PR #191 — k-prior fallback: uncertainty grows with extrapolation distance.
+    # When k is fixed at RIEGEL_K (not data-driven), the curve is anchored at A
+    # but the slope is uncertain.  Close predictions remain reliable; distant
+    # extrapolations accumulate k-uncertainty.
+    # Reuse existing extrapolation thresholds (1.8, 3.0) to avoid a parallel system.
+    _slope_evidence_fallback_methods = {
+        "prior_k_low_slope_evidence_fallback",
+        "two_point_prior_k_low_slope_evidence_fallback",
+    }
+    if curve.k_fallback_applied and curve.method in _slope_evidence_fallback_methods:
+        if extrapolation_ratio > 3.0:
+            penalty_steps += 2
+        elif extrapolation_ratio > 1.8:
+            penalty_steps += 1
+
     if penalty_steps > 0:
         base = _degrade_confidence(base, penalty_steps)
 
     if len(curve.contributors) == 1 and base == "high":
         base = "medium"
+
+    # PR216: a numeric prediction produced from a real curve within the hard
+    # extrapolation guardrail remains defendable, even when cumulative penalties
+    # stack. Reserve INSUFFICIENT for true absence of defendable prediction:
+    # no curve, no extrapolation anchor, or extrapolation beyond the null limit.
+    if base == "insufficient":
+        return "low"
 
     return base
 
@@ -1929,28 +1543,12 @@ def predict_races(
     reference_date: Union[date, datetime],
     user_max_hr: Optional[float] = None,
 ) -> PerformanceEstimate:
-    """Compute VMA V2 estimate and race predictions V2.
+    """Compute race predictions V2 from qualified observed performances.
 
-    VMA is estimated via the HR-speed model (SOURCE A is disabled).
-
-    Race predictions use only #188-qualified observed performances and one
-    shared time-distance curve for all targets.
-    No synthetic effort is ever created.
-
-    If no defensible observed source exists for a target distance, the
-    prediction for that distance is null (predicted_time_s = None).
-    Race times are independent of VMA output: VMA can be available while
-    some or all predictions are null, and VMA/VO2max outputs never directly
-    alter race times. #188 qualification may still depend on FCmax-relative HR.
+    VMA is removed (#214); predictions use the performance curve only.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
-
-    vma_est = estimate_vma(activities, reference_date, user_max_hr)
-
-    # Race times are independent of VMA output.
-    # Do NOT return early when VMA is null — predictions may still exist from
-    # observed qualified performances.
 
     # Weekly volume & long run for athlete profile
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
@@ -2067,26 +1665,22 @@ def predict_races(
             contributors_count=len(sorted_contributors),
         ))
 
-    vo2max_estimated: Optional[float] = None
-    if vma_est.vma_kmh is not None:
-        vo2max_estimated = round(vma_est.vma_kmh * 3.5, 1)
-
     athlete_profile = {
         "weekly_km": round(weekly_km, 1),
         "max_long_run_km": round(max_long_run_m / 1000.0, 1),
-        "estimated_vma": vma_est.vma_kmh,
-        "estimated_vo2max": vo2max_estimated,
-        "vo2max_note": "Derived estimate (VMA × 3.5). Not a lab or Garmin measurement.",
-        "vma_method": vma_est.method,
-        "vma_confidence": vma_est.confidence,
-        "vma_reason_code": vma_est.reason_code,
+        "estimated_vma": None,
+        "estimated_vo2max": None,
+        "vo2max_note": None,
+        "vma_method": None,
+        "vma_confidence": None,
+        "vma_reason_code": None,
         "calculation_window": "garmin_activities (all available)",
         "model_version": "v2",
     }
 
-    # has_data = True when VMA is available OR at least one prediction has a time
+    # has_data = True when at least one prediction has a time
     has_any_prediction = any(p.predicted_time_s is not None for p in predictions)
-    result_has_data = vma_est.has_data or has_any_prediction
+    result_has_data = has_any_prediction
 
     confidence_aggregates = _curve_confidence_aggregates(tuple(sorted_contributors))
 
@@ -2108,7 +1702,6 @@ def predict_races(
 
     return PerformanceEstimate(
         has_data=result_has_data,
-        vma=vma_est,
         predictions=predictions,
         athlete_profile=athlete_profile,
         race_curve_diagnostics={
@@ -2123,27 +1716,30 @@ def predict_races(
             "two_point_evidence_strength": (
                 curve.two_point_evidence_strength if curve else None
             ),
-            # PR #190 — k identifiability diagnostics
+            # PR #190/#191 — k identifiability diagnostics (slope-evidence)
             "k_identifiable": curve.k_identifiable if curve else None,
             "k_identifiability_score": (
                 round(curve.k_identifiability_score, 8) if curve else None
             ),
             "k_identifiability_reason": curve.k_identifiability_reason if curve else None,
-            # PR #191 — slope evidence diagnostics
-            "slope_evidence_count": curve.slope_evidence_count if curve else None,
+            # PR #191 — slope-evidence diagnostics
+            "slope_evidence_count": curve.slope_evidence_count if curve else 0,
+            "slope_evidence_window_days": SLOPE_EVIDENCE_WINDOW_DAYS if curve else None,
             "slope_evidence_distance_min": (
-                curve.slope_evidence_distance_min if curve else None
+                curve.slope_evidence_distance_min if (curve and curve.slope_evidence_count > 0) else None
             ),
             "slope_evidence_distance_max": (
-                curve.slope_evidence_distance_max if curve else None
+                curve.slope_evidence_distance_max if (curve and curve.slope_evidence_count > 0) else None
             ),
             "slope_evidence_distance_min_km": (
                 round(curve.slope_evidence_distance_min / 1000.0, 4)
-                if (curve and curve.slope_evidence_distance_min is not None) else None
+                if (curve and curve.slope_evidence_count > 0)
+                else None
             ),
             "slope_evidence_distance_max_km": (
                 round(curve.slope_evidence_distance_max / 1000.0, 4)
-                if (curve and curve.slope_evidence_distance_max is not None) else None
+                if (curve and curve.slope_evidence_count > 0)
+                else None
             ),
             "high_medium_quality_weight_share": high_medium_quality_weight_share if curve else None,
             "low_confidence_weight_share": low_confidence_weight_share if curve else None,
@@ -2160,6 +1756,14 @@ def predict_races(
             ),
             "fit_quality": curve.fit_quality if curve else None,
             "k_conflict": curve.k_conflict if curve else None,
+            "anchor_applied": curve.anchor_applied if curve else False,
+            "anchor_distance_m": curve.anchor_distance_m if curve else None,
+            "anchor_duration_s": curve.anchor_duration_s if curve else None,
+            "anchor_days_ago": curve.anchor_days_ago if curve else None,
+            "anchor_quality_confidence": (
+                curve.anchor_quality_confidence if curve else None
+            ),
+            "anchor_eligible_count": curve.anchor_eligible_count if curve else 0,
             "weighted_recency": round(confidence_aggregates["weighted_recency"], 6) if curve else None,
             "weighted_quality_confidence": (
                 round(confidence_aggregates["weighted_quality_confidence"], 6) if curve else None
@@ -2196,6 +1800,5 @@ seconds_to_str = _seconds_to_str
 validate_activity = _validate_activity
 activity_date = _activity_date
 performance_duration_s = _performance_duration_s
-activities_in_vma_window = _activities_in_vma_window
 is_road_comparable = _is_road_comparable
 personal_speed_percentile_90d = _personal_speed_percentile_90d

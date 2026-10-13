@@ -14,18 +14,16 @@ import {
   CheckCircle,
   AlertTriangle,
   XCircle,
-  Check,
-  X,
   TrendingUp,
   Target,
   Info,
 } from "lucide-react";
 import { useUnitSystem } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
-import { formatDistance } from "@/utils/units";
-import { Button } from "@/components/ui/button";
+import { computeTrainingWeekProgress } from "@/lib/trainingWeekProgress";
+import { getCanonicalTodaySession, getTodayCardState } from "@/lib/todaySession";
+import { formatDistance, formatPace } from "@/utils/units";
 import { BrandSplash } from "@/components/LoadingSpinner";
-import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -40,8 +38,8 @@ const API = API_BASE_URL;
 const STATUS_COLORS = {
   green: { bg: "#22c55e20", text: "#22c55e", border: "#22c55e40" },
   yellow: { bg: "#f59e0b20", text: "#f59e0b", border: "#f59e0b40" },
-  red: { bg: "#ef444420", text: "#ef4444", border: "#ef444440" },
-  gray: { bg: "#6b728020", text: "#6b7280", border: "#6b728040" },
+  red: { bg: "#ef444420", text: "var(--status-danger)", border: "#ef444440" },
+  gray: { bg: "#6b728020", text: "var(--text-tertiary)", border: "#6b728040" },
 };
 
 const REC_STYLES = {
@@ -60,12 +58,14 @@ const REC_STYLES = {
   red: {
     bg: "linear-gradient(135deg, #1c0202 0%, #450a0a 100%)",
     accent: "#ef4444",
+    text: "var(--status-danger)",
     button: "#ef4444",
     buttonHover: "#dc2626",
   },
   gray: {
     bg: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
     accent: "#6b7280",
+    text: "var(--text-tertiary)",
     button: "#6b7280",
     buttonHover: "#4b5563",
   },
@@ -130,6 +130,318 @@ const getSessionStyleKey = (type, intensity) => {
   return intensity || "endurance";
 };
 
+const isMissingValue = (value) => value === undefined || value === null;
+const ARTIFICIAL_ZERO_DURATION_RE = /^\s*0+(?:[.,]0+)?\s*(?:min|mn|m|minute|minutes)\s*$/i;
+const normalizeGoalType = (goalType) => {
+  if (!goalType || typeof goalType !== "string") return null;
+  const normalized = goalType.trim().toLowerCase();
+  if (normalized === "half_marathon" || normalized === "semi_marathon") return "semi";
+  return normalized;
+};
+
+const minPerKmToFormattedPace = (minPerKm, unitSystem) => {
+  if (typeof minPerKm !== "number" || !Number.isFinite(minPerKm) || minPerKm <= 0) return null;
+  return formatPace(minPerKm * 60, { unitSystem });
+};
+
+const formatVdotPace = (paceValue, unitSystem) => {
+  if (!paceValue || typeof paceValue !== "object") return null;
+  const fromMinPerKm = minPerKmToFormattedPace(paceValue.min_per_km, unitSystem);
+  if (fromMinPerKm) return fromMinPerKm;
+  if (typeof paceValue.pace_str === "string" && paceValue.pace_str) {
+    return unitSystem === "imperial" ? null : `${paceValue.pace_str} /km`;
+  }
+  return null;
+};
+
+const formatPaceRange = (rangeValue, unitSystem) => {
+  if (!rangeValue || typeof rangeValue !== "object") return null;
+  const lower = formatVdotPace(rangeValue.lower, unitSystem);
+  const upper = formatVdotPace(rangeValue.upper, unitSystem);
+  return lower && upper ? `${lower} - ${upper}` : null;
+};
+
+const getGoalPaceReferenceRow = (goalTypeKey, pacesData, unitSystem, t) => {
+  if (!goalTypeKey) return null;
+  if (goalTypeKey === "5k") {
+    const pace = formatVdotPace(pacesData?.race_references?.["5k"]?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.5k"), value: pace } : null;
+  }
+  if (goalTypeKey === "10k") {
+    const pace = formatVdotPace(pacesData?.race_references?.["10k"]?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.10k"), value: pace } : null;
+  }
+  if (goalTypeKey === "semi" || goalTypeKey === "half_marathon") {
+    const pace = formatVdotPace(pacesData?.race_references?.half_marathon?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.half_marathon"), value: pace } : null;
+  }
+  if (goalTypeKey === "marathon") {
+    const pace = formatVdotPace(pacesData?.race_references?.marathon?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.marathon"), value: pace } : null;
+  }
+  if (goalTypeKey === "maintenance" || goalTypeKey === "ultra") {
+    const pace = formatPaceRange(pacesData?.paces?.interval, unitSystem);
+    return pace ? { label: t("trainingV2.paceInterval"), value: pace } : null;
+  }
+  return null;
+};
+
+function getSessionDurationDisplay(session) {
+  const duration = session?.duration;
+  if (typeof duration === "number") {
+    return duration > 0 ? `${duration} min` : null;
+  }
+  if (typeof duration !== "string") {
+    return null;
+  }
+  const trimmed = duration.trim();
+  if (!trimmed || ARTIFICIAL_ZERO_DURATION_RE.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+function getSessionTitle(session, t, isRest) {
+  if (isRest) {
+    return t("dashboard.todayRestTitle");
+  }
+  return t(`trainingPlanSessionType.${session.type}`) || session.type;
+}
+
+function hasPartialReadinessEvidence(metrics) {
+  if (!metrics || metrics.run_readiness === null || metrics.run_readiness === undefined) {
+    return false;
+  }
+  const sufficiencyLevel = String(metrics.sufficiency_level || "").toUpperCase();
+  if (sufficiencyLevel === "DEGRADED") {
+    return true;
+  }
+  return [
+    metrics.hrv_delta,
+    metrics.rhr_today,
+    metrics.sleep_hours,
+    metrics.training_load,
+  ].some(isMissingValue);
+}
+
+// TodayPreviewFree — static blurred card for FREE users, no Premium API calls
+function TodayPreviewFree({ t }) {
+  return (
+    <div
+      className="today-workout-card animate-in"
+      style={{ animationDelay: "200ms", position: "relative", overflow: "hidden" }}
+      data-testid="today-preview-free"
+    >
+      <p className="today-label" style={{ position: "relative", zIndex: 2 }}>{t("dashboard.todayLabel")}</p>
+
+      {/* Static placeholder blocks — blurred */}
+      <div
+        data-testid="today-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none" }}
+        aria-hidden="true"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          <div style={{ height: 14, width: "85%", background: "#6ee7b7", borderRadius: 4 }} />
+          <div style={{ height: 10, width: "55%", background: "#6ee7b7", borderRadius: 4, opacity: 0.7 }} />
+          <div style={{ height: 10, width: "70%", background: "#6ee7b7", borderRadius: 4, opacity: 0.5 }} />
+        </div>
+        <div style={{ marginTop: 12, display: "flex", gap: 6 }}>
+          <div style={{ height: 28, flex: 1, background: "#374151", borderRadius: 6 }} />
+          <div style={{ height: 28, flex: 1, background: "#374151", borderRadius: 6 }} />
+        </div>
+      </div>
+
+      {/* Premium overlay */}
+      <div
+        data-testid="premium-overlay-today"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+          zIndex: 3,
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
+          {t("dashboard.todayPreviewLock")}
+        </span>
+        <span style={{ color: "var(--text-secondary)", fontSize: 14, textAlign: "center", lineHeight: 1.4 }}>
+          {t("dashboard.todayPreviewDesc")}
+        </span>
+        <Link
+          to="/subscription"
+          data-testid="premium-cta-today"
+          style={{
+            marginTop: 4,
+            padding: "8px 16px",
+            background: "#6EEB5A",
+            color: "#0a1f0a",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          {t("dashboard.todayPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function PacesPreviewFree({ t }) {
+  return (
+    <div
+      className="rounded-2xl p-4 space-y-3 animate-in"
+      style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)", position: "relative", overflow: "hidden" }}
+      data-testid="paces-preview-free"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+            {t("dashboard.pacesTeaserTitle")}
+          </p>
+          <p className="text-sm leading-relaxed mt-1" style={{ color: "var(--text-tertiary)" }}>
+            {t("dashboard.pacesTeaserSubtitle")}
+          </p>
+        </div>
+      </div>
+      <div
+        data-testid="paces-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none" }}
+        aria-hidden="true"
+      >
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-3 w-20 rounded" style={{ background: "#6ee7b7" }} />
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-3 w-20 rounded" style={{ background: "#6ee7b7" }} />
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+          </div>
+        </div>
+      </div>
+      <div
+        data-testid="premium-overlay-paces"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <Link
+          to="/training"
+          className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider"
+          style={{ background: "var(--accent-green)", color: "#0a0e1a", textDecoration: "none" }}
+          data-testid="paces-preview-cta"
+        >
+          {t("dashboard.pacesTeaserCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// WeekPreviewFree — static blurred card for FREE users, no Premium API calls
+function WeekPreviewFree({ t }) {
+  return (
+    <div
+      className="rounded-2xl p-4 animate-in"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-color)",
+        position: "relative",
+        overflow: "hidden",
+      }}
+      data-testid="week-preview-free"
+    >
+      <div className="flex items-center gap-2" style={{ position: "relative", zIndex: 2 }}>
+        <Target className="w-4 h-4" style={{ color: "#6EEB5A" }} />
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+          {t("dashboard.weeklyTarget")}
+        </span>
+      </div>
+
+      {/* Static placeholder blocks — blurred */}
+      <div
+        data-testid="week-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none", marginTop: 8 }}
+        aria-hidden="true"
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+          <div style={{ height: 28, width: "45%", background: "#ffffff", borderRadius: 4 }} />
+          <div style={{ height: 12, width: "30%", background: "#6b7280", borderRadius: 4 }} />
+        </div>
+        <div style={{ marginTop: 10, height: 8, borderRadius: 4, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+          <div style={{ width: "60%", height: "100%", background: "#6EEB5A", borderRadius: 4 }} />
+        </div>
+        <div style={{ marginTop: 8, height: 10, width: "75%", background: "#9ca3af", borderRadius: 4, opacity: 0.6 }} />
+      </div>
+
+      {/* Premium overlay */}
+      <div
+        data-testid="premium-overlay-week"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+          zIndex: 3,
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
+          {t("dashboard.weekPreviewLock")}
+        </span>
+        <span style={{ color: "var(--text-secondary)", fontSize: 14, textAlign: "center", lineHeight: 1.4 }}>
+          {t("dashboard.weekPreviewDesc")}
+        </span>
+        <Link
+          to="/subscription"
+          data-testid="premium-cta-week"
+          style={{
+            marginTop: 4,
+            padding: "8px 16px",
+            background: "#6EEB5A",
+            color: "#0a1f0a",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          {t("dashboard.weekPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 // SessionCard component for displaying a session with colors
 function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
   const { t } = useLanguage();
@@ -138,6 +450,11 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
   const styleKey = getSessionStyleKey(session.type, session.intensity);
   const style = SESSION_STYLES[styleKey] || SESSION_STYLES.endurance;
   const isRest = styleKey === "repos";
+  const sessionTitle = getSessionTitle(session, t, isRest);
+  const sessionDuration = getSessionDurationDisplay(session);
+  const sessionDetails = !isRest && typeof session.details === "string" && session.details.trim()
+    ? session.details.trim()
+    : null;
 
   const borderColor = fatigueColor
     ? (fatigueColor === "green" ? "#10b981" : fatigueColor === "yellow" ? "#f59e0b" : fatigueColor === "red" ? "#ef4444" : "#6b7280")
@@ -145,36 +462,36 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 
   return (
     <div
-      className={`flex items-center gap-2 p-3 rounded-lg ${isGrayed ? "opacity-50" : ""}`}
+      className="flex items-center gap-2 p-2.5 rounded-lg"
       style={{
-        background: style.bg,
+        background: isGrayed ? "var(--bg-card)" : style.bg,
         border: `2px solid ${borderColor}`
       }}
     >
       <div
-        className="w-1 h-10 rounded-full shrink-0"
+        className="w-1 h-9 rounded-full shrink-0"
         style={{ background: borderColor }}
       />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-bold" style={{ color: style.text }}>
-            {t(`trainingPlanSessionType.${session.type}`) || session.type}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+          <span className="text-sm font-bold leading-tight" style={{ color: style.text }}>
+            {sessionTitle}
           </span>
-          {session.duration && (
-            <span className="text-xs" style={{ color: style.text, opacity: 0.8 }}>
-              {session.duration}
+          {sessionDuration && (
+            <span className="text-xs leading-tight" style={{ color: "var(--text-secondary)" }}>
+              {sessionDuration}
             </span>
           )}
         </div>
-        {!isRest && session.details && (
-          <span className="text-xs block" style={{ color: style.text, opacity: 0.7 }}>
-            {session.details}
+        {sessionDetails && (
+          <span className="text-sm block leading-snug" style={{ color: "var(--text-secondary)" }}>
+            {sessionDetails}
           </span>
         )}
       </div>
       {session.estimated_tss != null && (
         <span
-          className="px-2 py-1 rounded-full text-xs font-bold shrink-0"
+          className="px-2 py-1 rounded-full text-[11px] font-bold shrink-0"
           style={{ background: style.badge, color: style.badgeText }}
         >
           {session.estimated_tss} TSS
@@ -203,6 +520,11 @@ function getTodayReadinessColor(session) {
   return "gray";
 }
 
+function hasDisplayableTodayReadiness(session) {
+  const band = session?.readiness?.band;
+  return band === "FAVORABLE" || band === "CAUTION" || band === "LOW" || band === "VERY_LOW";
+}
+
 function getTodayReadinessLabel(session, t) {
   const band = session?.readiness?.band;
   if (band === "FAVORABLE") return t("trainingPlanExtended.fatigueGreen");
@@ -211,8 +533,26 @@ function getTodayReadinessLabel(session, t) {
   return t("dashboard.runReadinessUnavailable");
 }
 
+function getRunReadinessUnavailableCauseLabel(cause, t) {
+  if (cause === "sync_in_progress") {
+    return t("dashboard.readinessUnavailableCause.syncInProgress", "Synchronization in progress.");
+  }
+  if (cause === "garmin_fetch_error") {
+    return t("dashboard.readinessUnavailableCause.garminFetchError", "Garmin retrieval error. Retry in progress.");
+  }
+  if (cause === "reconnect_required") {
+    return t("dashboard.readinessUnavailableCause.reconnectRequired", "Garmin reconnection required.");
+  }
+  return t("dashboard.readinessUnavailableCause.noDataYet", "Garmin daily metrics are not yet available.");
+}
+
+function getRunReadinessStateLabel(color, t) {
+  const key = color === "green" || color === "yellow" || color === "red" ? color : "gray";
+  return t(`dashboard.readinessStates.${key}`);
+}
+
 function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
-  const colors = STATUS_COLORS[status] || STATUS_COLORS.green;
+  const colors = STATUS_COLORS[status] || STATUS_COLORS.gray;
   return (
     <div
       className="flex-shrink-0 rounded-2xl p-4 flex flex-col gap-1 w-[140px] snap-start"
@@ -236,7 +576,7 @@ function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
         )}
       </div>
       {detail && (
-        <p className="text-[10px] leading-tight" style={{ color: "var(--text-tertiary)" }}>
+        <p className="text-[11px] leading-tight" style={{ color: "var(--text-tertiary)" }}>
           {detail}
         </p>
       )}
@@ -289,7 +629,7 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
           {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
           <span>{label}</span>
         </div>
-        <span className="text-sm font-bold" style={{ color: isNull ? "rgba(255,255,255,0.35)" : color }}>
+        <span className="text-sm font-bold" style={{ color: isNull ? "var(--text-tertiary)" : "var(--text-primary)" }}>
           {isNull ? "—" : `${safeValue}%`}
         </span>
       </div>
@@ -315,21 +655,21 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="text-left rounded-2xl p-3 flex flex-col gap-2 transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.98]"
+      className="text-left rounded-2xl p-2.5 flex flex-col gap-1.5 transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.98]"
       style={{ background: `${color}12`, border: `1px solid ${color}33` }}
       data-testid={`readiness-tile-${testId}`}
     >
       <div className="flex items-center justify-between">
         {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
         <div className="flex items-center gap-1.5">
-          <Info className="w-3 h-3 opacity-40" style={{ color: "var(--text-tertiary)" }} />
+          <Info className="w-3 h-3" style={{ color: "var(--text-tertiary)" }} />
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
         </div>
       </div>
       <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
         {label}
       </span>
-      <span className="text-lg font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
+      <span className="text-base font-black leading-none" style={{ color: (STATUS_COLORS[status] || STATUS_COLORS.gray).text }} data-testid={`readiness-value-${testId}`}>
         {value}
       </span>
     </button>
@@ -404,8 +744,8 @@ function ReadinessChart({ data = [], height = 150 }) {
           return (
             <span
               key={z.key}
-              className="absolute text-[8px] uppercase tracking-wider font-semibold"
-              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: z.color, opacity: 0.85 }}
+              className="absolute text-[11px] uppercase tracking-wider font-semibold"
+              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: "var(--text-secondary)" }}
             >
               {t(`dashboard.readinessZones.${z.key}`)}
             </span>
@@ -416,7 +756,7 @@ function ReadinessChart({ data = [], height = 150 }) {
       {/* Tap tooltip */}
       {selected !== null && (
         <div
-          className="absolute z-10 px-2 py-1 rounded-lg text-[10px] whitespace-nowrap text-center"
+          className="absolute z-10 px-2 py-1 rounded-lg text-[11px] whitespace-nowrap text-center"
           style={{
             left: `${(xAt(selected) / width) * 100}%`,
             top: 0,
@@ -438,75 +778,83 @@ export default function Dashboard() {
   const [insight, setInsight] = useState(null);
   const [todaySession, setTodaySession] = useState(null);
   const [trainingWeekV2, setTrainingWeekV2] = useState(null);
+  const [trainingPaces, setTrainingPaces] = useState(null);
+  const [pacesRequestState, setPacesRequestState] = useState("idle");
   const [cardioData, setCardioData] = useState(null);
   const [cardioLoading, setCardioLoading] = useState(true);
   const [cardioError, setCardioError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
-  const [sessionFeedback, setSessionFeedback] = useState({});
   const [infoMetric, setInfoMetric] = useState(null);
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const { isFree, loading: subLoading } = useSubscription();
   const fetchedRef = useRef(false);
   const lastLangRef = useRef(lang);
+  const lastIsFreeRef = useRef(null); // track tier so FREE→TRIAL and TRIAL→FREE re-fetch
 
+  // Purge Premium state immediately when user becomes FREE (downgrade or fail-closed)
   useEffect(() => {
-    if (fetchedRef.current && lastLangRef.current === lang) {
+    if (!subLoading && isFree) {
+      setTodaySession(null);
+      setTrainingWeekV2(null);
+      setTrainingPaces(null);
+      setPacesRequestState("idle");
+    }
+  }, [isFree, subLoading]);
+
+  // Wait for subscription resolution before fetching — never launch Premium calls for FREE
+  useEffect(() => {
+    if (subLoading) return;
+    const tierChanged = lastIsFreeRef.current !== null && lastIsFreeRef.current !== isFree;
+    if (fetchedRef.current && lastLangRef.current === lang && !tierChanged) {
       return;
     }
     fetchedRef.current = true;
     lastLangRef.current = lang;
-    fetchData();
-  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
+    lastIsFreeRef.current = isFree;
+    fetchData(isFree);
+  }, [lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchData = async () => {
+  const fetchData = async (free) => {
     setLoading(true);
     try {
-      const [insightRes, ragRes, todayRes] = await Promise.all([
-        axios.get(`${API}/dashboard/insight?language=${lang}`),
-        axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/today`).catch(() => ({ data: null })),
-      ]);
-      setInsight(insightRes.data);
-      if (ragRes.data) {
-        setInsight(prev => ({ ...prev, rag: ragRes.data }));
-      }
-      
-      // Utiliser la réponse de /api/training/today (avec adaptation)
-      if (todayRes.data?.status === "success") {
-        setTodaySession(todayRes.data);
+      if (free) {
+        // FREE: only canonical insight endpoint — no rag/dashboard, no training/today
+        const insightRes = await axios.get(`${API}/dashboard/insight?language=${lang}`);
+        setInsight(insightRes.data);
+      } else {
+        // TRIAL / PREMIUM: fetch independent truths independently
+        const [insightResult, todayResult] = await Promise.allSettled([
+          axios.get(`${API}/dashboard/insight?language=${lang}`),
+          axios.get(`${API}/training/today`),
+        ]);
+
+        if (insightResult.status === "fulfilled") {
+          setInsight(insightResult.value.data);
+        } else {
+          setInsight(null);
+        }
+
+        if (todayResult.status === "fulfilled") {
+          setTodaySession(todayResult.value.data);
+        } else {
+          const todayErrorData = todayResult.reason?.response?.data;
+          const todayErrorObject = todayErrorData && typeof todayErrorData === "object" ? todayErrorData : null;
+          const todayErrorMessage = typeof todayErrorData === "string"
+            ? todayErrorData
+            : typeof todayErrorObject?.message === "string" && todayErrorObject.message.trim()
+              ? todayErrorObject.message
+              : null;
+          setTodaySession({
+            status: "error",
+            message: todayErrorMessage,
+          });
+        }
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleFeedback = async (day, status) => {
-    setFeedbackSubmitting(true);
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      await axios.post(
-        `${API}/training/feedback`,
-        null,
-        { params: { date: today, workout_id: day, status } }
-      );
-
-      setSessionFeedback(prev => ({ ...prev, [day]: status }));
-      toast.success(t("trainingPlanExtended.feedbackSaved") || "Feedback enregistré");
-      
-      // Refresh today's session
-      const todayRes = await axios.get(`${API}/training/today`);
-      if (todayRes.data?.status === "success") {
-        setTodaySession(todayRes.data);
-      }
-    } catch (err) {
-      console.error("Error submitting feedback:", err);
-      toast.error(t("common.error") || "Erreur");
-    } finally {
-      setFeedbackSubmitting(false);
     }
   };
 
@@ -539,81 +887,73 @@ export default function Dashboard() {
       .catch(() => {});
   }, [lang, isFree, subLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (subLoading || isFree) return;
+    let ignore = false;
+    setPacesRequestState("loading");
+    axios
+      .get(`${API}/training/v2/paces`)
+      .then((res) => {
+        if (ignore) return;
+        const nextPaces = res.data || null;
+        setTrainingPaces(nextPaces);
+        const confidence = typeof nextPaces?.confidence === "string"
+          ? nextPaces.confidence.toUpperCase()
+          : null;
+        setPacesRequestState(confidence === "INSUFFICIENT" ? "insufficient" : "success");
+      })
+      .catch(() => {
+        if (ignore) return;
+        setTrainingPaces(null);
+        setPacesRequestState("error");
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [isFree, subLoading]);
+
   if (loading) {
     return <BrandSplash text={t("common.loading")} />;
   }
 
-  const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
-  const monthStats = insight?.month || { volume_km: 0 };
+  const weekProgress = computeTrainingWeekProgress(trainingWeekV2);
   const runIndexData = insight?.run_index;
   const runIndexNull = !runIndexData || runIndexData?.run_index === null || runIndexData?.status === "insufficient";
   const runIndexScore = runIndexData?.run_index ?? null;
   const runIndexConfidence = runIndexData?.confidence_score ?? 0;
+  const todayCardState = getTodayCardState(todaySession, t);
+  const todayHasReadinessBadge = hasDisplayableTodayReadiness(todaySession);
   const todayReadinessColor = getTodayReadinessColor(todaySession);
   const todayReadinessLabel = getTodayReadinessLabel(todaySession, t);
   const todayReadinessStyle = REC_STYLES[todayReadinessColor] || REC_STYLES.gray;
+  const pacesConfidenceRaw = typeof trainingPaces?.confidence === "string" ? trainingPaces.confidence : null;
+  const pacesConfidenceKey = pacesConfidenceRaw ? pacesConfidenceRaw.toLowerCase() : null;
+  const pacesConfidenceLabel = pacesConfidenceKey
+    ? t(`trainingV2.pacesConfidence.${pacesConfidenceKey}`)
+    : null;
+  const pacesConfidenceInsufficient = pacesConfidenceRaw === "INSUFFICIENT";
+  const goalTypeKey = normalizeGoalType(trainingWeekV2?.goal?.goal_type);
+  const teaserRows = pacesConfidenceInsufficient ? [] : [
+    (() => {
+      const easyRange = formatPaceRange(trainingPaces?.paces?.easy, unitSystem);
+      return easyRange ? { label: t("trainingV2.paceEasy"), value: easyRange } : null;
+    })(),
+    (() => {
+      const threshold = formatVdotPace(trainingPaces?.paces?.threshold, unitSystem);
+      return threshold ? { label: t("trainingV2.paceThreshold"), value: threshold } : null;
+    })(),
+    getGoalPaceReferenceRow(goalTypeKey, trainingPaces, unitSystem, t),
+  ].filter(Boolean);
+  const showPacesLoadingState = pacesRequestState === "idle" || pacesRequestState === "loading";
+  const showPacesErrorState = pacesRequestState === "error";
+  const showPacesRows = pacesRequestState === "success" && teaserRows.length > 0;
+  const showPacesInsufficientState = pacesRequestState === "insufficient"
+    || (pacesRequestState === "success" && teaserRows.length === 0);
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
 
-      {runIndexData && (
-        <div
-          className="rounded-3xl p-5 space-y-4 animate-in"
-          style={{
-            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
-            border: "1px solid rgba(110, 235, 90, 0.22)",
-            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
-          }}
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
-                {t("dashboard.runIndex")}
-              </p>
-              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
-                {t("dashboard.runIndexOverall")}
-              </h2>
-              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexDescription")}
-              </p>
-            </div>
-            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
-              {t("progress.confidence")}: {runIndexConfidence}%
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              {runIndexNull ? (
-                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
-                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
-                </p>
-              ) : (
-                <div className="flex items-end gap-2">
-                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
-                    {runIndexScore}
-                  </span>
-                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
-                    / 1000
-                  </span>
-                </div>
-              )}
-              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexLevel")}
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-3">
-            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
-            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
-            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
-            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
-          </div>
-        </div>
-      )}
-
-      {/* ── RUN READINESS SECTION ────────────────────────────────────── */}
+      {/* ── RUN READINESS SECTION (first) ───────────────────────────── */}
       {cardioLoading ? (
         <div
           className="flex flex-col items-center justify-center py-8 gap-3"
@@ -632,7 +972,7 @@ export default function Dashboard() {
         <>
           {cardioError && (
             <div
-              className="flex items-center gap-2 px-4 py-3 rounded-xl text-xs"
+              className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm leading-relaxed"
               style={{ background: "#f59e0b15", border: "1px solid #f59e0b30", color: "#f59e0b" }}
             >
               <AlertTriangle size={14} />
@@ -646,14 +986,14 @@ export default function Dashboard() {
               return (
                 <div
                   className="rounded-2xl p-6 flex flex-col items-center text-center gap-3"
-                  style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)" }}
+                  style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}
                   data-testid="cardio-no-data"
                 >
                   <Activity size={28} style={{ color: "var(--text-tertiary)" }} />
                   <p className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
                     {t("dashboard.noData", "No data yet")}
                   </p>
-                  <p className="text-xs max-w-xs" style={{ color: "var(--text-tertiary)" }}>
+                  <p className="text-sm leading-relaxed max-w-xs" style={{ color: "var(--text-tertiary)" }}>
                     {cardioData?.message || t("dashboard.connectGarminPrompt", "Connect your Garmin to see your readiness and daily metrics.")}
                   </p>
                   <Link
@@ -668,18 +1008,24 @@ export default function Dashboard() {
               );
             }
             const m = cardioData?.metrics || {};
-            const recStyle = REC_STYLES[cardioData?.recommendation_color] || REC_STYLES.gray;
-            const history = cardioData?.history || [];
+            const readinessStateColor = cardioData?.recommendation_color || m.run_readiness_status || "gray";
+            const recStyle = REC_STYLES[readinessStateColor] || REC_STYLES.gray;
+            const readinessStateLabel = getRunReadinessStateLabel(readinessStateColor, t);
             
             // Run Readiness Score — single source of truth from backend (Garmin insights)
             // run_readiness may be null when data is INSUFFICIENT — do not default to 0 or 100.
             const runReadinessScore = m.run_readiness ?? null;
             const runReadinessUnavailable = runReadinessScore === null;
+            const readinessHasPartialData = hasPartialReadinessEvidence(m);
+            const readinessUnavailableCause = getRunReadinessUnavailableCauseLabel(
+              cardioData?.readiness_unavailable_cause,
+              t,
+            );
             
             return (
               <>
                 <div
-                  className="rounded-3xl p-5 space-y-4 animate-in"
+                  className="rounded-3xl p-4 space-y-3.5 animate-in"
                   style={{
                     background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
                     border: "1px solid rgba(110, 235, 90, 0.22)",
@@ -688,8 +1034,8 @@ export default function Dashboard() {
                   data-testid="run-readiness-card"
                 >
                   {/* Header — same structure as RunIndex */}
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
                       <p
                         className="text-xs font-semibold uppercase tracking-[0.22em]"
                         style={{ color: "#6EEB5A" }}
@@ -697,44 +1043,65 @@ export default function Dashboard() {
                       >
                         {t("dashboard.runReadiness")}
                       </p>
-                      <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                      <h2 className="text-base sm:text-lg font-black mt-1 leading-tight max-w-[15rem] sm:max-w-none" style={{ color: "#ffffff" }}>
                         {t("dashboard.runReadinessDescription")}
                       </h2>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span
-                        className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
-                        style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
-                        data-testid="run-readiness-recommendation"
-                      >
-                        {cardioData?.recommendation || "—"}
-                      </span>
+                    <div className="shrink-0">
                       <button
                         onClick={fetchCardioData}
                         className="p-1 rounded-lg opacity-60 hover:opacity-100 transition-opacity"
                         aria-label="Refresh"
                         data-testid="run-readiness-refresh"
                       >
-                        <RefreshCw size={14} style={{ color: recStyle.accent }} />
+                        <RefreshCw size={14} style={{ color: recStyle.text || recStyle.accent }} />
                       </button>
                     </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
+                      style={{ background: `${recStyle.accent}1f`, color: recStyle.text || recStyle.accent }}
+                      data-testid="run-readiness-recommendation"
+                    >
+                      {readinessStateLabel}
+                    </span>
+                    {readinessHasPartialData && (
+                      <span
+                        className="px-2.5 py-1 rounded-full text-[11px] font-semibold"
+                        style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.8)" }}
+                        data-testid="run-readiness-partial-indicator"
+                      >
+                        {t("dashboard.readinessPartialData")}
+                      </span>
+                    )}
                   </div>
 
                   {/* Big score — same font as RunIndex, out of 100, white number */}
                   <div className="flex items-end gap-2">
                     {runReadinessUnavailable ? (
-                      <span
-                        className="text-2xl font-bold leading-none"
-                        style={{ color: "#6b7280" }}
-                        data-testid="run-readiness-score"
-                        aria-label={t("dashboard.runReadinessUnavailable")}
-                      >
-                        {t("dashboard.runReadinessUnavailable")}
-                      </span>
+                      <div className="space-y-2">
+                        <span
+                          className="text-2xl font-bold leading-none block"
+                          style={{ color: "var(--text-tertiary)" }}
+                          data-testid="run-readiness-score"
+                          aria-label={t("dashboard.runReadinessUnavailable")}
+                        >
+                          {t("dashboard.runReadinessUnavailable")}
+                        </span>
+                        <p
+                          className="font-sans text-sm leading-relaxed"
+                          style={{ color: "var(--text-secondary)" }}
+                          data-testid="run-readiness-unavailable-cause"
+                        >
+                          {readinessUnavailableCause}
+                        </p>
+                      </div>
                     ) : (
                       <>
                         <span
-                          className="text-6xl font-black leading-none"
+                          className="text-5xl sm:text-6xl font-black leading-none"
                           style={{ color: "#ffffff" }}
                           data-testid="run-readiness-score"
                         >
@@ -748,7 +1115,7 @@ export default function Dashboard() {
                   </div>
 
                   {/* Component tiles — compact grid, tappable for info */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="run-readiness-pillars">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5" data-testid="run-readiness-pillars">
                     <ReadinessTile
                       icon={Heart}
                       label={t("dashboard.readinessPillars.hrv")}
@@ -783,26 +1150,8 @@ export default function Dashboard() {
                     />
                   </div>
 
-                  {/* 30-day Run Readiness trend */}
-                  {history.filter((h) => h.run_readiness !== undefined && h.run_readiness !== null).length >= 2 && (
-                    <div className="pt-1" data-testid="readiness-trend">
-                      <p className="text-[11px] uppercase tracking-wider font-semibold mb-1" style={{ color: "var(--text-tertiary)" }}>
-                        {t("dashboard.monthlyReadiness")}
-                      </p>
-                      <ReadinessChart data={history} height={150} />
-                      <div className="flex justify-between mt-1">
-                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                          {history[0]?.date ? history[0].date.slice(5) : ""}
-                        </span>
-                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                          {history[history.length - 1]?.date ? history[history.length - 1].date.slice(5) : ""}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
                   {cardioData?.mock && (
-                    <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
+                    <p className="text-center text-[11px]" style={{ color: "var(--text-tertiary)" }}>
                       {t("dashboard.demoDataNotice")}
                     </p>
                   )}
@@ -813,18 +1162,21 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* TODAY'S SESSION - Interactive with Adaptation */}
+      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only; FREE sees static blur preview */}
+      {isFree ? (
+        <TodayPreviewFree t={t} />
+      ) : (
       <div 
         className="today-workout-card animate-in" 
         style={{ 
           animationDelay: "200ms",
-          border: todaySession?.status === "success" ? `2px solid ${todayReadinessStyle.accent}` : undefined
+          border: todayCardState.kind === "session" && todayHasReadinessBadge ? `2px solid ${todayReadinessStyle.accent}` : undefined
         }} 
         data-testid="today-workout-card"
       >
         <div className="flex items-center justify-between mb-3">
           <p className="today-label">{t("dashboard.todayLabel")}</p>
-          {todaySession?.status === "success" && (
+          {todayCardState.kind === "session" && todayHasReadinessBadge && (
             <span
               className="px-3 py-1 rounded-full text-xs font-bold"
               style={{
@@ -838,100 +1190,225 @@ export default function Dashboard() {
           )}
         </div>
 
-        {todaySession?.status === "success" ? (
+        {todayCardState.kind === "session" ? (
           <>
-            {/* Adaptation notice */}
-            {todaySession.adaptation_applied && (
-              <div
-                className="p-2 rounded-lg text-xs mb-3"
-                style={{
-                  background: "rgba(249, 115, 22, 0.1)",
-                  border: "1px solid rgba(249, 115, 22, 0.3)",
-                  color: "#fb923c"
-                }}
+            {!todayHasReadinessBadge && (
+              <p
+                className="mb-3 text-xs font-medium"
+                style={{ color: "var(--text-tertiary)" }}
+                data-testid="today-readiness-status"
               >
-                <strong>{t("trainingPlanExtended.adaptedBecause") || "Adapté :"}</strong> {todaySession.adaptation_reason}
-              </div>
+                {t("dashboard.todayReadinessUnavailable")}
+              </p>
             )}
+            {/* C231 (corrections finales) — the canonical session displayed
+                today MUST be the served prescription, never chosen via the
+                purely-informative adaptation_applied flag. Priority order:
+                served_prescription -> adapted_prescription -> adaptive_session
+                -> planned_session -> original_prescription. The served
+                prescription is the ONLY session ever rendered as "today" —
+                never shown alongside the raw planned_session, which would
+                risk surfacing a stale/superseded value (e.g. 18 km) next to
+                the canonical one (e.g. 12.6 km). */}
+            {(() => {
+              return (
+                <>
+                  {/* Adaptation notice — C231 (round 3, P1 fix): gated ONLY by
+                      session_modified_from_planned, the ground-truth signal
+                      that the frozen served_prescription actually differs
+                      from planned_session. adaptation_applied describes
+                      today's LIVE readiness recompute and can be true even
+                      when the already-served snapshot equals the plan
+                      (e.g. served=18, planned=18, live action=REDUCE) —
+                      using it here would show a false "Adapté" banner. The
+                      banner text is a neutral label only: adaptation_reason
+                      may belong to a later, contradictory recompute and is
+                      not (yet) persisted alongside the served snapshot. */}
+                  {todaySession.session_modified_from_planned === true && (
+                    <div
+                      className="p-2 rounded-lg text-xs mb-3"
+                      style={{
+                        background: "rgba(249, 115, 22, 0.1)",
+                        border: "1px solid rgba(249, 115, 22, 0.3)",
+                        color: "#fb923c"
+                      }}
+                      data-testid="adaptation-notice"
+                    >
+                      <strong>{t("trainingPlanExtended.sessionAdapted") || "Séance adaptée"}</strong>
+                    </div>
+                  )}
 
-            {/* Display with SessionCard */}
-            {todaySession.adaptation_applied ? (
-              <div className="space-y-3">
-                {/* Original Session (grayed out) */}
-                <div>
-                  <div className="text-[10px] font-mono uppercase mb-1" style={{ color: "var(--text-tertiary)" }}>
-                    {t("trainingPlanExtended.originalSession") || "Séance originale"}
-                  </div>
-                  <SessionCard session={todaySession.planned_session} isGrayed={true} />
-                </div>
-
-                {/* Adaptive Session (highlighted) */}
-                <div>
-                  <div className="text-[10px] font-mono uppercase mb-1" style={{ color: "var(--text-secondary)" }}>
-                    {t("trainingPlanExtended.adaptiveSession") || "Séance adaptative"}
-                  </div>
-                  <SessionCard
-                    session={todaySession.adaptive_session}
-                    fatigueColor={todayReadinessColor}
-                  />
-                </div>
-              </div>
-            ) : (
-              <SessionCard session={todaySession.planned_session} />
-            )}
-
-            {/* Feedback Buttons */}
-            <div className="flex gap-2 mt-3">
-              <Button
-                size="sm"
-                onClick={() => handleFeedback(todaySession.day, "done")}
-                disabled={feedbackSubmitting || sessionFeedback[todaySession.day] === "done"}
-                className={`flex-1 ${
-                  sessionFeedback[todaySession.day] === "done"
-                    ? "bg-green-600 text-white"
-                    : "bg-slate-700 text-slate-200 hover:bg-green-600"
-                }`}
-              >
-                <Check className="w-4 h-4 mr-1" />
-                {t("trainingPlanExtended.feedbackDone") || "Réalisé"}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => handleFeedback(todaySession.day, "missed")}
-                disabled={feedbackSubmitting || sessionFeedback[todaySession.day] === "missed"}
-                className={`flex-1 ${
-                  sessionFeedback[todaySession.day] === "missed"
-                    ? "bg-red-600 text-white"
-                    : "bg-slate-700 text-slate-200 hover:bg-red-600"
-                }`}
-              >
-                <X className="w-4 h-4 mr-1" />
-                {t("trainingPlanExtended.feedbackMissed") || "Manqué"}
-              </Button>
-            </div>
+                  <SessionCard session={todayCardState.session} fatigueColor={todayReadinessColor} />
+                </>
+              );
+            })()}
           </>
         ) : (
           <>
-            <h3 className="today-title" style={{ color: "var(--text-secondary)" }}>
-              {t("dashboard.todayNoSessionTitle")}
+            <h3 className="today-title" style={{ color: "var(--text-secondary)" }} data-testid="today-status-title">
+              {todayCardState.title}
             </h3>
-            <p className="today-meta" style={{ opacity: 0.7 }}>
-              {t("dashboard.todayNoSessionSubtitle")}
+            <p className="today-meta" style={{ opacity: 0.7 }} data-testid="today-status-subtitle">
+              {todayCardState.subtitle}
             </p>
           </>
         )}
       </div>
+      )}
 
-      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only) */}
-      {trainingWeekV2?.weekly_target && (() => {
-        const wt = trainingWeekV2.weekly_target;
-        const basis = wt.target_basis;
+      {/* ── RUNINDEX SECTION (third) ─────────────────────────────────── */}
+      {runIndexData && (
+        <div
+          className="rounded-3xl p-5 space-y-4 animate-in"
+          style={{
+            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
+            border: "1px solid rgba(110, 235, 90, 0.22)",
+            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
+          }}
+          data-testid="run-index-card"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
+                {t("dashboard.runIndex")}
+              </p>
+              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                {t("dashboard.runIndexOverall")}
+              </h2>
+              <p className="text-sm leading-relaxed mt-2 max-w-md" style={{ color: "var(--text-secondary)" }}>
+                {t("dashboard.runIndexDescription")}
+              </p>
+            </div>
+            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
+              {t("progress.confidence")}: {runIndexConfidence}%
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              {runIndexNull ? (
+                <p className="text-base font-semibold" style={{ color: "var(--text-tertiary)" }}>
+                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
+                </p>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
+                    {runIndexScore}
+                  </span>
+                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
+                    / 1000
+                  </span>
+                </div>
+              )}
+              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexLevel")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3">
+            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
+            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
+            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
+            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
+          </div>
+        </div>
+      )}
+
+      {isFree ? (
+        <PacesPreviewFree t={t} />
+      ) : (
+        <div
+          className="rounded-2xl p-4 space-y-3 animate-in"
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-color)",
+          }}
+          data-testid="dashboard-paces-card"
+        >
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+              {t("dashboard.pacesTeaserTitle")}
+            </p>
+            <p className="text-sm leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
+              {t("dashboard.pacesTeaserSubtitle")}
+            </p>
+          </div>
+
+          {showPacesLoadingState && (
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-loading">
+              {t("common.loading")}
+            </p>
+          )}
+
+          {showPacesErrorState && (
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-error">
+              {t("dashboard.pacesTeaserError")}
+            </p>
+          )}
+
+          {showPacesRows && (
+            <div className="space-y-2 text-sm" data-testid="dashboard-paces-rows">
+              {teaserRows.map((row) => (
+                <div key={row.label} className="flex items-start justify-between gap-3">
+                  <span className="text-muted-foreground">{row.label}</span>
+                  <span className="text-right font-medium" data-testid={`dashboard-paces-value-${row.label}`}>{row.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showPacesInsufficientState && (
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-empty">
+              {t("dashboard.pacesTeaserEmpty")}
+            </p>
+          )}
+
+          {pacesConfidenceLabel && (
+            <div className="flex items-start justify-between gap-3 text-sm">
+              <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
+              <span className="text-right font-medium">{pacesConfidenceLabel}</span>
+            </div>
+          )}
+
+          <Link
+            to="/training"
+            className="inline-flex items-center text-sm font-semibold"
+            style={{ color: "#6EEB5A" }}
+            data-testid="dashboard-paces-cta"
+          >
+            {t("dashboard.pacesTeaserCta")}
+          </Link>
+        </div>
+      )}
+
+      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only); FREE sees static blur preview */}
+      {isFree ? (
+        <WeekPreviewFree t={t} />
+      ) : weekProgress && (() => {
+        const basis = weekProgress.target_basis;
+        const plannedValue = weekProgress.planned_value;
+        const plannedLabel = typeof plannedValue === "number" && Number.isFinite(plannedValue)
+          ? (basis === "distance"
+            ? formatDistance(plannedValue, { unitSystem })
+            : `${plannedValue} ${t("dashboard.minutes")}`)
+          : t("dashboard.incompleteData");
+        const completedLabel = weekProgress.completed_state === "partial"
+          ? t("dashboard.incompleteData")
+          : (basis === "distance"
+            ? formatDistance(weekProgress.completed_planned_value, { unitSystem })
+            : `${Math.round(weekProgress.completed_planned_value)} ${t("dashboard.minutes")}`);
+        const unmatchedLabel = weekProgress.unmatched_state === "partial"
+          ? t("dashboard.incompleteData")
+          : (basis === "distance"
+            ? formatDistance(weekProgress.unmatched_value, { unitSystem })
+            : `${Math.round(weekProgress.unmatched_value)} ${t("dashboard.minutes")}`);
         return (
           <div
             className="rounded-2xl p-4 space-y-3 animate-in"
             style={{
-              background: "var(--bg-elevated, #1a1a1f)",
-              border: "1px solid var(--border, #2a2a30)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-color)",
             }}
             data-testid="weekly-target-card"
           >
@@ -946,52 +1423,68 @@ export default function Dashboard() {
               <div className="space-y-2" data-testid="weekly-target-distance">
                 <div className="flex items-baseline justify-between">
                   <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                    {formatDistance(wt.target_km, { unitSystem })}
+                   {plannedLabel}
                   </span>
                   <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
                     {t("dashboard.weeklyDone")}:{" "}
                     <span style={{ color: "#ffffff" }} data-testid="weekly-volume-done">
-                      {formatDistance(weekStats.volume_km, { unitSystem })}
+                     {completedLabel}
                     </span>
                   </span>
                 </div>
-                {wt.target_km > 0 && (
+               {plannedValue > 0 && (
                   <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{
-                        width: `${clampProgress((weekStats.volume_km / wt.target_km) * 100)}%`,
-                        background: "#6EEB5A",
-                      }}
+                   {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+                     <div
+                       className="h-full rounded-full transition-all duration-700"
+                       style={{
+                         width: `${clampProgress(weekProgress.progress_percent)}%`,
+                         background: "#6EEB5A",
+                       }}
+                       data-testid="weekly-progress-bar"
+                     />
+                   )}
+                 </div>
+               )}
+               {weekProgress.unmatched_state !== "empty" && (
+                 <div className="flex items-baseline justify-between text-sm" style={{ color: "var(--text-tertiary)" }}>
+                   <span>{t("dashboard.weeklyOutsidePlan")}:</span>
+                   <span style={{ color: "#ffffff" }} data-testid="weekly-volume-extra">{unmatchedLabel}</span>
+                 </div>
+               )}
+             </div>
+            ) : basis === "duration" ? (
+             <div className="space-y-2" data-testid="weekly-target-duration">
+               <div className="flex items-baseline justify-between">
+                 <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
+                  {plannedLabel}
+                  </span>
+                 <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
+                  {t("dashboard.weeklyDone")}:{" "}
+                  <span style={{ color: "#ffffff" }} data-testid="weekly-duration-done">
+                    {completedLabel}
+                   </span>
+                 </span>
+               </div>
+               {plannedValue > 0 && (
+                 <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+                   {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+                     <div
+                       className="h-full rounded-full transition-all duration-700"
+                       style={{
+                         width: `${clampProgress(weekProgress.progress_percent)}%`,
+                         background: "#6EEB5A",
+                       }}
                       data-testid="weekly-progress-bar"
-                    />
+                     />
+                   )}
                   </div>
                 )}
-              </div>
-            ) : basis === "duration" ? (
-              <div className="space-y-2" data-testid="weekly-target-duration">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                   {wt.target_duration_minutes} {t("dashboard.minutes")}
-                  </span>
-                  <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
-                   {t("dashboard.weeklyDone")}:{" "}
-                   <span style={{ color: "#ffffff" }} data-testid="weekly-duration-done">
-                     {weekStats.actual_duration_minutes ?? 0} {t("dashboard.minutes")}
-                   </span>
-                  </span>
-                </div>
-                {wt.target_duration_minutes > 0 && (
-                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
-                   <div
-                     className="h-full rounded-full transition-all duration-700"
-                     style={{
-                       width: `${clampProgress(((weekStats.actual_duration_minutes ?? 0) / wt.target_duration_minutes) * 100)}%`,
-                       background: "#6EEB5A",
-                     }}
-                     data-testid="weekly-progress-bar"
-                   />
-                  </div>
+                {weekProgress.unmatched_state !== "empty" && (
+                 <div className="flex items-baseline justify-between text-sm" style={{ color: "var(--text-tertiary)" }}>
+                   <span>{t("dashboard.weeklyOutsidePlan")}:</span>
+                   <span style={{ color: "#ffffff" }} data-testid="weekly-duration-extra">{unmatchedLabel}</span>
+                 </div>
                 )}
               </div>
             ) : null}

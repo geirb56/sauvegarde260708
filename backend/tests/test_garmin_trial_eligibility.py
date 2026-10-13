@@ -374,6 +374,8 @@ async def test_garmin_reconnect_no_new_trial(db):
     # First connection → trial
     r1 = await activate_garmin_trial(db, user_id, garmin_id)
     assert r1["status"] == SubscriptionStatus.TRIAL
+    first_trial_start = r1["trial_start"]
+    first_trial_end = r1["trial_end"]
 
     # Simulate disconnect (garmin_connections removed, subscription unchanged)
     # Second connection → trial was used, no new trial granted
@@ -381,7 +383,29 @@ async def test_garmin_reconnect_no_new_trial(db):
     # Should still be TRIAL (same user, same garmin — already activated)
     # The registry entry already exists with first_trial_user_id == user_id
     assert r2["status"] == SubscriptionStatus.TRIAL
+    assert r2["trial_start"] == first_trial_start
+    assert r2["trial_end"] == first_trial_end
     assert await db.garmin_trial_registry.count_documents({"garmin_identity": garmin_id}) == 1
+
+
+async def test_premium_user_does_not_regress_when_connecting_garmin(db):
+    """PREMIUM remains PREMIUM even when Garmin identity is trial-eligible."""
+    user_id = _uid()
+    garmin_id = _garmin_id()
+    now = datetime.now(timezone.utc).isoformat()
+
+    await db.subscriptions.insert_one(
+        {
+            "user_id": user_id,
+            "status": SubscriptionStatus.PREMIUM,
+            "trial_used": True,
+            "updated_at": now,
+        }
+    )
+
+    result = await activate_garmin_trial(db, user_id, garmin_id)
+    assert result["status"] == SubscriptionStatus.PREMIUM
+    assert await db.garmin_trial_registry.count_documents({"garmin_identity": garmin_id}) == 0
 
 
 async def test_trial_expired_is_free(db):
@@ -479,10 +503,10 @@ async def test_concurrent_requests_single_trial(db):
         else:
             statuses.append(r.get("status"))
 
-    # Exactly one trial, one free (or two resolving to FREE if race collision)
+    # Exactly one winner must get TRIAL.
     trial_count = statuses.count(SubscriptionStatus.TRIAL)
-    assert trial_count <= 1, (
-        f"Expected at most 1 trial from concurrent requests, got {trial_count}. "
+    assert trial_count == 1, (
+        f"Expected exactly 1 trial winner from concurrent requests, got {trial_count}. "
         f"Statuses: {statuses}"
     )
 

@@ -52,6 +52,7 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id.apps.googleuser
 os.environ.setdefault("APPLE_CLIENT_ID", "com.runindex.app")
 
 from auth.mongo_errors import DuplicateKeyError
+import auth.oauth_router as oauth_router_module
 
 pytestmark = pytest.mark.asyncio
 
@@ -260,6 +261,23 @@ def _auth(token: str) -> dict:
     return {"Authorization": "Bearer " + token}
 
 
+async def _drain(tasks):
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+def _capture_background_tasks():
+    tasks = []
+    original_create_task = oauth_router_module.asyncio.create_task
+
+    def _schedule(coro):
+        task = original_create_task(coro)
+        tasks.append(task)
+        return task
+
+    return tasks, _schedule
+
+
 async def _post_google(client, payload: dict) -> httpx.Response:
     challenge = await client.post("/auth/oauth/challenge/google")
     assert challenge.status_code == 200
@@ -291,6 +309,24 @@ class TestGoogleNewUser:
         assert data["token_type"] == "bearer"
         assert data["user"]["email"] == "alice@gmail.com"
         assert "id" in data["user"]
+
+    async def test_new_google_user_emits_account_created_lifecycle_event(self, client):
+        claims = _make_google_claims("google-sub-event-001", "event@gmail.com")
+        tasks, schedule = _capture_background_tasks()
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)), patch.object(
+            oauth_router_module,
+            "safe_emit_account_created_event",
+            new=AsyncMock(),
+        ) as mock_emit, patch.object(oauth_router_module.asyncio, "create_task", side_effect=schedule):
+            resp = await _post_google(client, {"id_token": "fake-google-token"})
+            await _drain(tasks)
+        assert resp.status_code == 200
+        user_id = resp.json()["user"]["id"]
+        mock_emit.assert_awaited_once_with(
+            email="event@gmail.com",
+            user_id=user_id,
+            signup_method="oauth_google",
+        )
 
     async def test_new_google_user_subscription_is_free(self, client, fake_db):
         claims = _make_google_claims("google-sub-002", "bob@gmail.com")
@@ -376,6 +412,18 @@ class TestAppleNewUser:
         assert sub is not None
         assert sub["status"] == "free"
         assert sub["trial_used"] is False
+
+    async def test_new_apple_user_does_not_emit_account_created_lifecycle_event(self, client):
+        claims = _make_apple_claims("apple-sub-no-brevo", "apple-no-brevo@icloud.com")
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims)), patch.object(
+            oauth_router_module,
+            "safe_emit_account_created_event",
+            new=AsyncMock(),
+        ) as mock_emit, patch.object(oauth_router_module.asyncio, "create_task") as mock_create_task:
+            resp = await _post_apple(client, {"id_token": "fake-token"})
+        assert resp.status_code == 200
+        mock_emit.assert_not_awaited()
+        mock_create_task.assert_not_called()
 
     async def test_apple_email_absent_still_creates_user(self, client):
         """Apple repeat-login: email may be absent from the ID token."""

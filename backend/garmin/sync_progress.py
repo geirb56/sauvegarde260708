@@ -15,6 +15,7 @@ _DEFAULT_STATUS = {
     "run_index_status": "pending",
     "run_index": None,
     "daily_metrics_status": "pending",
+    "daily_metrics_fetch_status": "pending",
     "readiness_status": "pending",
     "readiness": None,
     "error_code": None,

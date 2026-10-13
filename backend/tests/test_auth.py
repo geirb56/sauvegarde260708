@@ -53,6 +53,7 @@ os.environ.setdefault("DB_NAME", "test_db")
 import jwt
 
 import auth.router as auth_router_module
+import services.lifecycle_email as lifecycle_email_module
 from auth.password import hash_password, verify_password
 from auth.jwt_utils import create_access_token, decode_access_token
 from auth.mongo_errors import DuplicateKeyError
@@ -116,14 +117,20 @@ class _FakeCollection:
             self._docs.append(candidate)
 
     async def update_one(self, query, update):
+        matched = 0
         for doc in self._docs:
             if self._match(doc, query):
+                matched = 1
                 if "$set" in update:
                     doc.update(update["$set"])
                 if "$unset" in update:
                     for k in update["$unset"]:
                         doc.pop(k, None)
                 break
+        class _UpdateResult:
+            def __init__(self, matched_count: int):
+                self.matched_count = matched_count
+        return _UpdateResult(matched)
 
     async def create_index(self, *args, **kwargs):
         pass
@@ -284,6 +291,21 @@ async def test_register_creates_paddle_compatible_free_subscription(client, fake
     assert subscription["premium_expires_at"] is None
 
 
+async def test_register_emits_account_created_lifecycle_event(client):
+    tasks, schedule = _capture_background_tasks()
+    with patch.object(auth_router_module, "safe_emit_account_created_event", new=AsyncMock()) as mock_emit, \
+         patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await _register(client, email="lifecycle-register@example.com")
+        await _drain(tasks)
+    assert res.status_code == 201
+    payload = res.json()
+    mock_emit.assert_awaited_once_with(
+        email="lifecycle-register@example.com",
+        user_id=payload["user"]["id"],
+        signup_method="email",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 2 — Register duplicate email
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -348,6 +370,30 @@ async def test_login_success(client):
     await _register(client, email="login4@example.com")
     res = await client.post("/auth/login", json={"email": "login4@example.com", "password": "Password1!"})
     assert res.status_code == 200
+    assert "access_token" in res.json()
+
+
+async def test_login_existing_user_does_not_emit_account_created_lifecycle_event(client):
+    await _register(client, email="existing-login@example.com")
+    with patch.object(auth_router_module, "safe_emit_account_created_event", new=AsyncMock()) as mock_emit:
+        res = await client.post(
+            "/auth/login",
+            json={"email": "existing-login@example.com", "password": "Password1!"},
+        )
+    assert res.status_code == 200
+    mock_emit.assert_not_awaited()
+
+
+async def test_register_succeeds_when_account_created_lifecycle_event_fails(client):
+    tasks, schedule = _capture_background_tasks()
+    with patch.object(
+        lifecycle_email_module,
+        "emit_account_created_event",
+        new=AsyncMock(side_effect=RuntimeError("brevo unavailable")),
+    ), patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await _register(client, email="brevo-fail-register@example.com")
+        await _drain(tasks)
+    assert res.status_code == 201
     assert "access_token" in res.json()
 
 
@@ -554,30 +600,133 @@ async def test_me_tampered_token(client):
 
 async def test_reset_password_flow(client, fake_db):
     email = "reset13@example.com"
-    await _register(client, email=email)
+    old_password = "Password1!"
+    new_password = "NewPassword2@"
+    await _register(client, email=email, pw=old_password)
 
-    # Trigger forgot-password
-    res_fp = await client.post("/auth/forgot-password", json={"email": email})
-    assert res_fp.status_code == 200
+    captured_tokens = []
 
-    # Find the user doc and inject a known raw token
+    def _capture_reset_email(_, raw_token):
+        captured_tokens.append(raw_token)
+
+    with patch.object(auth_router_module, "_safe_send_reset_email", side_effect=_capture_reset_email):
+        res_fp = await client.post("/auth/forgot-password", json={"email": email})
+        assert res_fp.status_code == 200
+
+    assert len(captured_tokens) == 1
+    raw = captured_tokens[0]
+
     user_doc = None
     for doc in fake_db.users._docs:
         if doc.get("email") == email:
             user_doc = doc
             break
     assert user_doc is not None
-
-    raw = _secrets.token_urlsafe(32)
-    user_doc["reset_password_token_hash"] = hashlib.sha256(raw.encode()).hexdigest()
-    user_doc["reset_password_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=1)
+    assert user_doc["reset_password_token_hash"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert user_doc["reset_password_expires_at"] > datetime.now(timezone.utc)
 
     res_rp = await client.post(
         "/auth/reset-password",
-        json={"token": raw, "new_password": "NewPassword2@"},
+        json={"token": raw, "new_password": new_password},
     )
     assert res_rp.status_code == 200
     assert "reset_password_token_hash" not in user_doc
+    assert "reset_password_expires_at" not in user_doc
+
+    # Token must be single-use
+    res_reuse = await client.post(
+        "/auth/reset-password",
+        json={"token": raw, "new_password": "AnotherPass3#"},
+    )
+    assert res_reuse.status_code == 400
+
+    # Old password no longer works; new password does
+    login_old = await client.post("/auth/login", json={"email": email, "password": old_password})
+    login_new = await client.post("/auth/login", json={"email": email, "password": new_password})
+    assert login_old.status_code == 401
+    assert login_new.status_code == 200
+
+
+async def test_forgot_password_non_disclosure_same_response_for_known_and_unknown(client):
+    await _register(client, email="known-reset@example.com")
+
+    res_known = await client.post("/auth/forgot-password", json={"email": "known-reset@example.com"})
+    res_unknown = await client.post("/auth/forgot-password", json={"email": "unknown-reset@example.com"})
+
+    assert res_known.status_code == 200
+    assert res_unknown.status_code == 200
+    assert res_known.json() == res_unknown.json()
+
+
+async def test_forgot_password_new_request_invalidates_previous_token(client):
+    email = "replace-reset@example.com"
+    await _register(client, email=email)
+
+    captured_tokens = []
+
+    def _capture_reset_email(_, raw_token):
+        captured_tokens.append(raw_token)
+
+    with patch.object(auth_router_module, "_safe_send_reset_email", side_effect=_capture_reset_email):
+        res_first = await client.post("/auth/forgot-password", json={"email": email})
+        res_second = await client.post("/auth/forgot-password", json={"email": email})
+
+    assert res_first.status_code == 200
+    assert res_second.status_code == 200
+    assert len(captured_tokens) == 2
+    old_token, new_token = captured_tokens
+    assert old_token != new_token
+
+    old_reset = await client.post(
+        "/auth/reset-password",
+        json={"token": old_token, "new_password": "BrandNew4$"},
+    )
+    new_reset = await client.post(
+        "/auth/reset-password",
+        json={"token": new_token, "new_password": "BrandNew4$"},
+    )
+
+    assert old_reset.status_code == 400
+    assert new_reset.status_code == 200
+
+
+async def test_reset_password_concurrent_single_use_atomic(client, fake_db):
+    email = "atomic-race@example.com"
+    await _register(client, email=email, pw="Password1!")
+
+    captured_tokens = []
+
+    def _capture_reset_email(_, raw_token):
+        captured_tokens.append(raw_token)
+
+    with patch.object(auth_router_module, "_safe_send_reset_email", side_effect=_capture_reset_email):
+        res_fp = await client.post("/auth/forgot-password", json={"email": email})
+        assert res_fp.status_code == 200
+
+    assert len(captured_tokens) == 1
+    shared_token = captured_tokens[0]
+
+    req1 = client.post(
+        "/auth/reset-password",
+        json={"token": shared_token, "new_password": "AtomicWinner1!"},
+    )
+    req2 = client.post(
+        "/auth/reset-password",
+        json={"token": shared_token, "new_password": "AtomicLoser2@"},
+    )
+    res1, res2 = await asyncio.gather(req1, req2)
+
+    statuses = sorted([res1.status_code, res2.status_code])
+    assert statuses == [200, 400]
+
+    login_1 = await client.post("/auth/login", json={"email": email, "password": "AtomicWinner1!"})
+    login_2 = await client.post("/auth/login", json={"email": email, "password": "AtomicLoser2@"})
+    assert sorted([login_1.status_code, login_2.status_code]) == [200, 401]
+
+    user_doc = next((d for d in fake_db.users._docs if d.get("email") == email), None)
+    assert user_doc is not None
+    assert "reset_password_token_hash" not in user_doc
+    assert "reset_password_expires_at" not in user_doc
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

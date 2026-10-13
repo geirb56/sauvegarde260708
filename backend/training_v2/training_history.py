@@ -178,6 +178,10 @@ class TrainingHistory(BaseModel):
     # Default: all zeros (backward-compatible).
     weekly_distance_buckets_28d: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
+    # Same rolling weeks, counting valid runs (positive distance OR duration).
+    # None means coverage was not supplied, not four observed inactive weeks.
+    weekly_run_count_buckets_28d: Optional[tuple[int, int, int, int]] = None
+
     days_since_last_run: Optional[int]
     last_run_date: Optional[str]  # ISO-8601 date string (YYYY-MM-DD)
 
@@ -337,6 +341,27 @@ def _build_weekly_distance_buckets_28d(
         round(bucket_totals[2], _ROUND),
         round(bucket_totals[3], _ROUND),
     )
+
+
+def _build_weekly_run_count_buckets_28d(
+    run_activities: List[Dict[str, Any]],
+    reference_date: date,
+) -> tuple[int, int, int, int]:
+    """Count valid runs in the same four weeks as the distance buckets."""
+    counts = [0, 0, 0, 0]
+    for act in run_activities:
+        act_date = act["activity_date"]
+        if act_date is None:
+            continue
+        days_ago = (reference_date - act_date).days
+        if not 0 <= days_ago < 28:
+            continue
+        if (
+            _valid_distance(act["distance_m"]) is not None
+            or _valid_duration(act["duration_s"]) is not None
+        ):
+            counts[days_ago // 7] += 1
+    return tuple(counts)
 
 
 def _build_prior_running_window(
@@ -516,6 +541,9 @@ def build_training_history(
         window_90d=window_90d,
         prior_running_window=prior_running_window,
         weekly_distance_buckets_28d=weekly_distance_buckets_28d,
+        weekly_run_count_buckets_28d=_build_weekly_run_count_buckets_28d(
+            run_activities, reference_date
+        ),
         days_since_last_run=days_since,
         last_run_date=last_date.isoformat() if last_date else None,
         available_history_days=available_days,

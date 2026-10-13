@@ -10,8 +10,8 @@ Design rules
 - No recommendation, no color status, no fatigue_ratio, no recovery time.
 - No fallback neutral values: None remains None.
 - No numeric confidence — confidence is categorical only (NONE/NORMAL/REDUCED).
-- R1 (ReadinessSufficiency) is the sole source of truth for sufficiency level.
-- R2B does NOT recalculate sufficiency from subscores.
+- R1 remains the source of reason codes; R2B enforces a defensive scorer-level
+  sufficiency guard from actual subscore availability.
 - R2B does NOT invent new reason codes.
 - Subscore values must be finite and in [0, 100]; ValueError raised otherwise.
 - reasons is a tuple — fully immutable.
@@ -24,13 +24,14 @@ INSUFFICIENT  → score=None, confidence=NONE, reasons propagated from R1.
 SUFFICIENT + all 3 subscores available
               → full weighted average (physio×40 + sleep×30 + load×30) / 100,
                 confidence=NORMAL.
-SUFFICIENT + at least one subscore missing
+SUFFICIENT + exactly one subscore missing
               → renormalized weighted average over available subscores only,
                 confidence=REDUCED (sufficiency_level stays SUFFICIENT).
 DEGRADED      → renormalized weighted average over available subscores only,
                 confidence=REDUCED.
-Defensive     → if level is SUFFICIENT/DEGRADED but no usable subscore is
-                provided by the caller, score=None, confidence=NONE.
+Defensive     → if level is SUFFICIENT/DEGRADED but fewer than 2 usable
+                subscores are provided by the caller, force
+                sufficiency_level=INSUFFICIENT, score=None, confidence=NONE.
 
 Score format
 ------------
@@ -174,14 +175,15 @@ def build_readiness_result(
         pairs.append((load_score, PRODUCT_CALIBRATION_V1_WEIGHT_LOAD))
 
     # ------------------------------------------------------------------
-    # Defensive case: level is SUFFICIENT/DEGRADED but caller provided no
-    # usable subscore.  Never return 0.
+    # Defensive case: level is SUFFICIENT/DEGRADED but caller provided fewer
+    # than 2 usable subscores. Never compute from a single branch.
     # ------------------------------------------------------------------
-    if not pairs:
+    usable_subscore_count = len(pairs)
+    if usable_subscore_count < 2:
         return ReadinessResult(
             score=None,
             confidence=ReadinessConfidence.NONE,
-            sufficiency_level=level,
+            sufficiency_level=SufficiencyLevel.INSUFFICIENT,
             reasons=reasons,
         )
 

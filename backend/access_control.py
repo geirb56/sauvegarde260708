@@ -90,12 +90,9 @@ PREMIUM_FEATURES: frozenset = frozenset({
     "api_access",
     "llm_access",
     "full_access",
-    "rag_access",
     "coach_detailed",
     "coach_workout_analysis",
     "race_predictions",
-    "full_cycle",
-    "terra_sync",
     "garmin_sync",
 })
 
@@ -109,7 +106,6 @@ FREE_FEATURES: frozenset = frozenset({
     "settings",
     "profile",
     "run_index",
-    "vma_estimate",
 })
 
 # Chat quota constants
@@ -346,6 +342,12 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
     # ── TRIAL ─────────────────────────────────────────────────────────────
     if status == "trial":
         trial_end = _parse_dt(subscription.get("trial_end"))
+        if trial_end is None:
+            logger.warning(
+                f"[AccessControl] Trial subscription for '{user_id}' missing/invalid expiry "
+                "— failing closed to FREE"
+            )
+            return UserAccess(user_id=user_id, tier=Tier.FREE)
         if trial_end and now > trial_end:
             logger.info(f"[AccessControl] Trial expired for '{user_id}'")
             return UserAccess(user_id=user_id, tier=Tier.FREE, trial_end=trial_end)
@@ -353,8 +355,15 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
 
     # ── PREMIUM (canonical) ───────────────────────────────────────────────
     if status == "premium":
-        premium_expires_at = _parse_dt(subscription.get("premium_expires_at"))
-        if premium_expires_at and now > premium_expires_at:
+        raw_premium_expires_at = subscription.get("premium_expires_at")
+        premium_expires_at = _parse_dt(raw_premium_expires_at)
+        if premium_expires_at is None:
+            logger.warning(
+                f"[AccessControl] Premium subscription for '{user_id}' missing/invalid expiry "
+                "— failing closed to FREE"
+            )
+            return UserAccess(user_id=user_id, tier=Tier.FREE)
+        if now > premium_expires_at:
             logger.info(f"[AccessControl] Premium expired for '{user_id}'")
             return UserAccess(
                 user_id=user_id, tier=Tier.FREE, premium_expires_at=premium_expires_at
@@ -405,40 +414,28 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     # enforced by `Depends(require_admin)` on every /api/admin/* endpoint
     # (returns 403 for non-admins, 401 for unauthenticated).
     "/api/admin/":              RouteAccess.FREE,
-    # Chat history is free; send is handled separately (quota enforcement)
-    "/api/chat/history":        RouteAccess.FREE,
-    "/api/chat/store-response": RouteAccess.FREE,
-    "/api/chat/send":           RouteAccess.FREE,     # quota enforced inside the handler
+    "/api/coach/analyze":       RouteAccess.FREE,     # quota enforced in canonical coach service
+    "/api/coach/history":       RouteAccess.FREE,
     # Garmin onboarding funnel endpoints must stay reachable for FREE users.
     "/api/garmin/connect":      RouteAccess.FREE,
     "/api/garmin/status":       RouteAccess.FREE,
     "/api/garmin/disconnect":   RouteAccess.FREE,
+    "/api/garmin/queue/health": RouteAccess.FREE,
+    "/api/training/v2/preferences": RouteAccess.FREE,  # onboarding preference capture must stay reachable pre-handoff
 
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
-    "/api/training/plan":             RouteAccess.PREMIUM,
-    "/api/training/refresh":          RouteAccess.PREMIUM,
-    "/api/training/full-cycle":       RouteAccess.PREMIUM,
     "/api/training/race-predictions": RouteAccess.PREMIUM,
-    "/api/training/dynamic-plan":     RouteAccess.PREMIUM,
-    "/api/training/feedback":         RouteAccess.PREMIUM,
     "/api/training/today":            RouteAccess.PREMIUM,
-    "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
     "/api/training/v2/cycle":         RouteAccess.PREMIUM,  # PR175 — native V2 cycle calendar endpoint
+    "/api/training/v2/cycle/start-date": RouteAccess.PREMIUM,
     "/api/training/metrics":          RouteAccess.PREMIUM,
-    "/api/training/vma-history":      RouteAccess.PREMIUM,
     "/api/training/set-goal":         RouteAccess.PREMIUM,
     "/api/training/goals":            RouteAccess.PREMIUM,
     "/api/training/":                 RouteAccess.PREMIUM,
-    "/api/training-plan":             RouteAccess.PREMIUM,
-    "/api/coach/analyze":             RouteAccess.PREMIUM,
     "/api/coach/workout-analysis":    RouteAccess.PREMIUM,
     "/api/coach/detailed-analysis":   RouteAccess.PREMIUM,
-    "/api/coach/guidance":            RouteAccess.PREMIUM,
-    "/api/coach/digest":              RouteAccess.PREMIUM,
     "/api/coach/":                    RouteAccess.PREMIUM,
-    "/api/rag/":                      RouteAccess.PREMIUM,
-    "/api/terra/":                    RouteAccess.PREMIUM,
     "/api/garmin/":                   RouteAccess.PREMIUM,
     "/api/sync/":                     RouteAccess.PREMIUM,
 }

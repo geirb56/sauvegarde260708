@@ -34,5 +34,20 @@ GOAL_CONFIG = {
         "long_run_ratio": 0.45,
         "intensity_pct": 10,
         "description": "Ultra-trail"
+    },
+    # PR204: MAINTENANCE — cycle_weeks=12 derived from canonical constant
+    # CONTINUOUS_CYCLE_LENGTH_WEEKS (periodization.py:135) and
+    # coach_service.py GOAL_METADATA["MAINTENANCE"]["base_weeks"]=12.
+    #
+    # long_run_ratio and intensity_pct are NOT applicable to MAINTENANCE:
+    #   - these fields are consumed only by GET /training/goals (display listing)
+    #   - they are never used in plan generation for MAINTENANCE (V2 engine does not read them)
+    #   - no canonical MAINTENANCE-specific ratio or intensity exists in this codebase
+    # Values are set to None; the /training/goals handler omits None fields from its response.
+    "MAINTENANCE": {
+        "cycle_weeks": 12,        # canonical: CONTINUOUS_CYCLE_LENGTH_WEEKS (periodization.py:135)
+        "long_run_ratio": None,   # not applicable — no canonical MAINTENANCE ratio in codebase
+        "intensity_pct": None,    # not applicable — no canonical MAINTENANCE intensity in codebase
+        "description": "Maintenance"
     }
 }

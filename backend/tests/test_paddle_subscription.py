@@ -82,7 +82,7 @@ class TestPaddleWebhookSecurity:
         original = self._body("subscription.activated")
         ts = str(int(time.time()))
         sig = _make_sig(self.SECRET, ts, original)
-        tampered = original.replace(b"subscription.activated", b"subscription.cancelled")
+        tampered = original.replace(b"subscription.activated", b"subscription.canceled")
         with pytest.raises(PaddleWebhookError, match="mismatch"):
             verify_and_parse_paddle_event(tampered, sig, self.SECRET)
 
@@ -109,7 +109,7 @@ class TestPaddleWebhookSecurity:
         for etype in [
             "subscription.activated",
             "subscription.updated",
-            "subscription.cancelled",
+            "subscription.canceled",
             "subscription.past_due",
             "transaction.completed",
             "transaction.payment_failed",
@@ -129,6 +129,9 @@ from access_control import (
     Tier,
     UserAccess,
     _resolve_access,
+    get_route_access,
+    RouteAccess,
+    ROUTE_ACCESS_MAP,
     CHAT_QUOTA_FREE,
     CHAT_ANTIABUSE_CAP,
 )
@@ -178,7 +181,7 @@ class TestAccessControlResolve:
 
     def test_free_cannot_access_premium_features(self):
         access = _resolve_access("u1", self._sub(status="free"))
-        for feat in ["training_plan", "llm_access", "rag_access", "coach_detailed"]:
+        for feat in ["training_plan", "llm_access", "coach_detailed"]:
             assert not access.can(feat)
 
     def test_free_can_access_free_features(self):
@@ -188,10 +191,10 @@ class TestAccessControlResolve:
 
     # ── Premium ───────────────────────────────────────────────────────────
 
-    def test_premium_no_expiry(self):
+    def test_premium_no_expiry_is_free(self):
         access = _resolve_access("u1", self._sub(status="premium"))
-        assert access.tier == Tier.PREMIUM
-        assert access.has_premium_access
+        assert access.tier == Tier.FREE
+        assert not access.has_premium_access
 
     def test_premium_not_yet_expired(self):
         future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
@@ -203,9 +206,15 @@ class TestAccessControlResolve:
         access = _resolve_access("u1", self._sub(status="premium", premium_expires_at=past))
         assert access.tier == Tier.FREE
 
+    def test_premium_invalid_expiry_is_free(self):
+        access = _resolve_access("u1", self._sub(status="premium", premium_expires_at="not-a-date"))
+        assert access.tier == Tier.FREE
+        assert not access.has_premium_access
+
     def test_premium_can_all_features(self):
-        access = _resolve_access("u1", self._sub(status="premium"))
-        for feat in ["training_plan", "llm_access", "rag_access", "coach_detailed"]:
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        access = _resolve_access("u1", self._sub(status="premium", premium_expires_at=future))
+        for feat in ["training_plan", "llm_access", "coach_detailed"]:
             assert access.can(feat)
 
     # ── Fail-closed defaults ──────────────────────────────────────────────
@@ -226,7 +235,8 @@ class TestAccessControlResolve:
         assert access.chat_monthly_quota == CHAT_QUOTA_FREE
 
     def test_premium_unlimited_chat(self):
-        access = _resolve_access("u1", self._sub(status="premium"))
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        access = _resolve_access("u1", self._sub(status="premium", premium_expires_at=future))
         assert access.is_unlimited_chat
         assert access.chat_monthly_quota is None
 
@@ -243,13 +253,39 @@ class TestAccessControlResolve:
     def test_user_isolation(self):
         """Two users with different tiers must not share access."""
         free_access = _resolve_access("user_free", {"user_id": "user_free", "status": "free"})
-        prem_access = _resolve_access("user_prem", {"user_id": "user_prem", "status": "premium"})
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        prem_access = _resolve_access(
+            "user_prem",
+            {"user_id": "user_prem", "status": "premium", "premium_expires_at": future},
+        )
 
         assert free_access.tier == Tier.FREE
         assert prem_access.tier == Tier.PREMIUM
         assert not free_access.can("training_plan")
         assert prem_access.can("training_plan")
         assert free_access.user_id != prem_access.user_id
+
+
+class TestRemovedLegacyRoutesAccessMap:
+    def test_removed_legacy_route_keys_absent_from_route_access_map(self):
+        removed_keys = [
+            "/api/coach/guidance",
+            "/api/coach/guidance/latest",
+            "/api/coach/digest",
+            "/api/coach/digest/latest",
+            "/api/coach/digest/history",
+            "/api/rag/dashboard",
+            "/api/rag/weekly-review",
+            "/api/rag/",
+        ]
+        for key in removed_keys:
+            assert key not in ROUTE_ACCESS_MAP
+
+    def test_removed_coach_guidance_path_still_classified_premium_via_coach_prefix(self):
+        assert get_route_access("/api/coach/guidance") == RouteAccess.PREMIUM
+
+    def test_removed_rag_dashboard_path_still_fails_closed_to_premium(self):
+        assert get_route_access("/api/rag/dashboard") == RouteAccess.PREMIUM
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -407,6 +443,29 @@ class TestSubscriptionManager:
             past = datetime.now(timezone.utc) - timedelta(hours=1)
             await activate_premium(db, "u_prem_exp", "sub_z", "cus_z", past)
             sub = await db.subscriptions.find_one({"user_id": "u_prem_exp"})
+            result = await check_premium_expiration(db, sub)
+            assert result["status"] == SubscriptionStatus.FREE
+        _run(go())
+
+    def test_premium_without_expiry_sets_free(self):
+        async def go():
+            db = _DB()
+            await create_trial_subscription(db, "u_prem_no_exp")
+            await activate_premium(db, "u_prem_no_exp", "sub_no_exp", "cus_no_exp", None)
+            sub = await db.subscriptions.find_one({"user_id": "u_prem_no_exp"})
+            result = await check_premium_expiration(db, sub)
+            assert result["status"] == SubscriptionStatus.FREE
+        _run(go())
+
+    def test_premium_with_invalid_expiry_sets_free(self):
+        async def go():
+            db = _DB()
+            await create_trial_subscription(db, "u_prem_bad_exp")
+            await db.subscriptions.update_one(
+                {"user_id": "u_prem_bad_exp"},
+                {"$set": {"status": SubscriptionStatus.PREMIUM, "premium_expires_at": "bad-date"}},
+            )
+            sub = await db.subscriptions.find_one({"user_id": "u_prem_bad_exp"})
             result = await check_premium_expiration(db, sub)
             assert result["status"] == SubscriptionStatus.FREE
         _run(go())

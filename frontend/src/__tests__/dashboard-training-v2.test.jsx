@@ -16,13 +16,13 @@
  * 12. no extra legacy endpoints introduced
  */
 
-import React, { act } from "react";
+import React, { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
 import Dashboard from "@/pages/Dashboard";
-import { LanguageProvider } from "@/context/LanguageContext";
+import { LanguageProvider, useLanguage } from "@/context/LanguageContext";
 import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
@@ -60,6 +60,22 @@ const INSIGHT_PAYLOAD = {
 };
 
 const CARDIO_NO_DATA = { no_data: true, connected: false, message: "No data." };
+const CARDIO_WITH_READINESS = {
+  no_data: false,
+  connected: true,
+  recommendation_color: "green",
+  metrics: {
+    run_readiness: 72,
+    hrv_delta: -4,
+    hrv_status: "green",
+    rhr_today: 52,
+    rhr_status: "green",
+    sleep_hours: 7.5,
+    sleep_status: "green",
+    training_load: 0.9,
+    training_load_status: "green",
+  },
+};
 
 const TODAY_PAYLOAD = {
   status: "success",
@@ -86,6 +102,15 @@ const WEEK_V2_DISTANCE = {
     target_basis: "distance",
     target_km: 50,
     target_duration_minutes: null,
+    session_count: 5,
+  },
+  week: {
+    planned_km: 50,
+    session_count: 5,
+    sessions: [
+      { actual: { activity_id: "a1", distance_km: 10 } },
+    ],
+    unmatched_actuals: [],
   },
 };
 
@@ -94,18 +119,46 @@ const WEEK_V2_DURATION = {
     target_basis: "duration",
     target_km: null,
     target_duration_minutes: 180,
+    session_count: 4,
+  },
+  week: {
+    planned_duration_minutes: 180,
+    session_count: 4,
+    sessions: [
+      { actual: { activity_id: "d1", duration_minutes: 45 } },
+      { actual: { activity_id: "d2", duration_minutes: 90 } },
+    ],
+    unmatched_actuals: [],
   },
 };
+
+function pacesPayload({ confidence = "HIGH", interval = { lower: { pace_str: "4:10", min_per_km: 4.1667 }, upper: { pace_str: "4:30", min_per_km: 4.5 } }, includeThreshold = true, includeEasy = true, raceRefs = {} } = {}) {
+  return {
+    confidence,
+    paces: {
+      easy: includeEasy ? { lower: { pace_str: "5:10", min_per_km: 5.1667 }, upper: { pace_str: "5:55", min_per_km: 5.9167 } } : null,
+      threshold: includeThreshold ? { pace_str: "4:35", min_per_km: 4.5833 } : null,
+      interval,
+    },
+    race_references: {
+      marathon: { pace: { pace_str: "4:49", min_per_km: 4.8144 }, predicted_time_str: "3:23:05" },
+      half_marathon: { pace: { pace_str: "4:34", min_per_km: 4.5667 }, predicted_time_str: "1:36:20" },
+      "10k": { pace: { pace_str: "4:24", min_per_km: 4.4 }, predicted_time_str: "44:00" },
+      "5k": { pace: { pace_str: "4:13", min_per_km: 4.2167 }, predicted_time_str: "21:05" },
+      ...raceRefs,
+    },
+  };
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function buildDefaultMocks(overrides = {}) {
   const defaults = {
     insight: INSIGHT_PAYLOAD,
-    rag: null,
     today: TODAY_PAYLOAD,
     cardio: CARDIO_NO_DATA,
     weekV2: null,
+    paces: null,
   };
   return { ...defaults, ...overrides };
 }
@@ -113,11 +166,14 @@ function buildDefaultMocks(overrides = {}) {
 function setupAxiosMocks(mocks) {
   axios.get.mockImplementation((url) => {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: mocks.insight });
-    if (url.includes("rag/dashboard")) return mocks.rag ? Promise.resolve({ data: mocks.rag }) : Promise.reject(new Error("no rag"));
     if (url.includes("training/today")) return Promise.resolve({ data: mocks.today });
     if (url.includes("run-index")) return Promise.resolve({ data: mocks.cardio });
     if (url.includes("training/v2/week")) {
       if (mocks.weekV2) return Promise.resolve({ data: mocks.weekV2 });
+      return Promise.reject(new Error("not available"));
+    }
+    if (url.includes("training/v2/paces")) {
+      if (mocks.paces) return Promise.resolve({ data: mocks.paces });
       return Promise.reject(new Error("not available"));
     }
     if (url.includes("training/metrics")) return Promise.resolve({ data: null });
@@ -125,14 +181,28 @@ function setupAxiosMocks(mocks) {
   });
 }
 
-function renderDashboard() {
+function getCalledApiPaths() {
+  return axios.get.mock.calls.map(([url]) => new URL(String(url), "http://localhost").pathname);
+}
+
+function LanguageController({ onReady }) {
+  const { setLang } = useLanguage();
+  useEffect(() => {
+    onReady(setLang);
+  }, [onReady, setLang]);
+  return null;
+}
+
+function renderDashboard({ withLanguageController = false } = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  let setLangControl = null;
   act(() => {
     root.render(
       <LanguageProvider>
         <MemoryRouter>
+          {withLanguageController ? <LanguageController onReady={(setter) => { setLangControl = setter; }} /> : null}
           <Dashboard />
         </MemoryRouter>
       </LanguageProvider>
@@ -140,6 +210,12 @@ function renderDashboard() {
   });
   return {
     container,
+    setLanguage: (nextLang) => {
+      act(() => {
+        if (!setLangControl) throw new Error("language controller not ready");
+        setLangControl(nextLang);
+      });
+    },
     unmount: () => {
       act(() => root.unmount());
       container.remove();
@@ -158,6 +234,7 @@ async function waitForRender() {
 describe("PR #174 — Dashboard Training V2 Migration", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
     // Re-initialize mock implementations after clearAllMocks
     mockUseUnitSystem.mockReturnValue({ unitSystem: "metric" });
     mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
@@ -172,7 +249,11 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     await waitForRender();
 
     const calls = axios.get.mock.calls.map(([url]) => url);
+    expect(calls.some((u) => u.includes("dashboard/insight"))).toBe(true);
+    expect(calls.some((u) => u.includes("training/today"))).toBe(true);
     expect(calls.some((u) => u.includes("training/v2/week"))).toBe(true);
+    expect(calls.some((u) => u.includes("rag/dashboard"))).toBe(false);
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
 
@@ -185,7 +266,11 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     await waitForRender();
 
     const calls = axios.get.mock.calls.map(([url]) => url);
+    expect(calls.some((u) => u.includes("dashboard/insight"))).toBe(true);
+    expect(calls.some((u) => u.includes("training/today"))).toBe(false);
     expect(calls.some((u) => u.includes("training/v2/week"))).toBe(false);
+    expect(calls.some((u) => u.includes("rag/dashboard"))).toBe(false);
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
 
@@ -202,8 +287,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 4. distance basis: weekly target comes from weekly_target.target_km
-  it("4. distance basis: displays weekly_target.target_km", async () => {
+  // 4. distance basis: volume comes from the effective published week.
+  it("4. distance basis: displays the effective week planned_km", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({ weekV2: WEEK_V2_DISTANCE }));
 
@@ -214,8 +299,23 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(card).not.toBeNull();
     const value = container.querySelector('[data-testid="weekly-target-value"]');
     expect(value).not.toBeNull();
-    // target_km = 50, metric → "50.0 km"
+    // planned_km = 50, metric → "50.0 km"
     expect(value.textContent).toContain("50");
+    unmount();
+  });
+
+  it.each(["distance", "duration"])("unknown effective %s volume never renders a live target or fake zero", async (basis) => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: {
+        weekly_target: { target_basis: basis, target_km: 9.3, target_duration_minutes: 180 },
+        week: { planned_km: null, planned_duration_minutes: null, session_count: null, sessions: [] },
+      },
+    }));
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    expect(container.querySelector('[data-testid="weekly-target-value"]').textContent).toBe("Incomplete data");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]')).toBeNull();
     unmount();
   });
 
@@ -284,7 +384,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 8. Today session comes from /training/today
   it("8. Today session source is /training/today", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks());
 
     const { container, unmount } = renderDashboard();
@@ -292,6 +392,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
     const calls = axios.get.mock.calls.map(([url]) => url);
     expect(calls.some((u) => u.includes("training/today"))).toBe(true);
+    expect(getCalledApiPaths()).toContain("/api/training/today");
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
 
     // Today card must be rendered (from /training/today response)
     const todayCard = container.querySelector('[data-testid="today-workout-card"]');
@@ -301,7 +403,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 9. estimated_tss=null: no "0 TSS"
   it("9. estimated_tss=null: no TSS badge rendered", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -322,7 +424,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 10. estimated_tss=0: "0 TSS" is rendered
   it("10. estimated_tss=0: '0 TSS' badge rendered", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -341,14 +443,13 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 10b. today recommendation absent: never fabricated as RUN HARD
-  it("10b. today recommendation absent: never shows fabricated RUN HARD", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+  // 10b. readiness unavailable must not erase a valid served prescription
+  it("10b. valid today prescription still renders when today readiness is unavailable", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
           ...TODAY_PAYLOAD,
-          fatigue: null,
           readiness: {
             ...TODAY_PAYLOAD.readiness,
             band: "UNAVAILABLE",
@@ -362,24 +463,85 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
-    const badge = container.querySelector('[data-testid="today-readiness-badge"]');
-    expect(badge).not.toBeNull();
-    expect(badge.textContent).not.toContain("RUN HARD");
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(todayCard.textContent).not.toContain("No session planned");
+    expect(todayCard.textContent).not.toContain("RUN HARD");
+    expect(container.querySelector('[data-testid="today-readiness-badge"]')).toBeNull();
+    expect(container.querySelector('[data-testid="today-readiness-status"]')?.textContent).toContain("Readiness unavailable");
     unmount();
   });
 
-  // 10c. today unknown readiness uses gray badge, never red by default
-  it("10c. today unknown readiness uses neutral gray", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+  // 10c. run-index failure must not erase a valid /training/today truth
+  it("10c. valid today prescription still renders when run-index request fails", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.reject(new Error("run-index failed"));
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(todayCard.textContent).not.toContain("No session planned");
+    expect(container.textContent).toContain("Unable to load data.");
+    unmount();
+  });
+
+  it("10d. high readiness + rest day is coherent: freshness state shown, rest prescription preserved, no legacy directive text", async () => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "fr");
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
+        cardio: {
+          mock: false,
+          source: "garmin",
+          recommendation: "SÉANCE INTENSE",
+          recommendation_color: "green",
+          metrics: {
+            run_readiness: 85.7,
+            run_readiness_status: "green",
+            hrv_today: 45,
+            hrv_baseline: 50,
+            hrv_delta: -5,
+            hrv_status: "green",
+            hrv_available: true,
+            rhr_today: 52,
+            rhr_baseline: 51,
+            rhr_delta: 1,
+            rhr_status: "green",
+            sleep_hours: 8,
+            sleep_efficiency: 0.9,
+            sleep_score: 0.6,
+            sleep_status: "green",
+            training_load: 1.0,
+            training_load_status: "green",
+            confidence: "normal",
+            sufficiency_level: "sufficient",
+            readiness_reasons: [],
+          },
+          history: [],
+        },
         today: {
           ...TODAY_PAYLOAD,
-          readiness: {
-            ...TODAY_PAYLOAD.readiness,
-            band: "UNAVAILABLE",
-            available: false,
-            score: null,
+          served_prescription: {
+            type: "rest",
+            duration: "",
+            details: "Jour de repos",
+            estimated_tss: null,
+          },
+          planned_session: {
+            type: "endurance",
+            duration: "45 min",
+            details: "Easy pace",
+            estimated_tss: 55,
           },
         },
       })
@@ -388,11 +550,303 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
-    const badge = container.querySelector('[data-testid="today-readiness-badge"]');
+    const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
-    const style = badge.getAttribute("style") || "";
-    expect(style).toContain("rgb(107, 114, 128)");
-    expect(style).not.toContain("rgb(239, 68, 68)");
+    expect(badge.textContent).toContain("Fraîcheur élevée");
+    expect(container.textContent).toContain("Jour de repos");
+    expect(container.textContent).not.toContain("0 min");
+    expect(container.textContent).not.toContain("SÉANCE INTENSE");
+    expect(container.textContent).not.toContain("RUN HARD");
+    unmount();
+  });
+
+  it("10e. valid today prescription + readiness available renders the prescription truth", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({ today: TODAY_PAYLOAD }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(container.querySelector('[data-testid="today-readiness-badge"]')?.textContent).toContain("Ready");
+    unmount();
+  });
+
+  it("10f. no_session from /training/today keeps the honest empty state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "no_session",
+          day: "monday",
+          message: "No session planned for today",
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("No session planned");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("No session planned for today");
+    unmount();
+  });
+
+  it("10g. prescription_unavailable from /training/today keeps an honest unavailable state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "prescription_unavailable",
+          day: "monday",
+          message: "Prescription unavailable",
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Today's session unavailable");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Prescription unavailable");
+    unmount();
+  });
+
+  it("10h. explicit /training/today error keeps an honest error state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { status: "error", message: "Today backend unavailable" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Today backend unavailable");
+    unmount();
+  });
+
+  it("10i. plain-string /training/today errors keep the backend message", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: "Today backend unavailable" } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Today backend unavailable");
+    unmount();
+  });
+
+  it("10j. generic object errors fall back to the default localized subtitle", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { detail: "Unauthorized" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Retry in a moment to load today's prescription.");
+    unmount();
+  });
+
+  it("10k. rejected responses with a message are normalized to the Today error state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { status: "unavailable", message: "Today backend unavailable" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Today backend unavailable");
+    unmount();
+  });
+
+  it("10l. valid today prescription still renders when dashboard insight fails", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.reject(new Error("insight failed"));
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(container.querySelector('[data-testid="today-status-title"]')).toBeNull();
+    unmount();
+  });
+
+  it("10m. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        insight: {
+          ...INSIGHT_PAYLOAD,
+          week: { sessions: 3, volume_km: 28.5, actual_duration_minutes: 160 },
+        },
+        weekV2: {
+          weekly_target: {
+            target_basis: "distance",
+            target_km: 9.3,
+            target_duration_minutes: null,
+            session_count: 3,
+          },
+          week: {
+            planned_km: 16.3,
+            session_count: 3,
+            sessions: [
+              { actual: null },
+              { actual: null },
+              { actual: null },
+            ],
+            unmatched_actuals: [
+              { distance_km: 8.69 },
+            ],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="weekly-target-value"]').textContent).toContain("16.3");
+    expect(container.querySelector('[data-testid="weekly-volume-done"]').textContent).toContain("0");
+    expect(container.querySelector('[data-testid="weekly-volume-extra"]').textContent).toContain("8.69");
+    expect(container.querySelector('[data-testid="weekly-volume-done"]').textContent).not.toContain("28.5");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]').getAttribute("style")).toContain("0%");
+    unmount();
+  });
+
+  it("10f. matched and unmatched stay separated in progress", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        weekV2: {
+          weekly_target: {
+            target_basis: "distance",
+            target_km: 16,
+            target_duration_minutes: null,
+            session_count: 2,
+          },
+          week: {
+            planned_km: 16,
+            session_count: 2,
+            sessions: [{ actual: { activity_id: "m1", distance_km: 5 } }],
+            unmatched_actuals: [{ distance_km: 8 }],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="weekly-volume-done"]').textContent).toContain("5");
+    expect(container.querySelector('[data-testid="weekly-volume-extra"]').textContent).toContain("8");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]').getAttribute("style")).toContain("31%");
+    unmount();
+  });
+
+  it("10g. partial matched data (distance): renders incomplete data, never partial sum", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        weekV2: {
+          weekly_target: {
+            target_basis: "distance",
+            target_km: 16,
+            target_duration_minutes: null,
+            session_count: 2,
+          },
+          week: {
+            sessions: [
+              { actual: { activity_id: "m1", distance_km: 5 } },
+              { actual: { activity_id: "m2", distance_km: null } },
+            ],
+            unmatched_actuals: [],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const done = container.querySelector('[data-testid="weekly-volume-done"]');
+    expect(done.textContent).toMatch(/incompl/i);
+    expect(done.textContent).not.toContain("5");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]')).toBeNull();
+    unmount();
+  });
+
+  it("10h. partial matched data (duration): renders incomplete data, never partial sum", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        weekV2: {
+          weekly_target: {
+            target_basis: "duration",
+            target_km: null,
+            target_duration_minutes: 90,
+            session_count: 2,
+          },
+          week: {
+            sessions: [
+              { actual: { activity_id: "d1", duration_minutes: 30 } },
+              { actual: { activity_id: "d2", duration_minutes: null } },
+            ],
+            unmatched_actuals: [],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const done = container.querySelector('[data-testid="weekly-duration-done"]');
+    expect(done.textContent).toMatch(/incompl/i);
+    expect(done.textContent).not.toContain("30");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]')).toBeNull();
     unmount();
   });
 
@@ -436,8 +890,267 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
+  it("11c. TRIAL/PREMIUM: calls /training/v2/paces and renders dashboard paces card", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card).not.toBeNull();
+    expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/paces"))).toBe(true);
+    expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/cycle"))).toBe(false);
+    unmount();
+  });
+
+  it("11d. FREE: never calls /training/v2/paces and uses preview card", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    setupAxiosMocks(buildDefaultMocks());
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="paces-preview-free"]')).not.toBeNull();
+    expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/paces"))).toBe(false);
+    unmount();
+  });
+
+  it("11e. paces teaser renders easy and threshold from canonical payload", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cardText = container.querySelector('[data-testid="dashboard-paces-card"]').textContent;
+    expect(cardText).toContain("Easy");
+    expect(cardText).toContain("Threshold");
+    expect(cardText).toContain("5:10 /km - 5:55 /km");
+    expect(cardText).toContain("4:35 /km");
+    unmount();
+  });
+
+  it.each([
+    ["5k", "5 km", "4:13 /km"],
+    ["10k", "10 km", "4:24 /km"],
+    ["SEMI", "Half marathon", "4:34 /km"],
+    ["HALF_MARATHON", "Half marathon", "4:34 /km"],
+    ["semi_marathon", "Half marathon", "4:34 /km"],
+    ["marathon", "Marathon", "4:49 /km"],
+    ["maintenance", "Interval", "4:10 /km - 4:30 /km"],
+    ["ultra", "Interval", "4:10 /km - 4:30 /km"],
+  ])("11f. goal mapping (%s) picks correct teaser third row", async (goalType, expectedLabel, expectedValue) => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: goalType } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cardText = container.querySelector('[data-testid="dashboard-paces-card"]').textContent;
+    expect(cardText).toContain(expectedLabel);
+    expect(cardText).toContain(expectedValue);
+    unmount();
+  });
+
+  it("11g. missing fields never invent values and only shows available rows", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "marathon" } },
+      paces: pacesPayload({
+        includeThreshold: false,
+        raceRefs: { marathon: null },
+      }),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    const rows = card.querySelectorAll('[data-testid="dashboard-paces-rows"] > div');
+    expect(rows.length).toBe(1);
+    expect(card.textContent).not.toContain("0:00");
+    expect(card.textContent).not.toContain(" 0 ");
+    expect(card.textContent).not.toContain("—");
+    unmount();
+  });
+
+  it("11h. pending /training/v2/paces shows loading state, not insufficient", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.resolve({ data: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } } });
+      if (url.includes("training/v2/paces")) return new Promise(() => {});
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.querySelector('[data-testid="dashboard-paces-loading"]')).not.toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-error"]')).toBeNull();
+    unmount();
+  });
+
+  it.each([
+    ["en", "Unable to load your paces.", "Insufficient data", "Unable to load this week."],
+    ["fr", "Impossible de charger vos allures.", "Données insuffisantes", "Impossible de charger cette semaine."],
+    ["es", "No se pueden cargar tus ritmos.", "Datos insuficientes", "No se puede cargar esta semana."],
+  ])("11i. paces request failure uses dedicated paces error copy in %s", async (lang, expectedPacesError, insufficientLabel, weekErrorLabel) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "10k" } },
+      paces: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    const pacesError = card.querySelector('[data-testid="dashboard-paces-error"]');
+    expect(pacesError).not.toBeNull();
+    expect(pacesError.textContent).toBe(expectedPacesError);
+    expect(card.textContent).not.toContain("dashboard.pacesTeaserError");
+    expect(card.textContent).not.toContain(insufficientLabel);
+    expect(card.textContent).not.toContain(weekErrorLabel);
+    expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-rows"]')).toBeNull();
+    expect(axios.get.mock.calls.some(([url]) => url.includes("/training/v2/paces"))).toBe(true);
+    unmount();
+  });
+
+  it("11j. confidence INSUFFICIENT shows explicit empty state and no pseudo paces", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "10k" } },
+      paces: pacesPayload({ confidence: "INSUFFICIENT", includeEasy: false, includeThreshold: false, interval: null, raceRefs: { marathon: null, half_marathon: null, "10k": null, "5k": null } }),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).not.toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-rows"]')).toBeNull();
+    unmount();
+  });
+
+  it("11k. dashboard paces teaser never renders predicted time", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cardText = container.querySelector('[data-testid="dashboard-paces-card"]').textContent;
+    expect(cardText).not.toContain("21:05");
+    expect(cardText).not.toContain("44:00");
+    unmount();
+  });
+
+  it("11l. dashboard paces CTA links to /training", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cta = container.querySelector('[data-testid="dashboard-paces-cta"]');
+    expect(cta).not.toBeNull();
+    expect(cta.getAttribute("href")).toBe("/training");
+    unmount();
+  });
+
+  it("11m. paces card keeps compact mobile-safe structure", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.querySelector("table")).toBeNull();
+    expect(card.className.includes("overflow-x-auto")).toBe(false);
+    unmount();
+  });
+
+  it("11n. today-first ordering preserved with paces teaser inserted before weekly target", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      insight: {
+        ...INSIGHT_PAYLOAD,
+        run_index: { run_index: 264, confidence_score: 87, status: "ok", speed_score: 70, endurance_score: 75, consistency_score: 80, efficiency_score: 65 },
+      },
+      cardio: CARDIO_WITH_READINESS,
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    const readiness = container.querySelector('[data-testid="run-readiness-card"]');
+    const today = container.querySelector('[data-testid="today-workout-card"]');
+    const runIndex = container.querySelector('[data-testid="run-index-card"]');
+    const paces = container.querySelector('[data-testid="dashboard-paces-card"]');
+    const weekly = container.querySelector('[data-testid="weekly-target-card"]');
+    expect(readiness).not.toBeNull();
+    expect(today).not.toBeNull();
+    expect(runIndex).not.toBeNull();
+    expect(paces).not.toBeNull();
+    expect(weekly).not.toBeNull();
+    expect(readiness.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(today.compareDocumentPosition(runIndex) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(runIndex.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(paces.compareDocumentPosition(weekly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+  });
+
+  it("11o. language-only change rerenders labels without refetching /training/v2/paces", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, setLanguage, unmount } = renderDashboard({ withLanguageController: true });
+    await waitForRender();
+
+    const pacesCallsBefore = axios.get.mock.calls.filter(([url]) => url.includes("training/v2/paces")).length;
+    expect(container.textContent).toContain("My paces");
+
+    setLanguage("fr");
+    await waitForRender();
+
+    const pacesCallsAfter = axios.get.mock.calls.filter(([url]) => url.includes("training/v2/paces")).length;
+    expect(container.textContent).toContain("Mes allures");
+    expect(pacesCallsAfter).toBe(pacesCallsBefore);
+    unmount();
+  });
+
   // 12. no extra legacy endpoints
-  it("12. no legacy endpoints introduced (subscription/info, run-index, training/today, dashboard/insight only)", async () => {
+  it("12. no legacy endpoints introduced (dashboard/insight, run-index only for FREE)", async () => {
     mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
     setupAxiosMocks(buildDefaultMocks());
 
@@ -446,8 +1159,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
     const allowedPatterns = [
       "dashboard/insight",
-      "rag/dashboard",
-      "training/today",
       "run-index",
     ];
 
@@ -456,6 +1167,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       const isAllowed = allowedPatterns.some((p) => url.includes(p));
       expect(isAllowed).toBe(true);
     }
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
 
@@ -485,6 +1197,187 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
+  // C231 corrections finales — item 1: served_prescription is canonical, never adaptation_applied
+  it("C231-final: served_prescription (12.6) wins over stale planned_session (18) even when adaptation_applied=false", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: false,
+          adaptation_reason: "",
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("12.6");
+    expect(todayCard.textContent).not.toContain("18 km");
+    unmount();
+  });
+
+  // C231 corrections finales — item 1: authoritative snapshot (18) must never
+  // crash or fall back when adaptive_session is null (session not actually
+  // modified vs. the plan), even though today's live recompute says REDUCE.
+  it("C231-final: authoritative served snapshot (18) stays displayed when adaptive_session is null, no crash", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adapted_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("18 km");
+    unmount();
+  });
+
+  // C231 corrections finales (round 3, P1 fix) — scenario A: served == planned,
+  // adaptation_applied=true from a live REDUCE recompute, but
+  // session_modified_from_planned=false ⇒ no "Adapté" banner at all.
+  it("C231-micro: scenario A — no adaptation banner when session_modified_from_planned=false despite adaptation_applied=true", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: false,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adapted_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.querySelector('[data-testid="adaptation-notice"]')).toBeNull();
+    expect(todayCard.textContent).not.toContain("caution");
+    unmount();
+  });
+
+  // C231 corrections finales (round 3, P1 fix) — scenario B: served (12.6)
+  // differs from planned (18), session_modified_from_planned=true ⇒ neutral
+  // "Séance adaptée" banner is visible and the card shows 12.6 km.
+  it("C231-micro: scenario B — neutral 'Séance adaptée' banner shown when session_modified_from_planned=true, card shows 12.6 km", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: true,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    const notice = todayCard.querySelector('[data-testid="adaptation-notice"]');
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).not.toContain("caution");
+    expect(todayCard.textContent).toContain("12.6");
+    expect(todayCard.textContent).not.toContain("18 km");
+    unmount();
+  });
+
+  // C231 (round 5 / "C231-septies") scenario F: session_modified_from_planned
+  // absent/null (pre-migration snapshot without the field) must show NO
+  // banner — never fabricated True, never a crash.
+  it("C231-septies: scenario F — no banner when session_modified_from_planned is null (pre-migration snapshot)", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: null,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.querySelector('[data-testid="adaptation-notice"]')).toBeNull();
+    expect(todayCard.textContent).toContain("12.6");
+    unmount();
+  });
+
+  // C231 corrections finales (round 3, P1 fix): source check — the banner
+  // must be gated by session_modified_from_planned, never adaptation_applied,
+  // and never used to choose the displayed session either.
+  it("C231-micro: scenario C — source check: adaptation_applied never gates the banner nor the session selection", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/todaySession\.adaptation_applied/);
+    expect(src).toMatch(/session_modified_from_planned\s*===\s*true/);
+  });
+
   // 12c. dashboard visible today consumer no longer depends on legacy fatigue block
   it("12c. source check: no todaySession.fatigue consumer remains", () => {
     const fs = require("fs");
@@ -507,12 +1400,67 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(src).not.toContain('|| "RUN HARD"');
   });
 
+  it("12e. source check: weekly target completion never uses insight.week rolling fields", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/weekStats\.volume_km/);
+    expect(src).not.toMatch(/weekStats\.actual_duration_minutes/);
+  });
+
+  it("12f. source check: run readiness card does not display cardioData.recommendation text", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/\{cardioData\?\.recommendation\s*\|\|/);
+  });
+
+  it("12g. source check: Dashboard and TrainingPlanV2 both use shared training week progress helper", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const dashboardSrc = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    const trainingSrc = fs.readFileSync(
+      path.resolve(__dirname, "../pages/TrainingPlanV2.jsx"),
+      "utf-8"
+    );
+    expect(dashboardSrc).toMatch(/computeTrainingWeekProgress/);
+    expect(trainingSrc).toMatch(/computeTrainingWeekProgress/);
+  });
+
+  // C231 corrections finales: source check — adaptation_applied never used
+  // to select which session is displayed (ternary/conditional rendering).
+  it("C231-final: source check — adaptation_applied is never used to select the displayed session", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/todaySession\.adaptation_applied\s*\?/);
+    expect(src).toMatch(/served_prescription/);
+  });
+
   // 13. i18n keys: weeklyTarget, weeklyDone, minutes exist in EN
   it("13. i18n dashboard keys exist in EN", () => {
     const { translations } = require("@/lib/i18n");
     expect(translations.en.dashboard.weeklyTarget).toBeDefined();
     expect(translations.en.dashboard.weeklyDone).toBeDefined();
+    expect(translations.en.dashboard.weeklyOutsidePlan).toBeDefined();
+    expect(translations.en.dashboard.readinessStates.green).toBeDefined();
     expect(translations.en.dashboard.minutes).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserTitle).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserSubtitle).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserCta).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserEmpty).toBeDefined();
   });
 
   // 14. i18n keys: weeklyTarget, weeklyDone, minutes exist in FR
@@ -520,7 +1468,13 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { translations } = require("@/lib/i18n");
     expect(translations.fr.dashboard.weeklyTarget).toBeDefined();
     expect(translations.fr.dashboard.weeklyDone).toBeDefined();
+    expect(translations.fr.dashboard.weeklyOutsidePlan).toBeDefined();
+    expect(translations.fr.dashboard.readinessStates.green).toBeDefined();
     expect(translations.fr.dashboard.minutes).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserTitle).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserSubtitle).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserCta).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserEmpty).toBeDefined();
   });
 
   // 15. i18n keys: weeklyTarget, weeklyDone, minutes exist in ES
@@ -528,7 +1482,13 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { translations } = require("@/lib/i18n");
     expect(translations.es.dashboard.weeklyTarget).toBeDefined();
     expect(translations.es.dashboard.weeklyDone).toBeDefined();
+    expect(translations.es.dashboard.weeklyOutsidePlan).toBeDefined();
+    expect(translations.es.dashboard.readinessStates.green).toBeDefined();
     expect(translations.es.dashboard.minutes).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserTitle).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserSubtitle).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserCta).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserEmpty).toBeDefined();
   });
 
   // 16. no raw i18n keys visible in rendered output (duration basis)

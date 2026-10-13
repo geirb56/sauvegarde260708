@@ -33,10 +33,10 @@ export const WorkoutCard = ({
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <span className="workout-type-badge text-[9px] md:text-[10px]">
+                <span className="workout-type-badge text-[11px]">
                   {typeLabel}
                 </span>
-                <span className="font-mono text-[9px] md:text-[10px] text-muted-foreground">
+                <span className="font-mono text-[11px] text-muted-foreground">
                   {dateStr}
                 </span>
               </div>
@@ -50,7 +50,7 @@ export const WorkoutCard = ({
                 <p className="font-mono text-xs md:text-sm font-medium">
                   {formatDistance(workout.distance_km || 0, { unitSystem })}
                 </p>
-                <p className="font-mono text-[9px] md:text-[10px] text-muted-foreground">
+                <p className="font-mono text-[11px] text-muted-foreground">
                   {formatDuration(workout.duration_minutes)}
                 </p>
               </div>

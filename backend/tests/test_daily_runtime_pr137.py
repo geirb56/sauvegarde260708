@@ -20,6 +20,7 @@ Run from the backend directory:
 
 from __future__ import annotations
 
+import ast
 import sys
 from datetime import date
 from pathlib import Path
@@ -41,7 +42,6 @@ from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.daily_runtime_helpers import (
     WORKOUT_TYPE_TO_INTENSITY_CLASS,
-    BAND_TO_RECOMMENDATION,
     parse_duration_minutes,
     runtime_session_to_prescription,
     prescription_to_runtime_session,
@@ -49,6 +49,45 @@ from training_v2.daily_runtime_helpers import (
 
 _SERVER_PATH = Path(__file__).resolve().parents[1] / "server.py"
 REF = date(2026, 8, 17)
+
+
+def _today_endpoint_ast() -> ast.AsyncFunctionDef:
+    tree = ast.parse(_SERVER_PATH.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_today_adaptive_session":
+            return node
+    pytest.fail("get_today_adaptive_session not found in server.py")
+
+
+def _string_keys_in(node: ast.AST) -> set[str]:
+    keys: set[str] = set()
+    for subnode in ast.walk(node):
+        if not isinstance(subnode, ast.Dict):
+            continue
+        for key in subnode.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.add(key.value)
+    return keys
+
+
+def _called_names_in(node: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for subnode in ast.walk(node):
+        if not isinstance(subnode, ast.Call):
+            continue
+        if isinstance(subnode.func, ast.Name):
+            names.add(subnode.func.id)
+        elif isinstance(subnode.func, ast.Attribute):
+            names.add(subnode.func.attr)
+    return names
+
+
+def _identifier_names_in(node: ast.AST) -> set[str]:
+    return {
+        subnode.id
+        for subnode in ast.walk(node)
+        if isinstance(subnode, ast.Name)
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,6 +141,18 @@ def test_A_rest_planned_keeps():
     assert result.action == DailyAdaptationAction.KEEP
     assert result.adapted_workout.workout_type == "rest"
     assert "PLANNED_REST_DAY" in result.reason_codes
+
+
+def test_A_race_planned_keeps():
+    workout = _wp("race", distance_km=21.0975)
+    decision = build_readiness_decision(_readiness(30.0))
+    result = build_daily_adaptation(
+        workout=workout, readiness_decision=decision,
+        training_load=None, recent_response=None,
+    )
+    assert result.action == DailyAdaptationAction.KEEP
+    assert result.adapted_workout.workout_type == "race"
+    assert result.adapted_workout.distance_km == pytest.approx(21.0975)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +361,22 @@ def test_N_runtime_to_prescription_threshold():
     assert p.intensity_class == "high"
 
 
+def test_N_runtime_to_prescription_race():
+    p = runtime_session_to_prescription(
+        {"day": "sunday", "type": "race", "duration": "0min", "distance_km": 21.0975}
+    )
+    assert p.workout_type == "race"
+    assert p.intensity_class == "event"
+    assert p.distance_km == pytest.approx(21.0975)
+
+
+def test_N_prescription_to_runtime_race():
+    runtime = prescription_to_runtime_session(_wp("race", distance_km=21.0975, day="sunday"))
+    assert runtime["type"] == "race"
+    assert runtime["intensity"] == "event"
+    assert runtime["distance_km"] == pytest.approx(21.0975)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # O. Architecture guard: no numeric readiness thresholds in server endpoint
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,54 +393,59 @@ def test_O_no_score_thresholds_in_server_endpoint():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# P–R. Recommendation mapping
+# P. Today endpoint must expose only canonical readiness, not legacy recommendations
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_P_band_to_recommendation_complete():
-    for band in ReadinessBand:
-        assert band in BAND_TO_RECOMMENDATION
+@pytest.mark.asyncio
+async def test_P_today_endpoint_omits_legacy_recommendation_fields_but_keeps_readiness():
+    from test_pr232a_c231_week_endpoint import (
+        _FakeDB,
+        _get_today,
+        _seed_connected,
+        _seed_cycle,
+        _seed_garmin_activities,
+    )
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    body = result["body"]
+    assert "readiness" in body
+    assert "fatigue" not in body
+    assert "recommendation" not in body
+    assert "recommendation_color" not in body
 
 
-def test_Q_unavailable_maps_gray():
-    rec, color = BAND_TO_RECOMMENDATION[ReadinessBand.UNAVAILABLE]
-    assert rec == "UNAVAILABLE"
-    assert color == "gray"
-
-
-def test_R_favorable_maps_green():
-    rec, color = BAND_TO_RECOMMENDATION[ReadinessBand.FAVORABLE]
-    assert rec == "RUN HARD"
-    assert color == "green"
+def test_Q_today_endpoint_source_has_no_legacy_recommendation_adapter():
+    endpoint = _today_endpoint_ast()
+    endpoint_keys = _string_keys_in(endpoint)
+    assert "BAND_TO_RECOMMENDATION" not in _identifier_names_in(endpoint)
+    assert "fatigue" not in endpoint_keys
+    assert "recommendation" not in endpoint_keys
+    assert "recommendation_color" not in endpoint_keys
+    assert "readiness" in endpoint_keys
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# S. No fatigue_ratio/fatigue_status/fatigue_physio in payload
+# R. No fatigue_ratio/fatigue_status/fatigue_physio in payload
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_S_no_legacy_fatigue_fields():
-    server_src = _SERVER_PATH.read_text()
-    start = server_src.find("async def get_today_adaptive_session")
-    end = server_src.find("\n@api_router.", start + 1)
-    assert start != -1
-    body = server_src[start:end] if end != -1 else server_src[start:]
-    # Check that these keys are not used as actual dict keys in the payload
+def test_R_no_legacy_fatigue_fields():
+    endpoint_keys = _string_keys_in(_today_endpoint_ast())
     for field in ("fatigue_ratio", "fatigue_status", "fatigue_physio"):
-        # A dict key would appear as "field": or 'field':
-        assert f'"{field}"' not in body and f"'{field}'" not in body, \
-            f"Legacy key '{field}' found in endpoint payload"
+        assert field not in endpoint_keys, f"Legacy key '{field}' found in endpoint payload"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T. No adapt_session_to_readiness call in endpoint
+# S. No adapt_session_to_readiness call in endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_T_no_legacy_adapt_call():
-    server_src = _SERVER_PATH.read_text()
-    start = server_src.find("async def get_today_adaptive_session")
-    end = server_src.find("\n@api_router.", start + 1)
-    assert start != -1
-    body = server_src[start:end] if end != -1 else server_src[start:]
-    assert "adapt_session_to_readiness" not in body
+def test_S_no_legacy_adapt_call():
+    assert "adapt_session_to_readiness" not in _called_names_in(_today_endpoint_ast())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

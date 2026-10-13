@@ -49,7 +49,7 @@ const ChatCoach = ({ isOpen, onClose }) => {
       setSubscriptionStatus(res.data);
     } catch (err) {
       console.error("Error checking subscription:", err);
-      setSubscriptionStatus({ tier: "free", messages_limit: 10, messages_remaining: 10 });
+      setSubscriptionStatus(null);
     } finally {
       setCheckingStatus(false);
     }
@@ -107,10 +107,10 @@ const ChatCoach = ({ isOpen, onClose }) => {
       setCurrentSuggestions(res.data.suggestions || []);
 
       // Update remaining messages
-      setSubscriptionStatus(prev => ({
+      setSubscriptionStatus(prev => prev && ({
         ...prev,
-        messages_remaining: res.data.messages_remaining,
-        messages_used: (prev?.messages_used || 0) + 1
+        messages_remaining: prev.is_unlimited ? prev.messages_remaining : res.data.messages_remaining,
+        messages_used: (prev.messages_used || 0) + 1
       }));
 
     } catch (err) {
@@ -156,10 +156,24 @@ const ChatCoach = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
-  const canSendMessages = subscriptionStatus && subscriptionStatus.messages_remaining > 0;
+  const isStatusValid = Boolean(
+    subscriptionStatus &&
+    ["free", "trial", "premium"].includes(subscriptionStatus.tier) &&
+    typeof subscriptionStatus.is_unlimited === "boolean" &&
+    subscriptionStatus.is_unlimited === (subscriptionStatus.tier !== "free") &&
+    typeof subscriptionStatus.is_premium === "boolean" &&
+    subscriptionStatus.is_premium === (subscriptionStatus.tier !== "free") &&
+    (subscriptionStatus.is_unlimited
+      ? subscriptionStatus.messages_remaining === null
+      : Number.isFinite(subscriptionStatus.messages_remaining) &&
+        Number.isFinite(subscriptionStatus.messages_limit))
+  );
+  const isUnlimited = isStatusValid && subscriptionStatus.is_unlimited;
+  const canSendMessages = isStatusValid && (
+    isUnlimited || subscriptionStatus.messages_remaining > 0
+  );
   const tier = subscriptionStatus?.tier || "free";
   const tierName = subscriptionStatus?.tier_name || t("subscription.free");
-  const isUnlimited = subscriptionStatus?.is_unlimited || false;
   const isPremium = tier !== "free";
 
   return (
@@ -179,9 +193,11 @@ const ChatCoach = ({ isOpen, onClose }) => {
                 )}
               </div>
               <p className="text-[10px] text-muted-foreground">
-                {isUnlimited 
-                  ? t("chat.unlimited") 
-                  : `${subscriptionStatus?.messages_remaining || 0}/${subscriptionStatus?.messages_limit || 10} messages`
+                {isUnlimited
+                  ? t("chat.unlimited")
+                  : isStatusValid
+                    ? `${subscriptionStatus.messages_remaining}/${subscriptionStatus.messages_limit} messages`
+                    : t("chat.connectionError")
                 }
               </p>
             </div>
@@ -320,7 +336,11 @@ const ChatCoach = ({ isOpen, onClose }) => {
               )}
               
               {/* Limit reached */}
-              {!canSendMessages ? (
+              {!isStatusValid ? (
+                <p className="text-xs text-destructive text-center">
+                  {t("chat.connectionError")}
+                </p>
+              ) : !canSendMessages ? (
                 <div className="text-center py-2">
                   <p className="text-xs text-destructive mb-2">
                     Tu as atteint ta limite de {subscriptionStatus?.messages_limit} messages ce mois-ci.

@@ -8,18 +8,24 @@ Design rules (do not violate):
 - No business logic (no RunnerProfile / TrainingHistory / TrainingState / plans).
 - No fallback / no fabrication: when Garmin does not provide a value the field
   is ``None``. Empty ``{}`` / ``[]`` / ``null`` payloads must yield valid models
-  with ``None`` fields (never raise).
+  with ``None`` fields for historical summary/health models (never raise).
+  Typed-splits rejects incompatible envelopes to avoid caching false emptiness.
 - Additive only: nothing here is wired into the existing engine, score,
   readiness, endpoints or frontend. Future PRs will consume these models.
 
-All raw shapes below come from the real audited gccli 1.9.0 output.
+Historical raw shapes come from audited gccli 1.9.0 output. The typed-splits
+contract follows the Emergent C321 audit; tests reconstruct its documented
+structure and are not raw captures.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
+import math
+from activity_phases import ActivityPhase
 
 
 # --------------------------------------------------------------------------- #
@@ -91,6 +97,15 @@ class GarminActivity(BaseModel):
     activity_id: Optional[str] = None
     activity_type: Optional[str] = None
     start_time: Optional[str] = None
+    """Canonical model convention: GMT first, local as fallback."""
+    start_time_local: Optional[str] = None
+    """Explicit device-local start time (``startTimeLocal``), never GMT.
+
+    PR230: the performed-workout matching layer needs the REAL local calendar
+    day.  ``start_time`` cannot be used for that because it is GMT-first, so a
+    run just after local midnight would be attributed to the previous day.
+    This field is only populated when Garmin really provided ``startTimeLocal``.
+    """
     distance_m: Optional[float] = None
     duration_s: Optional[float] = None
     moving_duration_s: Optional[float] = None
@@ -143,6 +158,7 @@ class GarminActivity(BaseModel):
             activity_id=activity_id,
             activity_type=activity_type,
             start_time=_str(summary.get("startTimeGMT")) or _str(summary.get("startTimeLocal")),
+            start_time_local=_str(summary.get("startTimeLocal")),
             distance_m=_num(summary.get("distance")),
             duration_s=_num(summary.get("duration")),
             moving_duration_s=_num(summary.get("movingDuration")),
@@ -166,6 +182,92 @@ class GarminActivity(BaseModel):
             has_splits=(meta.get("hasSplits") if isinstance(meta.get("hasSplits"), bool) else None),
             details_available=details_available,
         )
+
+def normalize_typed_splits(raw: Any) -> List[Dict]:
+    """Normalize C321's verified envelope; reject incompatible responses.
+
+    Complete unique message indexes are used only if available timestamps
+    agree with that order. Otherwise complete timestamps can order the entire
+    sequence if available indexes agree. Ambiguity preserves reception order.
+    RWD_* rows are filtered without changing retained rows' relative order.
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("splits"), list):
+        raise ValueError("Unsupported typed-splits payload")
+    splits = raw["splits"]
+    if len(splits) > 1000:
+        raise ValueError("Unsupported typed-splits payload")
+    phase_types = {
+        "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery",
+        "INTERVAL_WARMUP": "warmup", "INTERVAL_COOLDOWN": "cooldown",
+    }
+
+    def measurement(value):
+        number = _num(value)
+        try:
+            return number if number is not None and math.isfinite(number) and number >= 0 else None
+        except OverflowError:
+            return None
+
+    def ordering_evidence(item):
+        _, split = item
+        start = split.get("startTimeGMT")
+        timestamp = None
+        if isinstance(start, str) and ("T" in start or " " in start):
+            try:
+                parsed = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                timestamp = parsed.timestamp()
+            except (ValueError, OverflowError, OSError):
+                pass
+        index = split.get("messageIndex")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            index = None
+        return index, timestamp
+
+    retained = []
+    for position, split in enumerate(splits):
+        if (
+            not isinstance(split, dict)
+            or not _str(split.get("type"))
+            or len(split["type"]) > 128
+        ):
+            raise ValueError("Unsupported typed-split row")
+        if not split["type"].startswith("RWD_"):
+            retained.append((position, split))
+    phases = []
+    evidence = {position: ordering_evidence(item) for item in retained for position in [item[0]]}
+
+    def agrees(sequence, column):
+        values = [evidence[position][column] for position, _ in sequence
+                  if evidence[position][column] is not None]
+        return all(a <= b for a, b in zip(values, values[1:]))
+
+    indexes = [evidence[position][0] for position, _ in retained]
+    if all(index is not None for index in indexes) and len(set(indexes)) == len(indexes):
+        candidate = sorted(retained, key=lambda item: evidence[item[0]][0])
+        if agrees(candidate, 1):
+            retained = candidate
+    elif all(evidence[position][1] is not None for position, _ in retained):
+        candidate = sorted(retained, key=lambda item: evidence[item[0]][1])
+        if agrees(candidate, 0):
+            retained = candidate
+    for order, (_, split) in enumerate(retained):
+        native_type = split["type"]
+        phases.append(ActivityPhase(
+            order=order,
+            native_type=native_type,
+            phase_type=phase_types.get(native_type, "unknown"),
+            duration_s=measurement(split.get("duration")),
+            distance_m=measurement(split.get("distance")),
+            average_speed_mps=measurement(split.get("averageSpeed")),
+            average_hr=measurement(split.get("averageHR")),
+            max_hr=measurement(split.get("maxHR")),
+            min_hr=measurement(split.get("minHR")),
+            source="garmin",
+        ).model_dump())
+    return phases
+
 
 # --------------------------------------------------------------------------- #
 # GarminDailyMetrics
@@ -262,6 +364,174 @@ class GarminDailyMetrics(BaseModel):
             body_battery=_latest_body_battery(body_battery),
             respiration=respiration,
             hrv=hrv_val,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# GarminVO2Max
+# --------------------------------------------------------------------------- #
+
+# Keys that carry a VO2max value inside a max-metrics item, in priority order.
+_VO2MAX_ITEM_KEYS = (
+    "vo2MaxRunning",   # running-specific field on some firmware versions
+    "vo2MaxValue",     # generic / multi-sport field
+    "vo2Max",          # alternate short form
+)
+
+# Sport-type strings that identify a running max-metrics item.
+_RUNNING_SPORT_KEYS = frozenset(
+    {"running", "run", "trail_running", "trail_run", "treadmill_running"}
+)
+
+
+def _extract_vo2max_from_item(item: Any) -> Optional[float]:
+    """Return the first positive VO2max number found inside a single max-metrics item.
+
+    Searches the item dict itself, then every nested dict value (handles shapes
+    like ``{"generic": {"vo2MaxValue": 52.0}}`` and
+    ``{"running": {"vo2MaxRunning": 51.5}}``).
+    """
+    item = _dict(item)
+    # Direct top-level keys first.
+    for key in _VO2MAX_ITEM_KEYS:
+        v = _num(item.get(key))
+        if v is not None and v > 0:
+            return v
+    # One level of nesting (e.g. item["generic"]["vo2MaxValue"]).
+    for nested in item.values():
+        if isinstance(nested, dict):
+            for key in _VO2MAX_ITEM_KEYS:
+                v = _num(nested.get(key))
+                if v is not None and v > 0:
+                    return v
+    return None
+
+
+def _item_sport(item: Any) -> Optional[str]:
+    """Return the lowercase sport/activity-type string for a max-metrics item."""
+    item = _dict(item)
+    for field in ("sportType", "sport", "activityType", "typeKey"):
+        val = item.get(field)
+        if isinstance(val, str) and val:
+            return val.lower()
+        if isinstance(val, dict):
+            inner = val.get("typeKey") or val.get("key")
+            if isinstance(inner, str) and inner:
+                return inner.lower()
+    return None
+
+
+def _extract_vo2max_precise_from_item(item: Any) -> Optional[float]:
+    """Return the precise VO₂max value (``vo2MaxPreciseValue``) from a single
+    max-metrics item, or ``None`` when absent or non-positive.
+
+    Searches the item dict itself, then every nested dict value (handles the
+    ``{"generic": {"vo2MaxPreciseValue": 43.5}}`` shape).
+    """
+    item = _dict(item)
+    key = "vo2MaxPreciseValue"
+    v = _num(item.get(key))
+    if v is not None and v > 0:
+        return v
+    for nested in item.values():
+        if isinstance(nested, dict):
+            v = _num(nested.get(key))
+            if v is not None and v > 0:
+                return v
+    return None
+
+
+def _extract_calendar_date_from_item(item: Any) -> Optional[str]:
+    """Return the ``calendarDate`` string from a single max-metrics item.
+
+    Searches the item dict itself, then every nested dict value.
+    Returns ``None`` when the field is absent or empty — never fabricates a date.
+    """
+    item = _dict(item)
+    d = _str(item.get("calendarDate"))
+    if d:
+        return d
+    for nested in item.values():
+        if isinstance(nested, dict):
+            d = _str(nested.get("calendarDate"))
+            if d:
+                return d
+    return None
+
+
+class GarminVO2Max(BaseModel):
+    """Native Garmin running VO₂max extracted from ``gccli health max-metrics``.
+
+    Fields:
+    - ``vo2max_running``: Garmin standard rounded value (``vo2MaxValue``), or
+      ``None`` when Garmin did not provide one.
+    - ``vo2max_running_precise``: Garmin precise value (``vo2MaxPreciseValue``),
+      kept as-is without further rounding — ``None`` when absent.
+    - ``date``: ``calendarDate`` from the chosen item, or ``None`` when Garmin
+      does not include a date in the payload.
+
+    Design rules (same as the rest of the data layer):
+    - No fabrication: None means Garmin did not provide a usable value.
+    - No business logic: this is pure extraction / normalization.
+    - vo2max_running and vo2max_running_precise are kept separate; never replace
+      one with the other.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    vo2max_running: Optional[float] = None
+    vo2max_running_precise: Optional[float] = None
+    date: Optional[str] = None
+    source: str = "garmin"
+
+    @classmethod
+    def from_max_metrics(cls, payload: Any) -> "GarminVO2Max":
+        """Extract running VO₂max from a ``gccli health max-metrics`` payload.
+
+        ``payload`` is expected to be a list of maxMetricDTO items.  An empty
+        list, ``None``, or a non-list value all yield ``vo2max_running=None``
+        without raising.
+
+        Priority:
+        1. Item whose sport is a running variant → extract value + precise + date.
+        2. Any item with a positive VO2max key (first found).
+
+        ``vo2MaxPreciseValue`` is extracted from the chosen item and stored as-is
+        (no additional rounding beyond what Garmin provides).  ``calendarDate`` is
+        extracted from the same item when available; never invented.
+        """
+        if not isinstance(payload, list) or not payload:
+            return cls()
+
+        chosen_item: Optional[Any] = None
+
+        # Pass 1: prefer running-specific item.
+        for item in payload:
+            if _item_sport(item) in _RUNNING_SPORT_KEYS:
+                v = _extract_vo2max_from_item(item)
+                if v is not None:
+                    chosen_item = item
+                    break
+
+        # Pass 2: first item with any positive VO2max value.
+        if chosen_item is None:
+            for item in payload:
+                v = _extract_vo2max_from_item(item)
+                if v is not None:
+                    chosen_item = item
+                    break
+
+        if chosen_item is None:
+            return cls()
+
+        value = _extract_vo2max_from_item(chosen_item)
+        precise = _extract_vo2max_precise_from_item(chosen_item)
+        date = _extract_calendar_date_from_item(chosen_item)
+
+        return cls(
+            vo2max_running=round(value, 1) if value is not None else None,
+            vo2max_running_precise=precise,
+            date=date,
         )
 
 

@@ -32,6 +32,14 @@ class Provider(ABC):
 
     name: str = "base"
 
+    def get_activity_laps(self, user_id: str, activity_id: str) -> Optional[List[Dict]]:
+        """Optional targeted observed laps; None means unsupported."""
+        return None
+
+    def get_activity_phases(self, user_id: str, activity_id: str) -> Optional[List[Dict]]:
+        """Optional targeted observed phases; None means unsupported."""
+        return None
+
     @abstractmethod
     def connect(self, user_id: str, simulate_mfa: bool = False) -> ConnectResult:
         """Establish an authenticated Garmin session (auth abstracted backend-side).
@@ -68,6 +76,35 @@ class Provider(ABC):
         Each item: {date, hrv, resting_hr, sleep_hours, sleep_score, source}.
         """
         raise NotImplementedError
+
+    def get_daily_metrics_fetch_result(
+        self,
+        user_id: str,
+        days: int = 7,
+        start_days_ago: int = 1,
+    ) -> Dict:
+        metrics = self.get_daily_metrics(user_id, days=days, start_days_ago=start_days_ago)
+        return {
+            "metrics": metrics,
+            "status": "success" if metrics else "success_no_data",
+            "endpoint_success_count": 0,
+            "endpoint_failure_count": 0,
+            "endpoint_total_count": 0,
+            "endpoint_failures": [],
+        }
+
+    def get_max_metrics(
+        self,
+        user_id: str,
+        date: Optional[str] = None,
+        raise_on_error: bool = False,
+    ) -> List[Dict]:
+        """Return the raw gccli health max-metrics payload.
+
+        Callers normalize via ``GarminVO2Max.from_max_metrics()``.
+        Returns ``[]`` when the provider does not support this endpoint.
+        """
+        return []
 
     @abstractmethod
     def get_profile(self, user_id: str) -> Dict:

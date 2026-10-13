@@ -559,8 +559,10 @@ class TestArchitecture:
 
     def test_canonical_builder_is_used(self):
         body = self._get_v2_week_func_body()
-        assert "build_weekly_plan_from_workouts" in body, (
-            "get_training_v2_week must use build_weekly_plan_from_workouts"
+        # PR228: route now uses build_canonical_weekly_plan (which wraps
+        # build_weekly_plan_from_workouts + WeeklyReconciliation).
+        assert "build_canonical_weekly_plan" in body, (
+            "get_training_v2_week must use build_canonical_weekly_plan (PR228)"
         )
 
     def test_training_engine_not_imported(self):
@@ -569,23 +571,15 @@ class TestArchitecture:
             "get_training_v2_week must not use training_engine"
         )
 
-    def test_legacy_endpoint_week_plan_still_exists(self):
-        """/training/week-plan must not be removed (additive only)."""
+    def test_legacy_endpoint_plan_removed(self):
         with open(self._SERVER_PATH) as f:
             source = f.read()
-        assert '"/training/week-plan"' in source, (
-            "/training/week-plan was removed — PR167 must be additive only"
-        )
+        assert '"/training/plan"' not in source
 
-    def test_legacy_endpoint_plan_still_exists(self):
+    def test_legacy_endpoint_full_cycle_removed(self):
         with open(self._SERVER_PATH) as f:
             source = f.read()
-        assert '"/training/plan"' in source
-
-    def test_legacy_endpoint_full_cycle_still_exists(self):
-        with open(self._SERVER_PATH) as f:
-            source = f.read()
-        assert '"/training/full-cycle"' in source
+        assert '"/training/full-cycle"' not in source
 
     def test_v2_week_route_registered(self):
         with open(self._SERVER_PATH) as f:
@@ -594,15 +588,11 @@ class TestArchitecture:
 
 
 # ===========================================================================
-# Parity test — same builder → same WeeklyTarget and WeeklyPlan
+# Determinism tests — canonical builder invariants
 # ===========================================================================
 
 class TestParity:
-    """Both /training/week-plan and /training/v2/week share the canonical builder.
-
-    Parity is trivially guaranteed because both call build_weekly_plan_from_workouts.
-    This test verifies the builder is deterministic for identical inputs.
-    """
+    """Canonical builder remains deterministic for identical inputs."""
 
     def test_builder_is_deterministic(self):
         workouts = _make_workouts(n=8, km_per_session=10.0)

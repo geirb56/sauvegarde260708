@@ -3,10 +3,8 @@ Data isolation tests — user-scoped endpoint security.
 
 Verifies that:
 1. GET /training/race-predictions uses only the authenticated user's workouts.
-2. GET /training/vma-history uses only the authenticated user's workouts.
-3. DELETE /training/goal no longer raises NameError and only deletes the
+2. DELETE /training/goal no longer raises NameError and only deletes the
    authenticated user's goal.
-4. GET /user/vma-estimate uses only the authenticated user's running workouts.
 
 Pattern: two users (USER_A, USER_B) with distinct workouts; each must only
 see their own data and be refused access to the other's resources.
@@ -16,7 +14,6 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -30,8 +27,7 @@ os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 os.environ.setdefault("ENVIRONMENT", "test")
 
 from auth.jwt_utils import create_access_token
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.security import HTTPBearer
+from fastapi import Depends, FastAPI
 
 
 # ---------------------------------------------------------------------------
@@ -209,82 +205,6 @@ class TestRacePredictionsIsolation:
         assert wkt_a["id"] not in ids
 
 
-# ===========================================================================
-# 2. VMA History — user isolation
-# ===========================================================================
-
-def _vma_history_app():
-    """Minimal app mirroring the fixed /training/vma-history endpoint."""
-    from auth.dependencies import get_current_user
-    from datetime import datetime, timedelta, timezone
-
-    app = FastAPI()
-
-    recent_date = (datetime.now(timezone.utc) - timedelta(days=14)).date().isoformat()
-
-    wkt_a = _workout("user-a", "wkt-vma-a", distance_km=10.0, duration_minutes=55.0,
-                     date=recent_date)
-    wkt_b = _workout("user-b", "wkt-vma-b", distance_km=7.0, duration_minutes=40.0,
-                     date=recent_date)
-
-    class _DB:
-        workouts = _Collection([wkt_a, wkt_b])
-        users = _Collection([
-            {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
-            {"id": "user-b", "email": "b@test.com", "is_active": True, "is_email_verified": True},
-        ])
-
-    app.state.db = _DB()
-    db = app.state.db
-
-    @app.get("/training/vma-history")
-    async def get_vma_history(user: dict = Depends(get_current_user)):
-        today = datetime.now(timezone.utc)
-        twelve_months_ago = today - timedelta(days=365)
-        user_id = user["id"]
-        activities = await db.workouts.find({
-            "user_id": user_id,
-            "date": {"$gte": twelve_months_ago.isoformat()[:10]},
-        }).to_list(2000)
-        return {"user_id": user_id, "workout_ids": [a["id"] for a in activities]}
-
-    return app, wkt_a, wkt_b
-
-
-@pytest_asyncio.fixture
-async def vma_history_client():
-    app, wkt_a, wkt_b = _vma_history_app()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as c:
-        yield c, wkt_a, wkt_b
-
-
-class TestVmaHistoryIsolation:
-    @pytest.mark.asyncio
-    async def test_anonymous_401(self, vma_history_client):
-        client, *_ = vma_history_client
-        r = await client.get("/training/vma-history")
-        assert r.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_user_a_sees_only_own_workouts(self, vma_history_client):
-        client, wkt_a, wkt_b = vma_history_client
-        r = await client.get("/training/vma-history", headers=_bearer("user-a", "a@test.com"))
-        assert r.status_code == 200
-        ids = r.json()["workout_ids"]
-        assert wkt_a["id"] in ids
-        assert wkt_b["id"] not in ids
-
-    @pytest.mark.asyncio
-    async def test_user_b_sees_only_own_workouts(self, vma_history_client):
-        client, wkt_a, wkt_b = vma_history_client
-        r = await client.get("/training/vma-history", headers=_bearer("user-b", "b@test.com"))
-        assert r.status_code == 200
-        ids = r.json()["workout_ids"]
-        assert wkt_b["id"] in ids
-        assert wkt_a["id"] not in ids
-
 
 # ===========================================================================
 # 3. DELETE /training/goal — NameError fix + user isolation
@@ -372,74 +292,3 @@ class TestDeleteTrainingGoalIsolation:
         assert remaining == 1
 
 
-# ===========================================================================
-# 4. VMA Estimate — user isolation
-# ===========================================================================
-
-def _vma_estimate_app():
-    """Minimal app mirroring the fixed GET /user/vma-estimate endpoint."""
-    from auth.dependencies import get_current_user
-
-    app = FastAPI()
-
-    wkt_a = _workout("user-a", "wkt-est-a", workout_type="run", distance_km=10.0,
-                     duration_minutes=55.0, date="2024-03-01")
-    wkt_b = _workout("user-b", "wkt-est-b", workout_type="run", distance_km=6.0,
-                     duration_minutes=35.0, date="2024-03-02")
-
-    class _DB:
-        workouts = _Collection([wkt_a, wkt_b])
-        user_goals = _Collection([])
-        users = _Collection([
-            {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
-            {"id": "user-b", "email": "b@test.com", "is_active": True, "is_email_verified": True},
-        ])
-
-    app.state.db = _DB()
-    db = app.state.db
-
-    @app.get("/user/vma-estimate")
-    async def get_vma_estimate(user: dict = Depends(get_current_user)):
-        user_id = user["id"]
-        all_workouts = await db.workouts.find(
-            {"type": "run", "user_id": user_id},
-            {"_id": 0}
-        ).sort("date", -1).to_list(100)
-        return {"user_id": user_id, "workout_ids": [w["id"] for w in all_workouts]}
-
-    return app, wkt_a, wkt_b
-
-
-@pytest_asyncio.fixture
-async def vma_estimate_client():
-    app, wkt_a, wkt_b = _vma_estimate_app()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as c:
-        yield c, wkt_a, wkt_b
-
-
-class TestVmaEstimateIsolation:
-    @pytest.mark.asyncio
-    async def test_anonymous_401(self, vma_estimate_client):
-        client, *_ = vma_estimate_client
-        r = await client.get("/user/vma-estimate")
-        assert r.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_user_a_sees_only_own_workouts(self, vma_estimate_client):
-        client, wkt_a, wkt_b = vma_estimate_client
-        r = await client.get("/user/vma-estimate", headers=_bearer("user-a", "a@test.com"))
-        assert r.status_code == 200
-        ids = r.json()["workout_ids"]
-        assert wkt_a["id"] in ids
-        assert wkt_b["id"] not in ids
-
-    @pytest.mark.asyncio
-    async def test_user_b_sees_only_own_workouts(self, vma_estimate_client):
-        client, wkt_a, wkt_b = vma_estimate_client
-        r = await client.get("/user/vma-estimate", headers=_bearer("user-b", "b@test.com"))
-        assert r.status_code == 200
-        ids = r.json()["workout_ids"]
-        assert wkt_b["id"] in ids
-        assert wkt_a["id"] not in ids

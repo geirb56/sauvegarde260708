@@ -1,6 +1,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import axios from "axios";
 
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
@@ -27,10 +28,6 @@ jest.mock("sonner", () => ({
 
 jest.mock("@/context/AuthContext", () => ({
   useAuth: jest.fn(),
-}));
-
-jest.mock("@/hooks/useAutoSync", () => ({
-  useAutoSync: jest.fn(),
 }));
 
 jest.mock("@/components/ChatCoach", () => () => null);
@@ -103,14 +100,32 @@ describe("auth pages and oauth UI", () => {
 
     expect(first.container.textContent).toContain("Inicia sesión en tu cuenta");
     expect(first.container.textContent).toContain("Continuar con Google");
-    expect(first.container.textContent).toContain("Continuar con Apple");
+    expect(first.container.textContent).not.toContain("Continuar con Apple");
     expect(first.container.querySelector(".min-h-screen")).not.toBeNull();
     expect(first.container.querySelector(".max-w-sm")).not.toBeNull();
+    expect(first.container.querySelector("#email")).not.toBeNull();
+    expect(first.container.querySelector("#password")).not.toBeNull();
+    expect(first.container.querySelector('a[href="/forgot-password"]')).not.toBeNull();
+    expect(first.container.querySelector("h1")).not.toBeNull();
+    expect(first.container.querySelector("h1")?.textContent).toContain("Inicia sesión en tu cuenta");
+
+    const loginLogo = first.container.querySelector('[data-testid="login-brand-logo"]');
+    expect(loginLogo).toBeTruthy();
+    expect(loginLogo.getAttribute("src")).toBe("/runindex-logo.png");
+    expect(loginLogo.getAttribute("alt")).toBe("RunIndex");
+    expect(loginLogo.className).toContain("h-auto");
+    expect(loginLogo.className).toContain("w-full");
+    expect(loginLogo.className).toContain("max-w-[280px]");
+    expect(loginLogo.className).not.toContain("h-12");
+    expect(loginLogo.className).not.toContain("max-w-[220px]");
 
     first.unmount();
 
     const second = renderWithProviders(<Login />);
     expect(second.container.textContent).toContain("Inicia sesión en tu cuenta");
+    const secondLoginLogo = second.container.querySelector('[data-testid="login-brand-logo"]');
+    expect(secondLoginLogo).toBeTruthy();
+    expect(secondLoginLogo.getAttribute("src")).toBe("/runindex-logo.png");
     second.unmount();
   });
 
@@ -146,6 +161,22 @@ describe("auth pages and oauth UI", () => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const { container, unmount } = renderWithProviders(<Register />);
 
+    const registerLogo = container.querySelector('[data-testid="register-brand-logo"]');
+    const registerHeading = container.querySelector("h1");
+    expect(registerLogo).toBeTruthy();
+    expect(registerHeading).toBeTruthy();
+    expect(registerHeading.textContent).toContain("Crea tu cuenta");
+    expect(registerLogo.getAttribute("src")).toBe("/runindex-logo.png");
+    expect(registerLogo.getAttribute("alt")).toBe("RunIndex");
+    expect(registerLogo.className).toContain("h-auto");
+    expect(registerLogo.className).toContain("w-full");
+    expect(registerLogo.className).toContain("max-w-[280px]");
+    expect(registerLogo.className).not.toContain("h-12");
+    expect(registerLogo.className).not.toContain("max-w-[220px]");
+    expect(container.querySelector("#email")).not.toBeNull();
+    expect(container.querySelector("#password")).not.toBeNull();
+    expect(container.querySelector("#confirmPassword")).not.toBeNull();
+
     setFieldValue(container.querySelector("#email"), "user@example.com");
     setFieldValue(container.querySelector("#password"), "Password1!");
     setFieldValue(container.querySelector("#confirmPassword"), "Mismatch1!");
@@ -168,11 +199,7 @@ describe("auth pages and oauth UI", () => {
       buttons.find((button) => button.textContent.includes("Google")).click();
     });
     expect(container.textContent).toContain("El inicio de sesión con Google no está configurado.");
-
-    await act(async () => {
-      buttons.find((button) => button.textContent.includes("Apple")).click();
-    });
-    expect(container.textContent).toContain("El inicio de sesión con Apple no está configurado.");
+    expect(container.textContent).not.toContain("Apple");
     unmount();
   });
 
@@ -192,6 +219,20 @@ describe("auth pages and oauth UI", () => {
     expect(resetValid.container.textContent).toContain("Choisissez un nouveau mot de passe");
     expect(resetValid.container.textContent).toContain("Réinitialiser le mot de passe");
     resetValid.unmount();
+  });
+
+  test("reset password enforces client policy before API call", async () => {
+    const { container, unmount } = renderWithProviders(<ResetPassword />, { route: "/reset-password?token=test-token" });
+    setFieldValue(container.querySelector("#password"), "Password");
+    setFieldValue(container.querySelector("#confirmPassword"), "Password");
+
+    await act(async () => {
+      container.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain("Password must include at least one digit or special character.");
+    expect(axios.post).not.toHaveBeenCalled();
+    unmount();
   });
 
   test("layout exposes translated logout control and calls logout", async () => {
@@ -219,6 +260,12 @@ describe("auth pages and oauth UI", () => {
       (button) => button.getAttribute("title") === "Cerrar sesión"
     );
     expect(logoutButton).toBeTruthy();
+    const appLogo = container.querySelector('[data-testid="app-logo"]');
+    expect(appLogo).toBeTruthy();
+    expect(appLogo.getAttribute("src")).toBe("/runindex-symbol.png");
+    expect(appLogo.getAttribute("src")).not.toBe("/runindex-logo.png");
+    expect(container.querySelector('[data-testid="header-user-avatar"]')).toBeNull();
+    expect(container.querySelector('[data-testid="header-settings-link"]')).not.toBeNull();
 
     await act(async () => {
       logoutButton.click();
