@@ -629,6 +629,7 @@ def test_future_job_parks_immediately_without_locks_sleep_requeue_or_ack(db, mon
     monkeypatch.setattr(sync_worker, "defer_activity_details", defer)
     monkeypatch.setattr(sync_worker, "requeue_job", requeue)
     monkeypatch.setattr(sync_worker, "ack_job", ack)
+    monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
     monkeypatch.setattr(sync_worker.asyncio, "sleep", sleep)
     job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
            "activity_id": "123", "attempts": 1, "not_before": time.time() + 900}
@@ -671,6 +672,7 @@ def test_worker_never_runs_superseded_job(db, monkeypatch):
     ack = AsyncMock()
     monkeypatch.setattr(sync_worker, "_run_job", work)
     monkeypatch.setattr(sync_worker, "ack_job", ack)
+    monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
     monkeypatch.setattr(sync_worker, "recover_details_pending", AsyncMock(return_value=0))
     job = {"id": "old-job", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
            "activity_id": "123"}

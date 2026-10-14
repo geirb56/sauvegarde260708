@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
 
 # Make /app/backend importable when launched as a module or script.
@@ -43,8 +44,8 @@ from jobs.queue import (
     JOB_ACTIVITY_DETAILS,
     JOB_ACTIVITY_LAPS,
     TARGETED_JOB_TYPES,
-    LOCK_PREFIX,
-    LOCK_TTL,
+    acquire_user_lock,
+    maintain_user_lock,
     HEARTBEAT_PREFIX,
     HEARTBEAT_TTL,
     HEARTBEAT_INTERVAL,
@@ -61,6 +62,7 @@ from jobs.queue import (
     recover_orphans,
 )
 from sync import rate_limiter
+from sync.execution_lease import ExecutionLease, run_with_lease
 from garmin import service as garmin_service
 from garmin.bootstrap import ensure_gccli_installed
 from garmin.sync_progress import update_sync_progress
@@ -99,12 +101,51 @@ async def _run_job(db, job_type: str, user_id: str, activity_id: str = None) -> 
     raise ValueError(f"unknown job type: {job_type}")
 
 
+def _renew_execution(lease):
+    lease.start_renewal()
+
+
 async def process_job(db, redis, raw: str, job: dict) -> None:
+    token = uuid.uuid4().hex
+    lease = ExecutionLease(job.get("user_id"), token)
+    try:
+        await _process_job(db, redis, raw, job, token, lease)
+    finally:
+        lease.stop()
+        cancelled = await lease.wait_idle()
+        cancelled = await lease.join_renewal() or cancelled
+        cleanup = asyncio.create_task(_release_execution(redis, lease))
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        try:
+            cleanup.result()
+        finally:
+            lease.close()
+        if cancelled:
+            raise asyncio.CancelledError
+
+
+async def _release_execution(redis, lease):
+    # Independent cleanup: a failed global release must not skip the user
+    # release. Missing/ambiguous acquisitions are safe to release by token.
+    for release in (
+        lambda: rate_limiter.release_global_slot(lease.token),
+        lambda: maintain_user_lock(redis, lease.user_id, lease.token, release=True),
+    ):
+        try:
+            await asyncio.wait_for(release(), timeout=5)
+        except Exception:
+            logger.warning("[worker] concurrency cleanup deferred to lease expiry")
+
+
+async def _process_job(db, redis, raw: str, job: dict, token: str, lease) -> None:
     job_type = job.get("type")
     user_id = job.get("user_id")
     job_id = job.get("id")
     attempts = int(job.get("attempts", 0))
-    lock_key = f"{LOCK_PREFIX}{user_id}"
     targeted = job_type in TARGETED_JOB_TYPES
     pending_options = {"job_type": job_type} if job_type == JOB_ACTIVITY_LAPS else {}
 
@@ -123,7 +164,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         return
 
     # One active sync per user. If busy, move the in-flight job back to the queue.
-    if not await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL):
+    if not await acquire_user_lock(redis, user_id, token):
         if targeted:
             job["not_before"] = time.time() + max(WATCHDOG_INTERVAL, 1)
             await defer_activity_details(raw, job)
@@ -134,8 +175,8 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         return
 
     # Global anti-explosion cap (cluster-wide). If saturated, requeue and back off.
-    if not await rate_limiter.acquire_global_slot():
-        await redis.delete(lock_key)
+    if not await rate_limiter.acquire_global_slot(token):
+        await maintain_user_lock(redis, user_id, token, release=True)
         if targeted:
             job["not_before"] = time.time() + max(WATCHDOG_INTERVAL, 1)
             await defer_activity_details(raw, job)
@@ -146,6 +187,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         return
 
     start = time.time()
+    _renew_execution(lease)
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
         if targeted and (
@@ -163,7 +205,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         # A targeted command is bounded to 60s by GccliRunner, without inline
         # retries; leave a small persistence margin before cancelling its thread.
         timeout = max(JOB_TIMEOUT, 65) if targeted else JOB_TIMEOUT
-        result = await asyncio.wait_for(work, timeout=timeout)
+        result = await run_with_lease(work, timeout, lease)
         if targeted and result.get("status") == "deferred":
             job["not_before"] = datetime.fromisoformat(result["retry_at"]).timestamp()
             await defer_activity_details(raw, job)
@@ -220,9 +262,6 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             await redis.incr(STATS_FAILED_KEY)
             # Terminal failure after max retries: drop from processing.
             await ack_job(raw, job_id)
-    finally:
-        await rate_limiter.release_global_slot()
-        await redis.delete(lock_key)
 
 
 async def watchdog_loop() -> None:

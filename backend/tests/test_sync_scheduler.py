@@ -72,19 +72,22 @@ async def test_cooldown(r):
 async def test_global_cap(r):
     print("\n[TEST 4] global concurrency cap", flush=True)
     await r.delete(rl.GLOBAL_ACTIVE_KEY)
-    acquired = 0
+    acquired = []
     for _ in range(rl.GLOBAL_MAX + 3):
-        if await rl.acquire_global_slot():
-            acquired += 1
-    if acquired != rl.GLOBAL_MAX:
-        _fail(f"expected {rl.GLOBAL_MAX} slots, got {acquired}")
+        token = await rl.acquire_global_slot()
+        if token:
+            acquired.append(token)
+    if len(acquired) != rl.GLOBAL_MAX:
+        _fail(f"expected {rl.GLOBAL_MAX} slots, got {len(acquired)}")
     # release one -> can acquire one more
-    await rl.release_global_slot()
-    if not await rl.acquire_global_slot():
+    await rl.release_global_slot(acquired.pop())
+    replacement = await rl.acquire_global_slot()
+    if not replacement:
         _fail("should acquire after a release")
+    acquired.append(replacement)
     # cleanup
-    for _ in range(rl.GLOBAL_MAX + 5):
-        await rl.release_global_slot()
+    for token in acquired:
+        await rl.release_global_slot(token)
     await r.delete(rl.GLOBAL_ACTIVE_KEY)
     _ok(f"cap enforced at {rl.GLOBAL_MAX}, slot freed on release")
 

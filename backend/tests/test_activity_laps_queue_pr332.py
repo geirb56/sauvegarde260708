@@ -418,7 +418,7 @@ def test_laps_backpressure_shares_existing_locks(local_redis, monkeypatch, block
             assert await client.llen(queue.QUEUE_KEY) == 0
             assert job["attempts"] == 0
             work.assert_not_awaited()
-            release.assert_not_awaited()
+            release.assert_awaited_once()
             assert acquire.await_count == (0 if blocked == "user" else 1)
             assert await client.get(lock) == ("existing-sync" if blocked == "user" else None)
     asyncio.run(scenario())
@@ -580,14 +580,16 @@ def test_laps_failures_use_existing_retries_and_targeted_timeout(local_redis, mo
             mock_slots(monkeypatch)
             monkeypatch.setattr(sync_worker, "_run_job", AsyncMock(side_effect=RuntimeError("failure")))
             sleep = AsyncMock()
-            wait_for = sync_worker.asyncio.wait_for
+            monkeypatch.setattr(sync_worker, "_renew_execution", lambda lease: None)
+            run_with_lease = sync_worker.run_with_lease
             timeouts = []
 
-            async def timed(work, timeout):
+            async def timed(work, timeout, lease):
                 timeouts.append(timeout)
-                return await wait_for(work, timeout)
+                return await run_with_lease(work, timeout, lease)
 
-            monkeypatch.setattr(sync_worker, "asyncio", SimpleNamespace(sleep=sleep, wait_for=timed))
+            monkeypatch.setattr(sync_worker.asyncio, "sleep", sleep)
+            monkeypatch.setattr(sync_worker, "run_with_lease", timed)
             for attempt in range(sync_worker.MAX_RETRIES):
                 await sync_worker.process_job(None, client, raw, job)
                 if attempt + 1 < sync_worker.MAX_RETRIES:

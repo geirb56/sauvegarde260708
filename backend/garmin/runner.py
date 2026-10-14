@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -89,6 +90,35 @@ class GccliRunner:
             env["GCCLI_ACCOUNT"] = account
         return env
 
+    def _execution_command(self, cmd):
+        from sync.execution_lease import current_execution
+
+        lease = current_execution.get()
+        if lease is None:
+            return cmd, self.timeout, False
+        return lease.command(cmd, self.timeout), self.timeout + 5, True
+
+    def _execution_context(self):
+        from sync.execution_lease import current_execution
+
+        lease = current_execution.get()
+        return lease.running() if lease is not None else nullcontext()
+
+    def _run_command(self, cmd, env):
+        with self._execution_context():
+            guarded_cmd, deadline, guarded = self._execution_command(cmd)
+            if guarded:
+                from sync.execution_lease import current_execution
+                current_execution.get().check_launch(self.timeout)
+            return subprocess.run(
+                guarded_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=deadline,
+                env=env,
+                **({"start_new_session": True} if guarded else {}),
+            )
+
     def _run_json(
         self, args: List[str], account: Optional[str] = None,
         single_attempt: bool = False,
@@ -106,13 +136,8 @@ class GccliRunner:
 
         for attempt in range(1, attempts + 1):
             try:
-                cp = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=self.timeout,
-                    env=self._env(account),
-                )
+                env = self._env(account)
+                cp = self._run_command(cmd, env)
                 out = cp.stdout.decode("utf-8", errors="replace").strip()
                 err = cp.stderr.decode("utf-8", errors="replace").strip()
                 if cp.returncode != 0:
@@ -149,12 +174,9 @@ class GccliRunner:
     def auth_status(self, account: Optional[str] = None) -> dict:
         """Return {email, expired, expires_at} or {} if not authenticated."""
         self._ensure_available()
-        cp = subprocess.run(
-            [self.gccli_path, "auth", "status", "-j"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout,
-            env=self._env(account),
+        env = self._env(account)
+        cp = self._run_command(
+            [self.gccli_path, "auth", "status", "-j"], env,
         )
         out = cp.stdout.decode("utf-8", errors="replace").strip()
         if cp.returncode != 0 or not out:
@@ -173,13 +195,21 @@ class GccliRunner:
 
     def login(self, email: str, password: str, mfa_code: Optional[str] = None) -> None:
         """One-time headless login via a pseudo-TTY (gccli reads password from TTY)."""
+        with self._execution_context():
+            return self._login(email, password, mfa_code)
+
+    def _login(self, email: str, password: str, mfa_code: Optional[str] = None) -> None:
         self._ensure_available()
         cmd = [self.gccli_path, "auth", "login", email, "--headless"]
         if mfa_code:
             cmd += ["--mfa-code", mfa_code]
 
         env = self._env(email)
+        cmd, _, guarded = self._execution_command(cmd)
         output_parts: List[str] = []
+        if guarded:
+            from sync.execution_lease import current_execution
+            current_execution.get().check_launch(self.timeout)
         pid, fd = pty.fork()
         if pid == 0:
             # Child
@@ -192,33 +222,41 @@ class GccliRunner:
         sent_pw = False
         deadline = time.time() + self.timeout
         exit_code = -1
-        while time.time() < deadline:
-            r, _, _ = select.select([fd], [], [], 0.5)
-            if fd in r:
-                try:
-                    chunk = os.read(fd, 1024)
-                except OSError:
-                    break
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                output_parts.append(text)
-                if (not sent_pw) and ("assword" in text):
-                    os.write(fd, (password + "\n").encode())
-                    sent_pw = True
-            try:
-                wpid, status = os.waitpid(pid, os.WNOHANG)
-                if wpid == pid:
-                    exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-                    break
-            except ChildProcessError:
-                break
-            time.sleep(0.15)
-
         try:
-            os.close(fd)
-        except OSError:
-            pass
+            while time.time() < deadline:
+                r, _, _ = select.select([fd], [], [], 0.5)
+                if fd in r:
+                    try:
+                        chunk = os.read(fd, 1024)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    text = chunk.decode("utf-8", errors="replace")
+                    output_parts.append(text)
+                    if (not sent_pw) and ("assword" in text):
+                        os.write(fd, (password + "\n").encode())
+                        sent_pw = True
+                try:
+                    wpid, status = os.waitpid(pid, os.WNOHANG)
+                    if wpid == pid:
+                        exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                        break
+                except ChildProcessError:
+                    break
+                time.sleep(0.15)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            if guarded and exit_code == -1:
+                # Also drain auth on an exceptional PTY path before releasing.
+                try:
+                    _, status = os.waitpid(pid, 0)
+                    exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                except ChildProcessError:
+                    pass
 
         full_output = "".join(output_parts)
         low = full_output.lower()
