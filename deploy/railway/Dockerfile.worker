@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # gccli needs a few runtime libs + curl to self-install the binary at boot.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates libstdc++6 \
+    curl ca-certificates libstdc++6 coreutils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend

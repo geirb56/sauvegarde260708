@@ -499,3 +499,96 @@ sont des propriétés distinctes, conservées ; elles ne justifient pas un PASS
 global. La décision de merge nécessite soit le mécanisme de fencing décrit
 ci-dessus, soit une acceptation explicite d'une garantie moins forte par l'audit
 utilisateur. Aucun merge ni déploiement n'est proposé automatiquement.
+
+## Finalisation locale C333 — 14 octobre 2026
+
+### Références et périmètre
+
+- Base distante `copilot/dev` vérifiée :
+  `70fd6344b10edf61ba9877731837689943d9c30e`.
+- HEAD distant de la PR existante #333, branche
+  `copilot/fiabilisation-limiteur-global-gcccli`, et HEAD local avant modification :
+  `5f672601e9e735eb599c1af8c7157eac3b580f5d`.
+- Les deux anciens commits inaccessibles ne sont ni récupérés ni reconstruits.
+  Cette finalisation part exclusivement du HEAD distant vérifié.
+- Seuls `deploy/railway/Dockerfile.worker` et ce rapport sont modifiés.
+  Aucun changement de code métier, de tests, de dépendances Python ni de drift
+  Emergent, notamment `activity_day`. Aucune écriture sur la base d'intégration,
+  aucune nouvelle PR, aucun merge, push, déploiement ou accès runtime.
+- Le SHA final local est fourni dans la réponse de finalisation ; ce rapport
+  fait partie de ce commit et ne peut contenir son propre SHA.
+
+### Contrôles du code existant
+
+L'audit confirme, sans réimplémentation :
+
+- `sync/execution_lease.py:105-144` renouvelle les leases dans un thread dédié
+  via un client Redis synchrone, indépendamment de l'event loop asyncio.
+- `sync/execution_lease.py:146-164` vérifie les deux propriétaires par CAS Lua ;
+  `garmin/runner.py:107-120` et `:210-213` appellent ce dernier contrôle
+  immédiatement avant `subprocess.run` et `pty.fork`.
+- Le nettoyage worker conserve drainage, arrêt/join du renouvellement puis
+  libération conditionnée aux tokens. Les retries et la queue sont inchangés.
+
+### Modification Railway et construction exacte
+
+`coreutils` est maintenant explicitement demandé par l'installation apt du
+Dockerfile worker. Les URLs privées, le hash de la wheel et la commande pip
+d'origine restent inchangés.
+
+Commande exécutée depuis le checkout local :
+
+```text
+docker build --progress=plain -f deploy/railway/Dockerfile.worker -t runindex-c333-final-local:check .
+```
+
+Résultat : **échec, exit 1**, à l'étape pip, `Dockerfile.worker:17-20`.
+La couche apt réussit et indique `coreutils 9.7-3`, déjà présent et désormais
+marqué explicitement installé. Le téléchargement de la wheel privée litellm
+échoue avec `[Errno -5] No address associated with hostname` pour
+`customer-assets.emergentagent.com`.
+Les contrôles de résolution applicative du sandbox échouent aussi pour
+`d33sy5i8bnduwe.cloudfront.net`, alors que `pypi.org` résout.
+Ce résultat n'affirme pas que ces domaines sont globalement inexistants.
+Aucun remplacement d'artefact privé, changement DNS/hosts, téléchargement via
+IP ou retrait de dépendance n'est utilisé.
+
+**L'image worker complète n'a pas été créée et GNU timeout n'y est donc pas
+validé.** Une sonde indépendante, sans réseau, dans la seule image de base
+`python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce`
+confirme GNU timeout 9.7 et la terminaison SIGKILL de commandes Python simulées,
+en subprocess et PTY (terminal maintenu ouvert jusqu'au reap). Cette preuve
+limitée ne remplace pas un build ni une validation du worker complet.
+
+### Tests frais et limites
+
+Le code Python et les tests sont identiques au HEAD distant ci-dessus.
+Les deux groupes canoniques séparés de la section précédente sont réexécutés
+avec `python -m pytest`, `-n 2 --dist loadscope` conservé, caches et basetemp
+sous `/tmp`, sans écrire dans le checkout :
+
+```text
+cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend
+PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_gccli_concurrency_pr333.py tests/test_activity_laps_pr332.py tests/test_activity_laps_queue_pr332.py tests/test_activity_details_pr321.py tests/test_activity_details_delayed_redis_c321.py tests/test_garmin_queue_backfill_pr197.py tests/test_gccli_concurrency_c333.py -q --tb=short -n2 --dist loadscope -o cache_dir=/tmp/c333-final-local-cache --basetemp=/tmp/c333-final-local-temp
+PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_garmin_daily_metrics_pr03.py tests/test_garmin_vo2max_pr195.py tests/test_garmin_deep_sync.py -q --tb=short -n2 --dist loadscope -o cache_dir=/tmp/c333-final-runner-cache --basetemp=/tmp/c333-final-runner-temp
+```
+
+- Sept suites PR333/C333, laps PR332, details et queue : **289 passed,
+  7 warnings, 45.67 s**.
+- Trois suites runner/daily metrics/VO2max/deep sync : **116 passed, 2.49 s**.
+- Total : **405 passed**. Redis isolés en loopback uniquement ; aucun Redis,
+  Garmin, Mongo ni Railway de production utilisé. Les tests n'ajoutent aucun
+  changement au checkout. Les avertissements comprennent ceux du fork PTY
+  multithreadé déjà décrits dans la section historique.
+
+Les tests de chevauchement restent des reproductions réussies du risque :
+**deux commandes physiques pour un détenteur Redis** sont possibles après
+le dernier CAS, notamment lorsque le processus entier est suspendu et que
+ses leases expirent. Le thread résout le blocage de l'event loop, pas une
+suspension de processus ni l'atomicité entre Redis et le lancement OS.
+**BLOCKED demeure le verdict pour une garantie physique stricte** ; aucun
+nouveau fencing distribué n'est ajouté.
+
+Les workflows GitHub consultés sont des exécutions d'agents, pas une preuve
+de construction de l'image Railway. Les résultats ci-dessus sont ceux du
+sandbox et ne constituent pas une validation de production.
