@@ -592,3 +592,20 @@ nouveau fencing distribué n'est ajouté.
 Les workflows GitHub consultés sont des exécutions d'agents, pas une preuve
 de construction de l'image Railway. Les résultats ci-dessus sont ceux du
 sandbox et ne constituent pas une validation de production.
+
+### Vérifications de finalisation
+
+- Commit local Dockerfile/rapport soumis à la validation :
+  `d78e95ae678599ab40e3afa820500f089f0a9602`, parent direct du HEAD distant
+  `5f672601e9e735eb599c1af8c7157eac3b580f5d`.
+- `git diff --check` : exit 0 ; scan des deux fichiers : aucun secret détecté.
+- Validation automatisée : la review n'a pas effectivement fonctionné
+  (binaire `autofind` absent), malgré l'affichage « succès » de l'outil.
+  CodeQL indique qu'aucun changement de langage analysable n'est présent et
+  **n'exécute donc pas d'analyse** sur ce delta Dockerfile/documentation ;
+  ce résultat ne constitue pas un nouveau scan de tout le code PR333.
+- Review spécialisée indépendante read-only du delta local : aucun problème
+  significatif trouvé, sans approbation de merge ni de déploiement.
+- Le présent complément de traçabilité est uniquement documentaire et local.
+  Les références distantes sont revérifiées avant la réponse finale ;
+  aucune publication n'est autorisée ni effectuée.
