@@ -20,11 +20,14 @@ Ajout de `/netlify.toml` à la racine : le build utilise `frontend/`, publie son
 
 ## Validation
 
-- Build frontend : en attente.
-- Tests frontend : en attente.
+- `npm ci --legacy-peer-deps` (depuis `frontend/`) : réussi.
+- `npm run build` (depuis `frontend/`) : réussi; le build CRA produit `frontend/build`.
+- Vérification TOML et sorties : réussie; `netlify.toml` se parse, cible `frontend/build`, et le bundle contient `index.html` ainsi que les ressources statiques.
+- `npx craco test --watchAll=false --forceExit` : 33 suites réussies, 1 échouée; 837 tests réussis, 1 échoué. L'échec préexistant et hors périmètre est `src/__tests__/progress-v2-migration.test.jsx`, qui attend le texte `predictions.predictions?.map` absent de `src/pages/Progress.jsx`.
+- Analyse de secrets des deux fichiers modifiés : aucun secret détecté.
 - Vérification en hébergement Netlify ou test de rafraîchissement sur une URL déployée : non effectuée; aucun déploiement n'est autorisé dans cette tâche.
 - Base exacte : `7dd262de4aa4d3355cf0659a5a3d4ad092e42d5f`.
-- Head exact validé : à compléter après validation.
+- Head exact du code validé : `dd63dba91cda29a224247d003552900d1e5668de`.
 
 ## Risques et points bloquants
 
@@ -34,5 +37,5 @@ Ajout de `/netlify.toml` à la racine : le build utilise `frontend/`, publie son
 
 ## Livraison
 
-- PR : à créer contre `copilot/dev`.
+- PR à préparer contre `copilot/dev`; son lien sera fourni lors de la livraison.
 - Aucun merge ni déploiement effectué.
