@@ -937,6 +937,36 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
+  it.each(["fr", "en", "es"].flatMap((lang) =>
+    ["HIGH", "MEDIUM", "LOW"].map((confidence) => [lang, confidence])
+  ))("%s hides pace confidence %s but preserves values, navigation and RunIndex confidence", async (lang, confidence) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      insight: {
+        ...INSIGHT_PAYLOAD,
+        run_index: { run_index: 264, confidence_score: 87, status: "ok" },
+      },
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload({ confidence }),
+    }));
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.textContent).not.toMatch(/confidence|confiance|confianza|HIGH|MEDIUM|LOW/i);
+    expect(card.textContent).toContain("5:10 /km - 5:55 /km");
+    expect(card.textContent).toContain("4:35 /km");
+    expect(card.textContent).toContain("4:13 /km");
+    expect(card.querySelector('[data-testid="dashboard-paces-cta"]').getAttribute("href")).toBe("/training");
+    expect(container.textContent).toContain({
+      fr: "Fiabilité: 87%",
+      en: "Confidence: 87%",
+      es: "Fiabilidad: 87%",
+    }[lang]);
+    unmount();
+  });
+
   it.each([
     ["5k", "5 km", "4:13 /km"],
     ["10k", "10 km", "4:24 /km"],

@@ -5,6 +5,31 @@ describe("i18n auth coverage", () => {
     window.localStorage.clear();
   });
 
+  test.each(["fr", "en", "es"])("%s removes only pace/prediction confidence translations", (lang) => {
+    const labels = translations[lang];
+    expect(labels.trainingV2).not.toHaveProperty("confidence");
+    expect(labels.trainingV2).not.toHaveProperty("pacesConfidence");
+    ["confidenceLabel", "confidenceHigh", "confidenceMedium", "confidenceLow", "confidenceInsufficient"].forEach((key) => {
+      expect(labels.progressExtended).not.toHaveProperty(key);
+    });
+    ["trainingV2", "progressExtended"].forEach((section) => {
+      expect(Object.keys(labels[section]).sort()).toEqual(Object.keys(translations.en[section]).sort());
+      Object.entries(labels[section]).forEach(([key, value]) => {
+        if (typeof value === "string") {
+          expect(value.trim()).not.toBe("");
+          expect(getTranslation(lang, `${section}.${key}`)).toBe(value);
+        }
+      });
+    });
+    expect(labels.progress.confidence).toEqual(expect.any(String));
+    expect(labels.progress.confidenceLevels).toEqual(expect.objectContaining({
+      high: expect.any(String), medium: expect.any(String), low: expect.any(String),
+    }));
+    expect(labels.trainingV2.confidenceValues).toEqual(expect.objectContaining({
+      high: expect.any(String), medium: expect.any(String), low: expect.any(String),
+    }));
+  });
+
   test("WorkoutDetail keys and interpolation placeholders match in FR/EN/ES", () => {
     const reference = translations.en.workoutDetailExtended;
     ["fr", "en", "es"].forEach((language) => {

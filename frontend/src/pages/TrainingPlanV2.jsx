@@ -947,9 +947,6 @@ export default function TrainingPlanV2() {
     ? Math.max(0, Math.min(100, Math.round((cycle.current_week / cycle.total_weeks) * 100)))
     : 0;
 
-  const confidenceLabel = pacesData?.confidence
-    ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
-    : t("trainingV2.notAvailable");
   const raceReferenceOrder = ["marathon", "half_marathon", "10k", "5k", "3k", "1500m"];
   const raceReferenceRows = raceReferenceOrder
     .map((key) => {
@@ -1034,10 +1031,6 @@ export default function TrainingPlanV2() {
           <p className="text-xs text-muted-foreground">{t("trainingV2.pacesSubtitle")}</p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-start justify-between gap-4 text-sm">
-            <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
-            <span className="text-right font-medium text-foreground">{confidenceLabel}</span>
-          </div>
           {pacesData?.confidence === "INSUFFICIENT" ? (
             <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
           ) : (

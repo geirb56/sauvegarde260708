@@ -93,13 +93,6 @@ const DISTANCE_I18N_KEYS = {
   Marathon: "distanceMarathon",
 };
 
-const CONFIDENCE_MAP = {
-  high: { i18nKey: "confidenceHigh", color: "#22c55e" },
-  medium: { i18nKey: "confidenceMedium", color: "#f59e0b" },
-  low: { i18nKey: "confidenceLow", color: "#f97316" },
-  insufficient: { i18nKey: "confidenceInsufficient", color: "#6b7280" },
-};
-
 const SEMANTIC_SURFACES = {
   predictions: { background: "rgba(249, 115, 22, 0.06)", border: "rgba(249, 115, 22, 0.30)", accent: "var(--accent-orange)" },
   hrv: { background: "rgba(34, 211, 238, 0.06)", border: "rgba(34, 211, 238, 0.30)", accent: "var(--accent-cyan)" },
@@ -108,12 +101,6 @@ const SEMANTIC_SURFACES = {
   vo2: { background: "rgba(16, 185, 129, 0.08)", border: "rgba(16, 185, 129, 0.34)", accent: "rgb(16, 185, 129)" },
   danger: { background: "rgba(239, 68, 68, 0.14)", border: "rgba(239, 68, 68, 0.34)", accent: "var(--status-danger)" },
   neutral: { background: "rgba(148, 163, 184, 0.08)", border: "rgba(148, 163, 184, 0.24)", accent: "rgb(148, 163, 184)" },
-};
-
-const normalizeConfidence = (value) => {
-  if (typeof value !== "string") return "insufficient";
-  const normalized = value.trim().toLowerCase();
-  return CONFIDENCE_MAP[normalized] ? normalized : "insufficient";
 };
 
 const formatPredictedRaceTime = (predictedTimeSeconds, fallbackTimeString) => {
@@ -354,9 +341,6 @@ export default function Progress() {
                 <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-cards-grid">
                   {POTENTIAL_DISTANCES.map((distanceKey) => {
                     const pred = predictionByDistance.get(distanceKey) ?? null;
-                    const confidence = normalizeConfidence(pred?.confidence);
-                    const { i18nKey: confidenceI18nKey, color: confidenceColor } = CONFIDENCE_MAP[confidence];
-                    const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
                     const isGoal = cycleGoalDist !== null && pred?.distance === cycleGoalDist;
                     const predictedTime = formatPredictedRaceTime(pred?.predicted_time_s, pred?.predicted_time);
                     const hasPredictedTime = predictedTime !== null;
@@ -402,18 +386,6 @@ export default function Progress() {
                             {t("progressExtended.notEnoughPredictionData")}
                           </p>
                         )}
-
-                        <div className="mt-3">
-                          <p className="text-[11px] text-muted-foreground mb-1">
-                            {t("progressExtended.confidenceLabel")}
-                          </p>
-                          <span
-                            className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold"
-                            style={{ background: `${confidenceColor}20`, color: confidence === "insufficient" ? "var(--text-tertiary)" : confidence === "low" ? "var(--status-warning)" : confidenceColor }}
-                          >
-                            {confidenceText}
-                          </span>
-                        </div>
                       </div>
                     );
                   })}

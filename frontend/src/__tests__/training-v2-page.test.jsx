@@ -700,13 +700,37 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(sundayRow).getAllByText(/No session/i).length).toBeGreaterThan(0);
   });
 
-  test("paces section is visible by default and shows insufficient state clearly", async () => {
-    mockAxios({ paces: pacesData({ confidence: "INSUFFICIENT" }) });
+  test.each(["fr", "en", "es"].flatMap((lang) =>
+    ["HIGH", "MEDIUM", "LOW"].map((confidence) => [lang, confidence])
+  ))("%s hides pace confidence %s without changing E/M/T/I/R or race references", async (lang, confidence) => {
+    const paces = pacesData({ confidence });
+    paces.paces.marathon = { pace_str: "4:49", min_per_km: 4.8144 };
+    paces.paces.interval = {
+      lower: { pace_str: "4:10", min_per_km: 4.1667 },
+      upper: { pace_str: "4:30", min_per_km: 4.5 },
+    };
+    paces.paces.repetition = { pace_str: "3:56", min_per_km: 3.9333 };
+    mockAxios({ paces });
+    renderPage({ lang });
+
+    const card = await screen.findByTestId("training-v2-paces");
+    expect(card).not.toHaveTextContent(/confidence|confiance|confianza|HIGH|MEDIUM|LOW/i);
+    ["5:10 /km - 5:55 /km", "4:49 /km", "4:35 /km", "4:10 /km - 4:30 /km", "3:56 /km"].forEach((value) => {
+      expect(card).toHaveTextContent(value);
+    });
+    ["3:23:05", "1:36:20", "44:00", "21:05", "12:17", "5:54"].forEach((value) => {
+      expect(card).toHaveTextContent(value);
+    });
+  });
+
+  test("paces section is visible by default and preserves insufficient protection even with stale values", async () => {
+    mockAxios({ paces: { ...pacesData(), confidence: "INSUFFICIENT" } });
     renderPage({ width: 390 });
 
     const paces = await screen.findByTestId("training-v2-paces");
     expect(paces).toBeVisible();
     expect(screen.getByText(/representative performance/i)).toBeInTheDocument();
+    expect(paces).not.toHaveTextContent(/confidence|HIGH|MEDIUM|LOW|5:10|4:35|3:23:05/i);
   });
 
   test("cycle section is compact and collapsible", async () => {
