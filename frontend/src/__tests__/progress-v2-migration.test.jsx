@@ -70,7 +70,8 @@ describe("PR196 — race predictions preserved", () => {
   });
 
   test("predictions list rendering preserved", () => {
-    expect(readProgress()).toContain("predictions.predictions?.map");
+    expect(readProgress()).toContain("POTENTIAL_DISTANCES.map");
+    expect(readProgress()).toContain("predictionByDistance.get(distanceKey)");
   });
 });
 
