@@ -13,7 +13,7 @@ import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits"
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 const isCycling = (type) => ["cycle", "cycling", "ride"].includes(type);
@@ -101,6 +101,7 @@ export default function DetailedAnalysis() {
   ].filter(Boolean);
   const classification = getSessionClassification(analysis, t);
   const observation = getDistinctCoachObservation(analysis);
+  const observations = getAnalysisObservations(analysis);
   const date = new Date(analysis.workout?.date);
   const dateStr = Number.isFinite(date.getTime()) ? date.toLocaleDateString(
     { fr: "fr-FR", es: "es-ES", en: "en-US" }[lang] || "en-US",
@@ -136,9 +137,11 @@ export default function DetailedAnalysis() {
         t={t}
       />
 
-      {(getAnalysisTakeaway(analysis) || classification || analysis.signals?.intensity?.available === true) && <section className="my-3 rounded-xl border border-border bg-card p-3">
+      {(observations.length > 0 || classification || (analysis.signals?.intensity?.available === true && analysis.signals.intensity.text)) && <section className="my-3 rounded-xl border border-border bg-card p-3">
         <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("detailedAnalysis.meaning")}</h2>
-        {getAnalysisTakeaway(analysis) && <p className="font-sans text-sm leading-relaxed" data-testid="meaning-text">{getAnalysisTakeaway(analysis)}</p>}
+        {observations.length > 0 && <div className="space-y-2 font-sans text-sm leading-relaxed" data-testid="meaning-text">
+          {observations.map((text) => <p key={text}>{text}</p>)}
+        </div>}
         {classification && <p className="mt-2 text-sm text-muted-foreground" data-testid="session-classification">{classification.label}: {classification.text}</p>}
         {analysis.signals?.intensity?.available === true && analysis.signals.intensity.text && (
           <p className="mt-2 text-sm">{t("analysis.intensity")}: {analysis.signals.intensity.text}</p>

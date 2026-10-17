@@ -8,7 +8,7 @@ import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotic
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
@@ -183,7 +183,7 @@ export default function WorkoutDetail() {
   const hasAnalysis = Boolean(analysisForRender);
   const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
   const coachObservation = getDistinctCoachObservation(analysisForRender);
-  const takeaway = getAnalysisTakeaway(analysisForRender);
+  const observations = getAnalysisObservations(analysisForRender);
   const classification = getSessionClassification(analysisForRender, t);
   const intensity = analysisForRender?.signals?.intensity;
 
@@ -244,10 +244,12 @@ export default function WorkoutDetail() {
         t={t}
       />
 
-      {(takeaway || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
+      {(observations.length > 0 || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
         <Card className="bg-card border-border"><CardContent className="p-4 space-y-2">
-          {takeaway && <p className="text-sm leading-relaxed" data-testid="meaning-text">{takeaway}</p>}
+          {observations.length > 0 && <div className="space-y-2 text-sm leading-relaxed" data-testid="meaning-text">
+            {observations.map((text) => <p key={text}>{text}</p>)}
+          </div>}
           {classification && <p className="text-sm text-muted-foreground" data-testid="session-classification">{classification.label}: {classification.text}</p>}
           {intensity?.available === true && intensity.text && (
             <p className="text-sm" data-testid="available-intensity">{t("analysis.intensity")}: {intensity.text}</p>

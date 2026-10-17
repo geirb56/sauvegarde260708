@@ -26,12 +26,12 @@ export const getSessionClassification = (analysis, t) => {
     };
   }
   const type = analysis?.signals?.session_type;
-  return type?.available === true && type.text
+  return type?.available === true && type.code !== "standard" && type.text
     ? { label: t("analysis.type"), text: type.text }
     : null;
 };
 
-export const getAnalysisTakeaway = (analysis) => {
+const getLegacyAnalysisTakeaway = (analysis) => {
   const observations = analysis?.meaning?.observations;
   if (!Array.isArray(observations)) return null;
   if (analysis?.meaning?.code === "meaning.structured_phases") {
@@ -47,14 +47,47 @@ export const getAnalysisTakeaway = (analysis) => {
   return observations.find((text) => typeof text === "string" && text.trim()) || null;
 };
 
+export const getAnalysisObservations = (analysis) => {
+  const facts = analysis?.meaning?.factual_observations;
+  if (facts !== undefined) {
+    if (!Array.isArray(facts)) return [];
+    const codes = new Set();
+    const texts = new Set();
+    return facts.filter((fact) => {
+      if (fact?.placement !== "summary"
+        || typeof fact.code !== "string" || !fact.code.trim()
+        || typeof fact.text !== "string" || !fact.text.trim()
+        || !fact.evidence || typeof fact.evidence !== "object" || Array.isArray(fact.evidence)
+        || Object.keys(fact.evidence).length === 0) return false;
+      const text = fact.text.trim();
+      if (codes.has(fact.code) || texts.has(text)) return false;
+      codes.add(fact.code);
+      texts.add(text);
+      return true;
+    }).map((fact) => fact.text.trim());
+  }
+  const legacy = getLegacyAnalysisTakeaway(analysis);
+  return legacy ? [legacy] : [];
+};
+
+export const getAnalysisTakeaway = (analysis) => getAnalysisObservations(analysis)[0] || null;
+
 export const getDistinctCoachObservation = (analysis) => {
   if (!hasCoachObservation(analysis)) return null;
   const observation = analysis.advice.text.trim();
+  const factCode = {
+    "advice.even_pacing": "fact.pace_change",
+    "advice.negative_split_confirmed": "fact.negative_split",
+    "advice.maintain_consistency": "fact.pacing_consistency",
+    "advice.monitor_hr_drift": "fact.hr_drift_measured",
+  }[analysis.advice.code];
+  if (factCode && Array.isArray(analysis?.meaning?.factual_observations)
+    && analysis.meaning.factual_observations.some((fact) => fact?.code === factCode)) return null;
   if (analysis?.advice?.code === "advice.structured_phases"
     && analysis?.signals?.intensity?.available !== true) return null;
   if (analysis?.advice?.code === "advice.effort_dispersion"
     && analysis?.phase_analysis?.effort_regularity?.available === true) return null;
-  return observation === getAnalysisTakeaway(analysis)?.trim() ? null : observation;
+  return getAnalysisObservations(analysis).includes(observation) ? null : observation;
 };
 
 export const getAnalysisLimitations = (analysis, t) => {

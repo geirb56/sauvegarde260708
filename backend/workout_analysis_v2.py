@@ -35,9 +35,22 @@ class AnalysisText(BaseModel):
     text: str
 
 
+class WorkoutAnalysisFactualObservation(AnalysisText):
+    evidence: Dict[str, float]
+    placement: Literal["summary", "phases"] = "summary"
+
+    @field_validator("evidence")
+    @classmethod
+    def _finite_evidence(cls, value):
+        if not value or not all(math.isfinite(number) for number in value.values()):
+            raise ValueError("Factual observations require finite numeric evidence")
+        return value
+
+
 class WorkoutAnalysisMeaning(AnalysisText):
     observations: List[str] = Field(default_factory=list)
     caveats: List[str] = Field(default_factory=list)
+    factual_observations: List[WorkoutAnalysisFactualObservation] = Field(default_factory=list)
 
 
 class WorkoutAnalysisAdvice(AnalysisText):
@@ -629,18 +642,48 @@ def _template(language: str, key: str, **params) -> str:
             "limitations.phase_hr": "Cobertura cardíaca: {count} de los {total} esfuerzos comparables tienen frecuencia cardíaca media.",
         },
     }
-    return {**templates[lang], **phase_templates[lang]}[key].format(**params)
+    factual_templates = {
+        "en": {
+            "fact.pacing_consistency": "Recorded pacing consistency score: {score}/100.",
+            "fact.pace_change": "Recorded pace change: {change} ({direction}).",
+            "fact.hr_drift_measured": "Recorded heart-rate drift: {drift} bpm.",
+            "fact.effort_hr_evolution": "Mean heart rate changes from {first} to {last} bpm between measured comparable efforts {first_number} and {last_number}.",
+            "fact.comparable_effort_extremes": "Among the {count} measured comparable efforts, effort {fastest} was fastest ({fast_pace}); effort {slowest} was slowest ({slow_pace}).",
+        },
+        "fr": {
+            "fact.pacing_consistency": "Score de régularité de l'allure enregistré : {score}/100.",
+            "fact.pace_change": "Variation d'allure enregistrée : {change} ({direction}).",
+            "fact.hr_drift_measured": "Dérive cardiaque enregistrée : {drift} bpm.",
+            "fact.effort_hr_evolution": "La fréquence cardiaque moyenne passe de {first} à {last} bpm entre les efforts comparables mesurés {first_number} et {last_number}.",
+            "fact.comparable_effort_extremes": "Parmi les {count} efforts comparables mesurés, l'effort {fastest} est le plus rapide ({fast_pace}) ; l'effort {slowest} est le plus lent ({slow_pace}).",
+        },
+        "es": {
+            "fact.pacing_consistency": "Puntuación de regularidad del ritmo registrada: {score}/100.",
+            "fact.pace_change": "Cambio de ritmo registrado: {change} ({direction}).",
+            "fact.hr_drift_measured": "Deriva cardíaca registrada: {drift} bpm.",
+            "fact.effort_hr_evolution": "La frecuencia cardíaca media pasa de {first} a {last} bpm entre los esfuerzos comparables medidos {first_number} y {last_number}.",
+            "fact.comparable_effort_extremes": "Entre los {count} esfuerzos comparables medidos, el esfuerzo {fastest} fue el más rápido ({fast_pace}); el esfuerzo {slowest} fue el más lento ({slow_pace}).",
+        },
+    }
+    return {**templates[lang], **phase_templates[lang], **factual_templates[lang]}[key].format(**params)
 
 
 def _safe_round(value: Optional[float], digits: int = 2) -> Optional[float]:
-    if value is None:
+    if not _valid_finite_number(value):
         return None
     return round(float(value), digits)
 
 
 def _safe_avg(values: List[Optional[float]]) -> Optional[float]:
-    valid = [float(value) for value in values if value is not None]
+    valid = [float(value) for value in values if _valid_finite_number(value)]
     return _safe_round(sum(valid) / len(valid), 2) if valid else None
+
+
+def _valid_finite_number(value) -> bool:
+    return (
+        not isinstance(value, bool) and isinstance(value, (int, float))
+        and math.isfinite(value)
+    )
 
 
 def _valid_positive_number(value) -> bool:
@@ -715,7 +758,7 @@ def _join_sentences(sentences: List[Optional[str]]) -> str:
 
 
 def _comparison_metric(current: Optional[float], baseline: Optional[float], digits: int = 2) -> Optional[WorkoutAnalysisComparisonMetric]:
-    if current is None or baseline is None:
+    if not _valid_finite_number(current) or not _valid_finite_number(baseline):
         return None
     difference = current - baseline
     percent_change = (difference / baseline * 100) if baseline else None
@@ -729,9 +772,12 @@ def _comparison_metric(current: Optional[float], baseline: Optional[float], digi
 
 def _extract_split_paces(workout: dict) -> List[float]:
     paces: List[float] = []
-    for split in workout.get("km_splits") or []:
+    splits = workout.get("km_splits")
+    for split in splits if isinstance(splits, list) else []:
+        if not isinstance(split, dict):
+            continue
         pace = split.get("pace_min_km")
-        if pace is not None:
+        if _valid_positive_number(pace):
             paces.append(float(pace))
     return paces
 
@@ -940,12 +986,16 @@ def _build_similar_reference(
 def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
     avg_pace = workout.get("avg_pace_min_km")
     avg_speed = workout.get("avg_speed_kmh")
-    split_analysis = workout.get("split_analysis") or {}
-    pace_stats = workout.get("pace_stats") or {}
+    split_analysis = workout.get("split_analysis")
+    split_analysis = split_analysis if isinstance(split_analysis, dict) else {}
+    pace_stats = workout.get("pace_stats")
+    pace_stats = pace_stats if isinstance(pace_stats, dict) else {}
     split_paces = _extract_split_paces(workout)
 
     fastest_split = split_analysis.get("fastest_split_pace")
     slowest_split = split_analysis.get("slowest_split_pace")
+    fastest_split = fastest_split if _valid_positive_number(fastest_split) else None
+    slowest_split = slowest_split if _valid_positive_number(slowest_split) else None
     if fastest_split is None and split_paces:
         fastest_split = min(split_paces)
     if slowest_split is None and split_paces:
@@ -954,6 +1004,8 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
     pace_drop = split_analysis.get("pace_drop")
     variability = pace_stats.get("pace_variability")
     consistency = split_analysis.get("consistency_score")
+    if not _valid_finite_number(consistency) or not 0 <= consistency <= 100:
+        consistency = None
     if consistency is None and split_paces:
         avg_split = mean(split_paces)
         max_dev = max(abs(pace - avg_split) for pace in split_paces)
@@ -967,7 +1019,10 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
         fastest_split_min_km=_safe_round(fastest_split, 3),
         slowest_split_min_km=_safe_round(slowest_split, 3),
         pace_drop_min_km=_safe_round(pace_drop, 3),
-        negative_split=split_analysis.get("negative_split"),
+        negative_split=(
+            split_analysis["negative_split"]
+            if isinstance(split_analysis.get("negative_split"), bool) else None
+        ),
         consistency_score=_safe_round(consistency, 1),
         variability=_safe_round(variability, 3),
         reason_unavailable=None if available else _template(language, "unavailable.pacing"),
@@ -995,11 +1050,12 @@ def _normalize_zone_distribution(raw_zones: dict | None) -> Optional[Dict[str, f
 
 
 def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology:
-    hr_analysis = workout.get("hr_analysis") or {}
-    avg_hr = workout.get("avg_heart_rate")
-    max_hr = workout.get("max_heart_rate")
+    hr_analysis = workout.get("hr_analysis")
+    hr_analysis = hr_analysis if isinstance(hr_analysis, dict) else {}
+    avg_hr = _usable_metric(workout, "avg_heart_rate")
+    max_hr = _usable_metric(workout, "max_heart_rate")
     zone_distribution = _normalize_zone_distribution(workout.get("effort_zone_distribution"))
-    hr_drift = hr_analysis.get("hr_drift")
+    hr_drift = _safe_round(hr_analysis.get("hr_drift"), 2)
     available = any(value is not None for value in [avg_hr, max_hr, hr_drift]) or bool(zone_distribution)
 
     return WorkoutAnalysisPhysiology(
@@ -1007,7 +1063,7 @@ def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology
         avg_hr=avg_hr,
         max_hr=max_hr,
         zone_distribution=zone_distribution,
-        hr_drift=_safe_round(hr_drift, 2),
+        hr_drift=hr_drift,
         reason_unavailable=None if available else _template(language, "unavailable.hr"),
     )
 
@@ -1845,6 +1901,124 @@ def _phase_observations(
     return observations
 
 
+def _build_factual_observations(
+    workout: dict,
+    pacing: WorkoutAnalysisPacing,
+    physiology: WorkoutAnalysisPhysiology,
+    comparison: WorkoutAnalysisComparison,
+    phases: WorkoutAnalysisPhaseAnalysis,
+    language: str,
+) -> List[WorkoutAnalysisFactualObservation]:
+    facts: List[WorkoutAnalysisFactualObservation] = []
+
+    def add(code, evidence, *, placement="summary", template_key=None, **params):
+        if evidence and all(_valid_finite_number(value) for value in evidence.values()):
+            facts.append(WorkoutAnalysisFactualObservation(
+                code=code, text=_template(language, template_key or code, **params),
+                evidence=evidence, placement=placement,
+            ))
+
+    # Recovery and effort paces must not become a global execution conclusion.
+    multi_effort = len(phases.efforts) > 1 or workout.get("session_structure") == "intervals"
+    split_analysis = workout.get("split_analysis")
+    split_analysis = split_analysis if isinstance(split_analysis, dict) else {}
+    split_count = len(_extract_split_paces(workout))
+    raw_score = split_analysis.get("consistency_score")
+    score_from_analysis = _valid_finite_number(raw_score) and 0 <= raw_score <= 100
+    if not multi_effort:
+        if (
+            _valid_finite_number(pacing.consistency_score)
+            and 0 <= pacing.consistency_score <= 100
+            and (split_count >= 2 or score_from_analysis)
+        ):
+            add("fact.pacing_consistency", {
+                "consistency_score": pacing.consistency_score,
+                "valid_split_count": split_count,
+            }, score=_phase_number(pacing.consistency_score, 1, language))
+        # Use the source value for thresholding: rounding must not promote 0.3999.
+        drop = split_analysis.get("pace_drop")
+        if _valid_finite_number(drop) and abs(drop) >= 0.4:
+            add("fact.pace_change", {"pace_drop_min_km": drop},
+                change=_fmt_pace_delta(drop),
+                direction=_template(language, "pace.slower" if drop > 0 else "pace.faster"))
+        if split_analysis.get("negative_split") is True:
+            add("fact.negative_split", {"negative_split": 1})
+
+    if not multi_effort and _valid_finite_number(physiology.hr_drift):
+        add("fact.hr_drift_measured", {"hr_drift_bpm": physiology.hr_drift},
+            drift=_phase_number(physiology.hr_drift, 2, language))
+
+    regularity = phases.effort_regularity
+    cohort, _ = _effort_comparison_cohort(phases.efforts)
+    paced = [phase for phase in cohort if _valid_positive_number(phase.pace_sec_per_km)]
+    coverage = {
+        "effort_count": regularity.effort_count,
+        "comparable_effort_count": regularity.comparable_effort_count,
+        "pace_sample_count": regularity.pace_sample_count,
+    }
+    if regularity.available and len(paced) >= 2:
+        add("fact.effort_dispersion", {
+            **coverage, "pace_dispersion_sec_per_km": regularity.pace_dispersion_sec_per_km,
+        }, placement="phases", count=regularity.pace_sample_count,
+            dispersion=_phase_number(regularity.pace_dispersion_sec_per_km, 1, language))
+        fastest = min(paced, key=lambda phase: phase.pace_sec_per_km)
+        slowest = max(paced, key=lambda phase: phase.pace_sec_per_km)
+        if fastest.pace_sec_per_km != slowest.pace_sec_per_km:
+            add("fact.effort_extremes", {
+                **coverage,
+                "fastest_effort_number": fastest.effort_number,
+                "slowest_effort_number": slowest.effort_number,
+                "fastest_pace_sec_per_km": fastest.pace_sec_per_km,
+                "slowest_pace_sec_per_km": slowest.pace_sec_per_km,
+            }, template_key="fact.comparable_effort_extremes", count=len(paced),
+                fastest=fastest.effort_number, slowest=slowest.effort_number,
+                fast_pace=_fmt_pace(fastest.pace_sec_per_km / 60),
+                slow_pace=_fmt_pace(slowest.pace_sec_per_km / 60))
+    if len(cohort) >= 2 and all(_valid_positive_number(phase.average_hr) for phase in cohort):
+        first, last = cohort[0], cohort[-1]
+        add("fact.effort_hr_evolution", {
+            "comparable_effort_count": len(cohort),
+            "first_effort_number": first.effort_number,
+            "last_effort_number": last.effort_number,
+            "first_average_hr_bpm": first.average_hr,
+            "last_average_hr_bpm": last.average_hr,
+            **({"average_hr_change_bpm": regularity.average_hr_change_bpm}
+               if _valid_finite_number(regularity.average_hr_change_bpm) else {}),
+        }, first=_fmt_number(first.average_hr, 0), last=_fmt_number(last.average_hr, 0),
+            first_number=first.effort_number, last_number=last.effort_number)
+
+    similar = comparison.similar
+    if similar and similar.available and similar.comparable:
+        if (
+            _valid_positive_number(similar.avg_pace_min_km)
+            and _valid_finite_number(similar.pace_difference_min_km)
+            and _valid_positive_number(similar.pace_avg_distance_km)
+        ):
+            add("fact.similar_pace", {
+                "pace_sample_count": similar.pace_sample_count,
+                "baseline_pace_min_km": similar.avg_pace_min_km,
+                "pace_difference_min_km": similar.pace_difference_min_km,
+                "pace_avg_distance_km": similar.pace_avg_distance_km,
+                "period_days": similar.period_days,
+                "distance_tolerance_pct": similar.distance_tolerance_pct,
+            }, count=similar.pace_sample_count, days=similar.period_days,
+                tolerance=_fmt_number(similar.distance_tolerance_pct, 0),
+                avg_distance=_fmt_number(similar.pace_avg_distance_km, 2),
+                baseline=_fmt_pace(similar.avg_pace_min_km),
+                delta=_fmt_pace_delta(similar.pace_difference_min_km))
+        if (
+            _valid_positive_number(similar.avg_heart_rate)
+            and _valid_finite_number(similar.heart_rate_difference_bpm)
+        ):
+            add("fact.similar_hr", {
+                "hr_sample_count": similar.hr_sample_count,
+                "baseline_heart_rate_bpm": similar.avg_heart_rate,
+                "heart_rate_difference_bpm": similar.heart_rate_difference_bpm,
+            }, count=similar.hr_sample_count, baseline=_fmt_number(similar.avg_heart_rate, 1),
+                delta=_fmt_signed(similar.heart_rate_difference_bpm, 1))
+    return facts
+
+
 def build_workout_analysis_v2(
     workout: dict,
     historical_workouts: List[dict],
@@ -1860,6 +2034,9 @@ def build_workout_analysis_v2(
     phase_observations = _phase_observations(phase_analysis, signals.session_structure, language)
     summary = _build_summary(workout, physiology, pacing, signals, language, phase_observations)
     meaning = _build_meaning(workout, physiology, pacing, comparison, signals, language, phase_observations)
+    meaning.factual_observations = _build_factual_observations(
+        workout, pacing, physiology, comparison, phase_analysis, language,
+    )
     advice = _build_advice(workout, physiology, pacing, comparison, signals, language, phase_observations)
     evidence = WorkoutAnalysisEvidence(
         has_heart_rate=physiology.available,
