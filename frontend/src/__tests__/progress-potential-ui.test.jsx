@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
@@ -86,7 +86,7 @@ describe("Progress potential UI", () => {
     useSubscription.mockReturnValue({ isFree: false, loading: false });
   });
 
-  test("renders 5K/10K/Half/Marathon with formatted times and confidence labels", async () => {
+  test("renders 5K/10K/Half/Marathon with unchanged formatted times, without confidence", async () => {
     setupAxios();
     renderProgress({ lang: "en", width: 390 });
 
@@ -101,9 +101,57 @@ describe("Progress potential UI", () => {
     expect(await screen.findByText("1:55:00")).toBeInTheDocument();
     expect(await screen.findByText("4:01:40")).toBeInTheDocument();
 
-    expect(await screen.findAllByText("High")).toHaveLength(2);
-    expect(await screen.findByText("Medium")).toBeInTheDocument();
-    expect(await screen.findByText("Low")).toBeInTheDocument();
+    expect(screen.queryByText(/^(Confidence|High|Medium|Low)$/)).not.toBeInTheDocument();
+  });
+
+  test.each(["fr", "en", "es"].flatMap((lang) =>
+    ["HIGH", "MEDIUM", "LOW"].map((confidence) => [lang, confidence])
+  ))("%s hides %s confidence for every distance without changing estimates or goal styling", async (lang, confidence) => {
+    setupAxios({
+      predictionsData: {
+        ...VALID_PREDICTIONS,
+        predictions: VALID_PREDICTIONS.predictions.map((prediction) => ({ ...prediction, confidence })),
+      },
+    });
+    renderProgress({ lang });
+
+    const grid = await screen.findByTestId("potential-cards-grid");
+    expect(grid).not.toHaveTextContent(/confidence|confiance|confianza|HIGH|MEDIUM|LOW|Élevée|Moyenne|Faible|Alta|Baja/i);
+    ["5k", "10k", "semi", "marathon"].forEach((distance, index) => {
+      const card = screen.getByTestId(`potential-card-${distance}`);
+      expect(within(card).getByTestId(`potential-time-${distance}`)).toHaveTextContent(
+        ["25:00", "52:30", "1:55:00", "4:01:40"][index]
+      );
+      expect(card.querySelectorAll("span")).toHaveLength(distance === "semi" ? 1 : 0);
+      expect(card.style.background).toBe(distance === "semi" ? "rgba(249, 115, 22, 0.14)" : "rgba(249, 115, 22, 0.06)");
+      expect(card.style.borderColor).toBe(distance === "semi" ? "rgba(249, 115, 22, 0.55)" : "rgba(249, 115, 22, 0.30)");
+      expect(within(card).getByText(VALID_PREDICTIONS.predictions[index].predicted_pace)).toBeInTheDocument();
+    });
+    expect(screen.getByText({
+      fr: "Ton potentiel estimé",
+      en: "Your estimated potential",
+      es: "Tu potencial estimado",
+    }[lang])).toBeInTheDocument();
+  });
+
+  test.each([null, { has_data: true, predictions: [] }])("missing predictions (%j) never invent times", async (predictionsData) => {
+    setupAxios({ predictionsData });
+    renderProgress();
+    await screen.findByTestId("potential-section");
+    expect(screen.queryAllByTestId(/^potential-time-/)).toHaveLength(0);
+    expect(screen.queryByText("0:00")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Confidence|High|Medium|Low|Insufficient)$/)).not.toBeInTheDocument();
+  });
+
+  test.each([
+    { isFree: true, loading: false },
+    { isFree: false, loading: true },
+  ])("subscription gate %j skips prediction requests and estimates", (subscription) => {
+    useSubscription.mockReturnValue(subscription);
+    setupAxios();
+    renderProgress();
+    expect(axios.get).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("potential-section")).not.toBeInTheDocument();
   });
 
   test("none != 0: missing prediction never shows 0:00", async () => {
@@ -122,6 +170,8 @@ describe("Progress potential UI", () => {
 
     expect(await screen.findByText("Not enough data")).toBeInTheDocument();
     expect(screen.queryByText("0:00")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("potential-time-5k")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Confidence|Insufficient)$/)).not.toBeInTheDocument();
   });
 
   test("insufficient payload shows honest state and no synthetic values", async () => {

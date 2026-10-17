@@ -927,10 +927,6 @@ export default function Dashboard() {
   const todayReadinessLabel = getTodayReadinessLabel(todaySession, t);
   const todayReadinessStyle = REC_STYLES[todayReadinessColor] || REC_STYLES.gray;
   const pacesConfidenceRaw = typeof trainingPaces?.confidence === "string" ? trainingPaces.confidence : null;
-  const pacesConfidenceKey = pacesConfidenceRaw ? pacesConfidenceRaw.toLowerCase() : null;
-  const pacesConfidenceLabel = pacesConfidenceKey
-    ? t(`trainingV2.pacesConfidence.${pacesConfidenceKey}`)
-    : null;
   const pacesConfidenceInsufficient = pacesConfidenceRaw === "INSUFFICIENT";
   const goalTypeKey = normalizeGoalType(trainingWeekV2?.goal?.goal_type);
   const teaserRows = pacesConfidenceInsufficient ? [] : [
@@ -1362,13 +1358,6 @@ export default function Dashboard() {
             <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-empty">
               {t("dashboard.pacesTeaserEmpty")}
             </p>
-          )}
-
-          {pacesConfidenceLabel && (
-            <div className="flex items-start justify-between gap-3 text-sm">
-              <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
-              <span className="text-right font-medium">{pacesConfidenceLabel}</span>
-            </div>
           )}
 
           <Link
