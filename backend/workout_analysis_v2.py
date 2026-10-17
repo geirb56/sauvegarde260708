@@ -645,21 +645,24 @@ def _template(language: str, key: str, **params) -> str:
     factual_templates = {
         "en": {
             "fact.pacing_consistency": "Recorded pacing consistency score: {score}/100.",
-            "fact.pace_change": "Recorded pace change: {change}.",
+            "fact.pace_change": "Recorded pace change: {change} ({direction}).",
             "fact.hr_drift_measured": "Recorded heart-rate drift: {drift} bpm.",
             "fact.effort_hr_evolution": "Mean heart rate changes from {first} to {last} bpm between measured comparable efforts {first_number} and {last_number}.",
+            "fact.comparable_effort_extremes": "Among the {count} measured comparable efforts, effort {fastest} was fastest ({fast_pace}); effort {slowest} was slowest ({slow_pace}).",
         },
         "fr": {
             "fact.pacing_consistency": "Score de régularité de l'allure enregistré : {score}/100.",
-            "fact.pace_change": "Variation d'allure enregistrée : {change}.",
+            "fact.pace_change": "Variation d'allure enregistrée : {change} ({direction}).",
             "fact.hr_drift_measured": "Dérive cardiaque enregistrée : {drift} bpm.",
             "fact.effort_hr_evolution": "La fréquence cardiaque moyenne passe de {first} à {last} bpm entre les efforts comparables mesurés {first_number} et {last_number}.",
+            "fact.comparable_effort_extremes": "Parmi les {count} efforts comparables mesurés, l'effort {fastest} est le plus rapide ({fast_pace}) ; l'effort {slowest} est le plus lent ({slow_pace}).",
         },
         "es": {
             "fact.pacing_consistency": "Puntuación de regularidad del ritmo registrada: {score}/100.",
-            "fact.pace_change": "Cambio de ritmo registrado: {change}.",
+            "fact.pace_change": "Cambio de ritmo registrado: {change} ({direction}).",
             "fact.hr_drift_measured": "Deriva cardíaca registrada: {drift} bpm.",
             "fact.effort_hr_evolution": "La frecuencia cardíaca media pasa de {first} a {last} bpm entre los esfuerzos comparables medidos {first_number} y {last_number}.",
+            "fact.comparable_effort_extremes": "Entre los {count} esfuerzos comparables medidos, el esfuerzo {fastest} fue el más rápido ({fast_pace}); el esfuerzo {slowest} fue el más lento ({slow_pace}).",
         },
     }
     return {**templates[lang], **phase_templates[lang], **factual_templates[lang]}[key].format(**params)
@@ -672,7 +675,7 @@ def _safe_round(value: Optional[float], digits: int = 2) -> Optional[float]:
 
 
 def _safe_avg(values: List[Optional[float]]) -> Optional[float]:
-    valid = [float(value) for value in values if value is not None]
+    valid = [float(value) for value in values if _valid_finite_number(value)]
     return _safe_round(sum(valid) / len(valid), 2) if valid else None
 
 
@@ -755,7 +758,7 @@ def _join_sentences(sentences: List[Optional[str]]) -> str:
 
 
 def _comparison_metric(current: Optional[float], baseline: Optional[float], digits: int = 2) -> Optional[WorkoutAnalysisComparisonMetric]:
-    if current is None or baseline is None:
+    if not _valid_finite_number(current) or not _valid_finite_number(baseline):
         return None
     difference = current - baseline
     percent_change = (difference / baseline * 100) if baseline else None
@@ -1049,10 +1052,10 @@ def _normalize_zone_distribution(raw_zones: dict | None) -> Optional[Dict[str, f
 def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology:
     hr_analysis = workout.get("hr_analysis")
     hr_analysis = hr_analysis if isinstance(hr_analysis, dict) else {}
-    avg_hr = workout.get("avg_heart_rate")
-    max_hr = workout.get("max_heart_rate")
+    avg_hr = _usable_metric(workout, "avg_heart_rate")
+    max_hr = _usable_metric(workout, "max_heart_rate")
     zone_distribution = _normalize_zone_distribution(workout.get("effort_zone_distribution"))
-    hr_drift = hr_analysis.get("hr_drift")
+    hr_drift = _safe_round(hr_analysis.get("hr_drift"), 2)
     available = any(value is not None for value in [avg_hr, max_hr, hr_drift]) or bool(zone_distribution)
 
     return WorkoutAnalysisPhysiology(
@@ -1060,7 +1063,7 @@ def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology
         avg_hr=avg_hr,
         max_hr=max_hr,
         zone_distribution=zone_distribution,
-        hr_drift=_safe_round(hr_drift, 2),
+        hr_drift=hr_drift,
         reason_unavailable=None if available else _template(language, "unavailable.hr"),
     )
 
@@ -1908,10 +1911,10 @@ def _build_factual_observations(
 ) -> List[WorkoutAnalysisFactualObservation]:
     facts: List[WorkoutAnalysisFactualObservation] = []
 
-    def add(code, evidence, *, placement="summary", **params):
+    def add(code, evidence, *, placement="summary", template_key=None, **params):
         if evidence and all(_valid_finite_number(value) for value in evidence.values()):
             facts.append(WorkoutAnalysisFactualObservation(
-                code=code, text=_template(language, code, **params),
+                code=code, text=_template(language, template_key or code, **params),
                 evidence=evidence, placement=placement,
             ))
 
@@ -1936,11 +1939,12 @@ def _build_factual_observations(
         drop = split_analysis.get("pace_drop")
         if _valid_finite_number(drop) and abs(drop) >= 0.4:
             add("fact.pace_change", {"pace_drop_min_km": drop},
-                change=_fmt_pace_delta(drop))
+                change=_fmt_pace_delta(drop),
+                direction=_template(language, "pace.slower" if drop > 0 else "pace.faster"))
         if split_analysis.get("negative_split") is True:
             add("fact.negative_split", {"negative_split": 1})
 
-    if _valid_finite_number(physiology.hr_drift):
+    if not multi_effort and _valid_finite_number(physiology.hr_drift):
         add("fact.hr_drift_measured", {"hr_drift_bpm": physiology.hr_drift},
             drift=_phase_number(physiology.hr_drift, 2, language))
 
@@ -1966,7 +1970,8 @@ def _build_factual_observations(
                 "slowest_effort_number": slowest.effort_number,
                 "fastest_pace_sec_per_km": fastest.pace_sec_per_km,
                 "slowest_pace_sec_per_km": slowest.pace_sec_per_km,
-            }, fastest=fastest.effort_number, slowest=slowest.effort_number,
+            }, template_key="fact.comparable_effort_extremes", count=len(paced),
+                fastest=fastest.effort_number, slowest=slowest.effort_number,
                 fast_pace=_fmt_pace(fastest.pace_sec_per_km / 60),
                 slow_pace=_fmt_pace(slowest.pace_sec_per_km / 60))
     if len(cohort) >= 2 and all(_valid_positive_number(phase.average_hr) for phase in cohort):
@@ -1977,7 +1982,8 @@ def _build_factual_observations(
             "last_effort_number": last.effort_number,
             "first_average_hr_bpm": first.average_hr,
             "last_average_hr_bpm": last.average_hr,
-            "average_hr_change_bpm": regularity.average_hr_change_bpm,
+            **({"average_hr_change_bpm": regularity.average_hr_change_bpm}
+               if _valid_finite_number(regularity.average_hr_change_bpm) else {}),
         }, first=_fmt_number(first.average_hr, 0), last=_fmt_number(last.average_hr, 0),
             first_number=first.effort_number, last_number=last.effort_number)
 

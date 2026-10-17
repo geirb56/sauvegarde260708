@@ -168,6 +168,21 @@ def test_pace_change_significance_uses_existing_unrounded_value(drop, expected):
         assert ("-" if drop < 0 else "+") in observed["fact.pace_change"].text
 
 
+@pytest.mark.parametrize("language,slower,faster", [
+    ("fr", "plus lent", "plus rapide"),
+    ("en", "slower", "faster"),
+    ("es", "más lento", "más rápido"),
+])
+@pytest.mark.parametrize("drop", [0.5, -0.5])
+def test_pace_change_includes_localized_direction(language, slower, faster, drop):
+    item = facts(build_workout_analysis_v2(
+        workout(split_analysis={"pace_drop": drop}), [], language,
+    ))["fact.pace_change"]
+    assert (slower if drop > 0 else faster) in item.text
+    assert ("+0:30/km" if drop > 0 else "-0:30/km") in item.text
+    assert item.evidence["pace_drop_min_km"] == drop
+
+
 def test_faster_split_sequence_alone_does_not_invent_negative_split():
     analysis = build_workout_analysis_v2(workout(
         km_splits=[{"pace_min_km": 6}, {"pace_min_km": 5}, {"pace_min_km": 4}],
@@ -218,6 +233,20 @@ def test_explicit_interval_structure_suppresses_global_pacing_without_phases():
     assert analysis.meaning.factual_observations == []
 
 
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("with_phases", [False, True])
+def test_global_hr_drift_does_not_describe_interval_effort_hr_evolution(language, with_phases):
+    analysis = build_workout_analysis_v2(workout(
+        session_structure=None if with_phases else "intervals", hr_analysis={"hr_drift": 12},
+    ), [], language, repetitions() if with_phases else None)
+    observed = facts(analysis)
+    assert "fact.hr_drift_measured" not in observed
+    assert ("fact.effort_hr_evolution" in observed) is with_phases
+    assert analysis.physiology.hr_drift == 12
+    if with_phases:
+        assert observed["fact.effort_hr_evolution"].evidence["average_hr_change_bpm"] == 8
+
+
 def test_noncomparable_efforts_do_not_produce_execution_facts():
     analysis = build_workout_analysis_v2(workout(), [], phases=repetitions(
         durations=(60, 240, 600), distances=(100, 800, 2400),
@@ -237,6 +266,30 @@ def test_partial_pace_coverage_is_preserved_without_claiming_missing_hr():
     assert analysis.phase_analysis.effort_regularity.partial_comparison is True
 
 
+@pytest.mark.parametrize("language,prefix", [
+    ("fr", "Parmi les 2 efforts comparables mesurés"),
+    ("en", "Among the 2 measured comparable efforts"),
+    ("es", "Entre los 2 esfuerzos comparables medidos"),
+])
+@pytest.mark.parametrize("partial_kind", ["cohort", "paces"])
+def test_partial_extremes_are_explicitly_scoped_without_changing_legacy_text(
+    language, prefix, partial_kind,
+):
+    phases = repetitions(
+        durations=(240, 240, 1000) if partial_kind == "cohort" else (240, 240, 240),
+        distances=(800, 850, 5000) if partial_kind == "cohort" else (800, 850, None),
+    )
+    analysis = build_workout_analysis_v2(workout(), [], language, phases)
+    extreme = facts(analysis)["fact.effort_extremes"]
+    assert analysis.phase_analysis.effort_regularity.partial_comparison is True
+    assert extreme.text.startswith(prefix)
+    assert extreme.evidence["pace_sample_count"] == 2
+    assert extreme.evidence["effort_count"] == 3
+    assert extreme.text not in analysis.meaning.text
+    assert any("4:42/km" in text and "5:00/km" in text
+               for text in analysis.meaning.observations)
+
+
 def test_equal_efforts_keep_zero_dispersion_and_zero_hr_change_without_extremes():
     observed = facts(build_workout_analysis_v2(workout(), [], phases=repetitions(
         distances=(800, 800, 800), hrs=(150, 150, 150),
@@ -244,6 +297,62 @@ def test_equal_efforts_keep_zero_dispersion_and_zero_hr_change_without_extremes(
     assert observed["fact.effort_dispersion"].evidence["pace_dispersion_sec_per_km"] == 0
     assert observed["fact.effort_hr_evolution"].evidence["average_hr_change_bpm"] == 0
     assert "fact.effort_extremes" not in observed
+
+
+@pytest.mark.parametrize("distances", [(None, None, None), (800, None, None)])
+def test_insufficient_effort_metrics_do_not_generate_facts(distances):
+    analysis = build_workout_analysis_v2(workout(), [], phases=repetitions(
+        distances=distances, hrs=(None, None, None),
+    ))
+    assert analysis.meaning.factual_observations == []
+    assert analysis.phase_analysis.effort_regularity.available is False
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_comparable_hr_evolution_remains_available_without_any_effort_paces(language):
+    analysis = build_workout_analysis_v2(workout(), [], language, repetitions(
+        distances=(None, None, None), hrs=(151, 157, 159),
+    ))
+    observed = facts(analysis)
+    assert set(observed) == {"fact.effort_hr_evolution"}
+    assert observed["fact.effort_hr_evolution"].evidence["first_average_hr_bpm"] == 151
+    assert observed["fact.effort_hr_evolution"].evidence["last_average_hr_bpm"] == 159
+    assert analysis.phase_analysis.effort_regularity.available is False
+
+
+def test_hr_evolution_does_not_require_a_precomputed_hr_change(monkeypatch):
+    import workout_analysis_v2
+
+    original = workout_analysis_v2._effort_regularity
+    monkeypatch.setattr(workout_analysis_v2, "_effort_regularity", lambda efforts:
+                        original(efforts).model_copy(update={"average_hr_change_bpm": None}))
+    observed = facts(build_workout_analysis_v2(workout(), [], phases=repetitions(
+        distances=(None, None, None), hrs=(151, 157, 159),
+    )))
+    assert set(observed) == {"fact.effort_hr_evolution"}
+    assert "average_hr_change_bpm" not in observed["fact.effort_hr_evolution"].evidence
+
+
+@pytest.mark.parametrize("invalid_hr", [0, -1, float("nan"), float("inf"), float("-inf")])
+def test_invalid_effort_hr_does_not_generate_hr_evolution(invalid_hr):
+    observed = facts(build_workout_analysis_v2(workout(), [], phases=repetitions(
+        hrs=(151, invalid_hr, 159),
+    )))
+    assert set(observed) == {"fact.effort_dispersion", "fact.effort_extremes"}
+
+
+def test_factual_observations_are_independent_of_intensity_availability(monkeypatch):
+    current = workout(
+        km_splits=[{"pace_min_km": 5}, {"pace_min_km": 5.1}],
+        hr_analysis={"hr_drift": 3},
+        effort_zone_distribution={"z5": 90},
+    )
+    unavailable = build_workout_analysis_v2(current, [])
+    monkeypatch.setattr("workout_analysis_v2._has_trusted_zone_provenance", lambda _: True)
+    available = build_workout_analysis_v2(current, [])
+    assert unavailable.signals.intensity.available is False
+    assert available.signals.intensity.available is True
+    assert available.meaning.factual_observations == unavailable.meaning.factual_observations
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -259,6 +368,18 @@ def test_history_requires_existing_available_and_comparable_contract(language):
     assert observed["fact.similar_pace"].evidence["pace_sample_count"] == 2
     assert "5:00/km" in observed["fact.similar_pace"].text
     assert all("intens" not in item.text.lower() for item in observed.values())
+
+
+def test_comparable_history_facts_do_not_require_generic_fourteen_day_baseline():
+    prior = history()
+    for row in prior:
+        row["date"] = row["date"].replace("2026-10", "2026-09")
+    analysis = build_workout_analysis_v2(
+        workout(avg_heart_rate=150, is_race=False), prior,
+    )
+    assert analysis.comparison.available is False
+    assert analysis.comparison.similar.comparable is True
+    assert set(facts(analysis)) == HISTORY_CODES
 
 
 @pytest.mark.parametrize("scenario", ["absent", "single", "unknown_nature", "missing_hr",
@@ -282,6 +403,23 @@ def test_unavailable_or_noncomparable_history_does_not_become_facts(scenario):
     elif scenario == "race_mismatch":
         for row in prior:
             row["is_race"] = True
+    analysis = build_workout_analysis_v2(current, prior)
+    assert analysis.comparison.similar.comparable is False
+    assert facts(analysis) == {}
+
+
+@pytest.mark.parametrize("invalid", [None, True, "bad", float("nan"), float("inf"),
+                                     float("-inf")])
+@pytest.mark.parametrize("metric", ["avg_pace_min_km", "avg_heart_rate"])
+def test_invalid_current_or_historical_metrics_do_not_break_factual_history(invalid, metric):
+    current = workout(avg_heart_rate=150, is_race=False)
+    current[metric] = invalid
+    analysis = build_workout_analysis_v2(current, history())
+    forbidden = "fact.similar_pace" if metric == "avg_pace_min_km" else "fact.similar_hr"
+    assert forbidden not in facts(analysis)
+    prior = history()
+    prior[0][metric] = invalid
+    current[metric] = 5 if metric == "avg_pace_min_km" else 150
     analysis = build_workout_analysis_v2(current, prior)
     assert analysis.comparison.similar.comparable is False
     assert facts(analysis) == {}
