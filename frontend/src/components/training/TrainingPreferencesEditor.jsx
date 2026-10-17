@@ -150,7 +150,10 @@ export default function TrainingPreferencesEditor() {
     const nextDays = selected
       ? draft.preferred_training_days.filter((selectedDay) => selectedDay !== day)
       : DAYS.filter((candidate) => draft.preferred_training_days.includes(candidate) || candidate === day);
-    const nextLongRunDay = nextDays.length && !nextDays.includes(draft.preferred_long_run_day)
+    const removesLongRunDay = selected && draft.preferred_long_run_day === day;
+    const leavesLongRunDayUnselected = nextDays.length
+      && !nextDays.includes(draft.preferred_long_run_day);
+    const nextLongRunDay = removesLongRunDay || leavesLongRunDayUnselected
       ? null
       : draft.preferred_long_run_day;
     updateDraft({

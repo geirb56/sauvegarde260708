@@ -90,6 +90,21 @@ describe("TrainingPreferencesEditor", () => {
     expect(screen.getByTestId("save-training-preferences")).toBeDisabled();
   });
 
+  test("case A: selecting and deselecting a day with no initial preferences restores a clean form", async () => {
+    renderEditor(makeResponse({
+      ...emptyPreferences,
+      active_preferences: emptyPreferences,
+    }));
+    await waitForEditor();
+
+    fireEvent.click(screen.getByTestId("preferred-day-tuesday"));
+    expect(screen.getByTestId("save-training-preferences")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("preferred-day-tuesday"));
+
+    expect(screen.getByTestId("save-training-preferences")).toBeDisabled();
+    expect(axios.patch).not.toHaveBeenCalled();
+  });
+
   test("selects and deselects days, and clears a long-run day when it is deselected", async () => {
     renderEditor(makeResponse({
       preferred_training_days: ["tuesday", "sunday"],
@@ -174,7 +189,7 @@ describe("TrainingPreferencesEditor", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Training preferences saved.");
   });
 
-  test("clears a long-run choice that becomes invalid when the first training day is selected", async () => {
+  test("case B: selecting the first training day clears and patches an existing long-run preference", async () => {
     renderEditor(makeResponse({
       preferred_long_run_day: "sunday",
       active_preferences: {
@@ -207,6 +222,72 @@ describe("TrainingPreferencesEditor", () => {
         { preferred_training_days: ["tuesday"], preferred_long_run_day: null }
       );
     });
+  });
+
+  test("case C: deselecting the last preferred day resets both day fields to null", async () => {
+    renderEditor(makeResponse({
+      preferred_training_days: ["sunday"],
+      preferred_long_run_day: "sunday",
+      active_preferences: {
+        sessions_per_week: 4,
+        preferred_training_days: ["sunday"],
+        preferred_long_run_day: "sunday",
+      },
+    }));
+    await waitForEditor();
+
+    fireEvent.click(screen.getByTestId("preferred-day-sunday"));
+    expect(screen.getByTestId("preferred-long-run-day")).toHaveValue("");
+    fireEvent.click(screen.getByTestId("save-training-preferences"));
+
+    await waitFor(() => {
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/training/v2/preferences"),
+        { preferred_training_days: null, preferred_long_run_day: null }
+      );
+    });
+  });
+
+  test("case D: removing the last preferred day without a long-run day only resets training days", async () => {
+    renderEditor(makeResponse({
+      preferred_training_days: ["tuesday"],
+      preferred_long_run_day: null,
+      active_preferences: {
+        sessions_per_week: 4,
+        preferred_training_days: ["tuesday"],
+        preferred_long_run_day: null,
+      },
+    }));
+    await waitForEditor();
+
+    fireEvent.click(screen.getByTestId("preferred-day-tuesday"));
+    fireEvent.click(screen.getByTestId("save-training-preferences"));
+
+    await waitFor(() => {
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/training/v2/preferences"),
+        { preferred_training_days: null }
+      );
+    });
+  });
+
+  test("case E: reverting a day edit disables save and sends no PATCH", async () => {
+    renderEditor(makeResponse({
+      preferred_training_days: ["tuesday"],
+      active_preferences: {
+        sessions_per_week: 4,
+        preferred_training_days: ["tuesday"],
+        preferred_long_run_day: null,
+      },
+    }));
+    await waitForEditor();
+
+    fireEvent.click(screen.getByTestId("preferred-day-monday"));
+    expect(screen.getByTestId("save-training-preferences")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("preferred-day-monday"));
+
+    expect(screen.getByTestId("save-training-preferences")).toBeDisabled();
+    expect(axios.patch).not.toHaveBeenCalled();
   });
 
   test("changing sessions sends a minimal PATCH and keeps the response active state authoritative", async () => {
