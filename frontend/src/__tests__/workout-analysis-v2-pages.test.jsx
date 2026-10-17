@@ -14,7 +14,7 @@ import { UnitProvider } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
-import { getAnalysisTakeaway } from "@/lib/workoutAnalysis";
+import { getAnalysisTakeaway, getAnalysisObservations, getDistinctCoachObservation } from "@/lib/workoutAnalysis";
 
 jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
@@ -340,7 +340,11 @@ test.each([
   });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
-  expect(screen.getByTestId("session-classification")).toHaveTextContent(structure ? "Structure: Continuous" : "Type: Standard session");
+  if (structure) {
+    expect(screen.getByTestId("session-classification")).toHaveTextContent("Structure: Continuous");
+  } else {
+    expect(screen.queryByTestId("session-classification")).not.toBeInTheDocument();
+  }
   expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
   expect(screen.queryByText(translations.en.workoutDetailExtended.intensityUnavailable)).not.toBeInTheDocument();
@@ -1677,6 +1681,130 @@ const editorialPages = [
     ["DetailedAnalysis", "/workout/w1/analysis", "/workout/:id/analysis", DetailedAnalysis, "detailed-analysis"],
     ["SessionDetail", "/sessions/w1", "/sessions/:id", SessionDetail, "session-detail-page"],
   ];
+
+const factualObservation = (code, text, evidence = { sample_count: 4 }, placement = "summary") => ({
+  code, text, evidence, placement,
+});
+
+test("structured facts override mixed legacy text without requiring intensity", () => {
+  const fact = factualObservation("fact.consistency", "Measured pace consistency: 94.");
+  const payload = {
+   ...analysis,
+   meaning: { ...analysis.meaning, factual_observations: [fact, fact, { ...fact, code: "duplicate" }] },
+  };
+  expect(getAnalysisTakeaway(payload)).toBe(fact.text);
+  expect(getAnalysisObservations(payload)).toEqual([fact.text]);
+  expect(getAnalysisObservations({ ...payload, meaning: {
+   ...payload.meaning, factual_observations: [],
+  } })).toEqual([]);
+});
+
+test.each([null, {}, "invalid", [null, {}, { code: "fact.bad", text: "No proof." }]])(
+  "invalid factual contract %p never falls back to mixed legacy meaning", (facts) => {
+   expect(getAnalysisObservations({
+     ...analysis,
+     meaning: { ...analysis.meaning, factual_observations: facts },
+   })).toEqual([]);
+  },
+);
+
+test.each([
+  ["advice.even_pacing", "fact.pace_change"],
+  ["advice.negative_split_confirmed", "fact.negative_split"],
+  ["advice.maintain_consistency", "fact.pacing_consistency"],
+  ["advice.monitor_hr_drift", "fact.hr_drift_measured"],
+])("does not repeat %s as coach advice when its measured fact is displayed", (adviceCode, factCode) => {
+  expect(getDistinctCoachObservation({
+    ...analysis,
+    advice: { available: true, code: adviceCode, text: "Same measurement, different wording." },
+    meaning: { factual_observations: [factualObservation(factCode, "Measured fact.")] },
+  })).toBeNull();
+});
+
+describe.each(editorialPages)("%s factual observation contract", (_name, route, path, Page, testId) => {
+  test.each(["fr", "en", "es"])("shows backend-localized pace and descriptive HR facts without zones in %s", async (language) => {
+   const texts = {
+     fr: ["Régularité mesurée : 94.", "FC observée : 151 à 159 bpm."],
+     en: ["Measured consistency: 94.", "Observed HR: 151 to 159 bpm."],
+     es: ["Regularidad medida: 94.", "FC observada: 151 a 159 bpm."],
+   }[language];
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     meaning: {
+       ...analysis.meaning,
+       caveats: ["Intensity cannot be classified."],
+       factual_observations: [
+         factualObservation("fact.consistency", texts[0], { consistency_score: 94 }),
+         factualObservation("fact.effort_hr", texts[1], { first_hr: 151, last_hr: 159 }),
+       ],
+     },
+     advice: { available: false },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+   const meaning = await screen.findByTestId("meaning-text");
+   texts.forEach((text) => expect(within(meaning).getByText(text)).toBeVisible());
+   expect(screen.getByTestId(testId)).not.toHaveTextContent(analysis.meaning.text);
+   expect(screen.queryByText("Intensity cannot be classified.")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("available-intensity")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("session-classification")).not.toBeInTheDocument();
+  });
+
+  test("retains phase rows but does not duplicate phase regularity in the takeaway", async () => {
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     phase_analysis: makeStructuredPhaseAnalysis(),
+     meaning: { ...analysis.meaning, factual_observations: [
+       factualObservation("fact.effort_dispersion", "Dispersion already shown in phases.", { dispersion: 7.7 }, "phases"),
+       factualObservation("fact.effort_hr", "Measured HR increases from 151 to 159 bpm."),
+     ] },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   expect(await screen.findByTestId("effort-regularity")).toBeVisible();
+   expect(screen.getByTestId("meaning-text")).toHaveTextContent("Measured HR increases from 151 to 159 bpm.");
+   expect(screen.queryByText("Dispersion already shown in phases.")).not.toBeInTheDocument();
+  });
+
+  test("renders a comparable historical fact without restoring historical panels", async () => {
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     meaning: { ...analysis.meaning, factual_observations: [
+       factualObservation("fact.similar_pace", "Measured pace gap against 3 comparable sessions: -0:06/km.", { pace_sample_count: 3 }),
+     ] },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   expect(await screen.findByTestId("meaning-text")).toHaveTextContent("3 comparable sessions");
+   expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
+  });
+
+  test("no factual evidence and no splits produces no artificial conclusion", async () => {
+   mockAxios({
+     workoutPayload: { ...workout, km_splits: [] },
+     analysisPayload: {
+       ...analysisMissingEvidence,
+       meaning: { ...analysis.meaning, factual_observations: [] },
+       advice: { available: false },
+     },
+   });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   await screen.findByTestId("ask-coach-btn");
+   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("session-classification")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("splits-section")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("session-analysis")).not.toBeInTheDocument();
+  });
+
+  test("FREE cannot request or expose structured factual observations", async () => {
+   setAnalysisAccess({ allowed: false });
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     meaning: { factual_observations: [factualObservation("fact.consistency", "Premium factual observation.")] },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   await screen.findByTestId("analysis-upgrade-notice");
+   expect(screen.queryByText("Premium factual observation.")).not.toBeInTheDocument();
+   expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  });
+});
 
   test.each(editorialPages)("FREE cannot load V2 through %s", async (_name, route, path, Page, testId) => {
     setAnalysisAccess({ allowed: false });
