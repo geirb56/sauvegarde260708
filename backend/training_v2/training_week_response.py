@@ -219,6 +219,8 @@ class WeekV2PlanResponse(BaseModel):
     """PR232A — real Garmin activities of this week that could not be
     attributed to any prescription. Never dropped."""
 
+    reason_codes: List[str] = Field(default_factory=list)
+
 
 class WeekV2TrainingPrefsResponse(BaseModel):
     """Stored user training preferences relevant to weekly planning."""
@@ -227,6 +229,11 @@ class WeekV2TrainingPrefsResponse(BaseModel):
 
     sessions_per_week: Optional[int] = None
     """Stored user preference for sessions/week (if set)."""
+
+    preferred_training_days: Optional[List[str]] = None
+    preferred_long_run_day: Optional[str] = None
+    effective_from: Optional[str] = None
+    active_preferences: dict = Field(default_factory=dict)
 
 
 class TrainingWeekV2Response(BaseModel):

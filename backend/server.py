@@ -25,7 +25,7 @@ import httpx
 import time
 from collections import defaultdict
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict, StrictInt, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -68,6 +68,12 @@ from training_v2.training_response import build_recent_training_response
 from training_v2.today_prescription import resolve_today_final_prescription
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.training_week_response import TrainingWeekV2Response  # PR167
+from training_v2.training_preferences import (
+    TrainingPreferencesPayload,
+    preferences_response,
+    resolve_active_preferences,
+    schedule_preferences,
+)
 from training_v2.daily_runtime_helpers import (
     runtime_session_to_prescription,
     prescription_to_runtime_session,
@@ -2449,19 +2455,6 @@ class TrainingCycleStartDateUpdateRequest(BaseModel):
         return value
 
 
-class TrainingPreferencesPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sessions_per_week: StrictInt = Field(..., description="Preferred sessions per week (2-6).")
-
-    @field_validator("sessions_per_week")
-    @classmethod
-    def validate_sessions_per_week(cls, value: int) -> int:
-        if value not in {2, 3, 4, 5, 6}:
-            raise ValueError("sessions_per_week must be one of: 2, 3, 4, 5, 6.")
-        return value
-
-
 class TrainingPreferencesResponse(BaseModel):
     status: str
     training_prefs: dict
@@ -2675,6 +2668,16 @@ async def update_training_v2_cycle_start_date(
     }
 
 
+async def _load_training_preferences(user_id: str) -> Optional[dict]:
+    documents = await db.training_prefs.find({"user_id": user_id}).limit(2).to_list(2)
+    if len(documents) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Duplicate training preferences require reconciliation before use.",
+        )
+    return documents[0] if documents else None
+
+
 @api_router.patch(
     "/training/v2/preferences",
     response_model=TrainingPreferencesResponse,
@@ -2683,17 +2686,62 @@ async def update_training_v2_preferences(
     payload: TrainingPreferencesPayload,
     user: dict = Depends(auth_user),
 ):
-    await db.training_prefs.update_one(
-        {"user_id": user["id"]},
-        {"$set": {"sessions_per_week": payload.sessions_per_week}},
-        upsert=True,
-    )
-    return {
-        "status": "updated",
-        "training_prefs": {
-            "sessions_per_week": payload.sessions_per_week,
+    reference_date = await _preferences_reference_date(user["id"])
+    changes = payload.model_dump(exclude_unset=True)
+    for _attempt in range(5):
+        document = await _load_training_preferences(user["id"])
+        try:
+            scheduled = schedule_preferences(document, changes, reference_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        revision = (document or {}).get("preferences_revision")
+        scheduled["preferences_revision"] = (revision or 0) + 1
+        if document is None:
+            document_id = user["id"]
+            try:
+                # Mongo's built-in unique _id serializes first writes without
+                # requiring a new user_id index on legacy preference documents.
+                await db.training_prefs.insert_one({
+                    "_id": user["id"], "user_id": user["id"], **scheduled,
+                })
+            except DuplicateKeyError:
+                continue
+        else:
+            document_id = document.get("_id")
+            result = await db.training_prefs.update_one(
+                {"_id": document_id, "user_id": user["id"], "preferences_revision": revision},
+                {"$set": scheduled},
+            )
+            if result.matched_count == 0:
+                continue
+        persisted = await _load_training_preferences(user["id"])
+        if persisted is None or persisted.get("_id") != document_id:
+            raise HTTPException(status_code=409, detail="Preferences document changed; retry the update.")
+        return {
+            "status": "updated",
+            "training_prefs": preferences_response(persisted, reference_date),
+        }
+    raise HTTPException(status_code=409, detail="Preferences changed concurrently; retry the update.")
+
+
+async def _preferences_reference_date(user_id: str) -> date:
+    now_utc = datetime.now(timezone.utc)
+    activities = await db.garmin_activities.find(
+        {"user_id": user_id, "start_time": {"$gte": (now_utc - timedelta(days=90)).isoformat()}},
+        {
+            "_id": 0, "start_time": 1,
+            "garmin_activity.start_time": 1, "garmin_activity.start_time_local": 1,
+            "startTimeGMT": 1, "startTimeLocal": 1,
         },
-    }
+    ).to_list(1000)
+    return _resolve_canonical_reference_date(now_utc, activities)
+
+
+@api_router.get("/training/v2/preferences", response_model=TrainingPreferencesResponse)
+async def get_training_v2_preferences(user: dict = Depends(auth_user)):
+    reference_date = await _preferences_reference_date(user["id"])
+    document = await _load_training_preferences(user["id"])
+    return {"status": "ok", "training_prefs": preferences_response(document, reference_date)}
 
 
 @api_router.delete("/training/goal")
@@ -2863,12 +2911,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # build_canonical_weekly_plan includes WeeklyReconciliation internally.
     # Today's session comes from this reconciled plan — no second WorkoutGenerator,
     # no second WeeklyReconciliation.
-    prefs_doc = await db.training_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
-    sessions_preference = (
-        prefs_doc.get("sessions_per_week")
-        if isinstance(prefs_doc, dict)
-        else None
-    )
+    prefs_doc = await _load_training_preferences(user["id"])
+    active_preferences = resolve_active_preferences(prefs_doc, today)
 
     canonical = build_canonical_weekly_plan(
         workouts=domain_activities_90,
@@ -2878,7 +2922,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         reference_date=today,
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
-        sessions_preference=sessions_preference,
+        training_preferences=active_preferences,
     )
     weekly_plan = canonical.weekly_plan
 
@@ -2895,6 +2939,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "message": "No session planned for today",
             "date": today_iso,
             "day": day_name,
+            # Live plan diagnostics, separate from the frozen served reason_codes.
+            "schedule_reason_codes": list(weekly_plan.reason_codes),
         }
 
     # ── 5bis. C235 (corrective audit) — FAST PATH ─────────────────────────
@@ -3091,6 +3137,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "status": "success",
         "date": today_iso,
         "day": day_name,
+        "schedule_reason_codes": list(weekly_plan.reason_codes),
         # C235 (corrective audit) — canonical snapshot identity, the SAME
         # format /training/v2/week exposes for this same day's session
         # (week_execution.prescription_id_for). Never a new/artificial ID.
@@ -3535,12 +3582,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # ── PR226: canonical resolver — single source of truth ────────────────
     resolved = await _resolve_goal_v2(user_id)
 
-    prefs_doc = await db.training_prefs.find_one({"user_id": user_id}, {"_id": 0})
-    sessions_preference = (
-        prefs_doc.get("sessions_per_week")
-        if isinstance(prefs_doc, dict)
-        else None
-    )
+    prefs_doc = await _load_training_preferences(user_id)
+    active_preferences = resolve_active_preferences(prefs_doc, reference_date)
 
     # ── PR228: canonical builder — single call with reconciliation ────────
     canonical = build_canonical_weekly_plan(
@@ -3551,7 +3594,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         reference_date=reference_date,
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
-        sessions_preference=sessions_preference,
+        training_preferences=active_preferences,
     )
     weekly_target = canonical.reconciled_target
     weekly_plan = canonical.weekly_plan
@@ -3997,11 +4040,10 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             session_count=published_aggregate.session_count,
             sessions=sessions,
             unmatched_actuals=unmatched_actuals,
+            reason_codes=list(weekly_plan.reason_codes),
         ),
         training_prefs=WeekV2TrainingPrefsResponse(
-            sessions_per_week=sessions_preference
-            if isinstance(sessions_preference, int)
-            else None
+            **preferences_response(prefs_doc, reference_date)
         ),
         reconciliation_action=reconciliation_result.action.value,
         reconciliation_reason_codes=list(reconciliation_result.reason_codes),
