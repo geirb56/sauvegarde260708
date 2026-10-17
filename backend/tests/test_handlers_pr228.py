@@ -471,7 +471,12 @@ async def test_preferences_handler_updates_sessions_with_rate_limiter_patched():
 
     assert response["status"] == 200
     assert response["body"]["training_prefs"]["sessions_per_week"] == 4
-    assert fake_db.training_prefs._docs == [{"user_id": _USER_ID, "sessions_per_week": 4}]
+    assert len(fake_db.training_prefs._docs) == 1
+    stored = fake_db.training_prefs._docs[0]
+    assert stored["user_id"] == _USER_ID
+    assert stored["sessions_per_week"] == 4
+    assert stored["effective_from"] == "2025-09-22"
+    assert stored["active_preferences"]["sessions_per_week"] is None
 
 
 @pytest.mark.asyncio

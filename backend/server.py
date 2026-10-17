@@ -2668,6 +2668,16 @@ async def update_training_v2_cycle_start_date(
     }
 
 
+async def _load_training_preferences(user_id: str) -> Optional[dict]:
+    documents = await db.training_prefs.find({"user_id": user_id}).limit(2).to_list(2)
+    if len(documents) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Duplicate training preferences require reconciliation before use.",
+        )
+    return documents[0] if documents else None
+
+
 @api_router.patch(
     "/training/v2/preferences",
     response_model=TrainingPreferencesResponse,
@@ -2679,7 +2689,7 @@ async def update_training_v2_preferences(
     reference_date = await _preferences_reference_date(user["id"])
     changes = payload.model_dump(exclude_unset=True)
     for _attempt in range(5):
-        document = await db.training_prefs.find_one({"user_id": user["id"]})
+        document = await _load_training_preferences(user["id"])
         try:
             scheduled = schedule_preferences(document, changes, reference_date)
         except ValueError as exc:
@@ -2687,6 +2697,7 @@ async def update_training_v2_preferences(
         revision = (document or {}).get("preferences_revision")
         scheduled["preferences_revision"] = (revision or 0) + 1
         if document is None:
+            document_id = user["id"]
             try:
                 # Mongo's built-in unique _id serializes first writes without
                 # requiring a new user_id index on legacy preference documents.
@@ -2696,13 +2707,16 @@ async def update_training_v2_preferences(
             except DuplicateKeyError:
                 continue
         else:
+            document_id = document.get("_id")
             result = await db.training_prefs.update_one(
-                {"user_id": user["id"], "preferences_revision": revision},
+                {"_id": document_id, "user_id": user["id"], "preferences_revision": revision},
                 {"$set": scheduled},
             )
             if result.matched_count == 0:
                 continue
-        persisted = await db.training_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+        persisted = await _load_training_preferences(user["id"])
+        if persisted is None or persisted.get("_id") != document_id:
+            raise HTTPException(status_code=409, detail="Preferences document changed; retry the update.")
         return {
             "status": "updated",
             "training_prefs": preferences_response(persisted, reference_date),
@@ -2714,7 +2728,11 @@ async def _preferences_reference_date(user_id: str) -> date:
     now_utc = datetime.now(timezone.utc)
     activities = await db.garmin_activities.find(
         {"user_id": user_id, "start_time": {"$gte": (now_utc - timedelta(days=90)).isoformat()}},
-        {"_id": 0},
+        {
+            "_id": 0, "start_time": 1,
+            "garmin_activity.start_time": 1, "garmin_activity.start_time_local": 1,
+            "startTimeGMT": 1, "startTimeLocal": 1,
+        },
     ).to_list(1000)
     return _resolve_canonical_reference_date(now_utc, activities)
 
@@ -2722,7 +2740,7 @@ async def _preferences_reference_date(user_id: str) -> date:
 @api_router.get("/training/v2/preferences", response_model=TrainingPreferencesResponse)
 async def get_training_v2_preferences(user: dict = Depends(auth_user)):
     reference_date = await _preferences_reference_date(user["id"])
-    document = await db.training_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+    document = await _load_training_preferences(user["id"])
     return {"status": "ok", "training_prefs": preferences_response(document, reference_date)}
 
 
@@ -2893,7 +2911,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # build_canonical_weekly_plan includes WeeklyReconciliation internally.
     # Today's session comes from this reconciled plan — no second WorkoutGenerator,
     # no second WeeklyReconciliation.
-    prefs_doc = await db.training_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+    prefs_doc = await _load_training_preferences(user["id"])
     active_preferences = resolve_active_preferences(prefs_doc, today)
 
     canonical = build_canonical_weekly_plan(
@@ -3564,7 +3582,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # ── PR226: canonical resolver — single source of truth ────────────────
     resolved = await _resolve_goal_v2(user_id)
 
-    prefs_doc = await db.training_prefs.find_one({"user_id": user_id}, {"_id": 0})
+    prefs_doc = await _load_training_preferences(user_id)
     active_preferences = resolve_active_preferences(prefs_doc, reference_date)
 
     # ── PR228: canonical builder — single call with reconciliation ────────
