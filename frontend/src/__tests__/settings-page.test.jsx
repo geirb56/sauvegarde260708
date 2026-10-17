@@ -58,8 +58,28 @@ function createApiState({
     activity_count: 18,
     sync_status: { status: "complete", activities_count: 18 },
   },
+  preferences,
 } = {}) {
-  return { cycle, week, userGoal, garminStatus };
+  return {
+    cycle,
+    week,
+    userGoal,
+    garminStatus,
+    preferences: preferences || {
+      status: "ok",
+      training_prefs: {
+        sessions_per_week: week.training_prefs?.sessions_per_week ?? 4,
+        preferred_training_days: null,
+        preferred_long_run_day: null,
+        effective_from: null,
+        active_preferences: {
+          sessions_per_week: week.training_prefs?.sessions_per_week ?? 4,
+          preferred_training_days: null,
+          preferred_long_run_day: null,
+        },
+      },
+    },
+  };
 }
 
 function mockAxiosApi(state = createApiState(), { postImplementation, patchImplementation } = {}) {
@@ -67,6 +87,7 @@ function mockAxiosApi(state = createApiState(), { postImplementation, patchImple
   axios.get.mockImplementation((url) => {
     if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: state.cycle });
     if (url.includes("/training/v2/week")) return Promise.resolve({ data: state.week });
+    if (url.includes("/training/v2/preferences")) return Promise.resolve({ data: state.preferences });
     if (url.includes("/user/goal")) return Promise.resolve({ data: state.userGoal });
     if (url.includes("/garmin/status")) return Promise.resolve({ data: state.garminStatus });
     return Promise.reject(new Error(`Unexpected GET ${url}`));
@@ -80,6 +101,20 @@ function mockAxiosApi(state = createApiState(), { postImplementation, patchImple
   });
   axios.patch.mockImplementation((url, payload) => {
     if (patchImplementation) return patchImplementation(url, payload);
+    if (url.includes("/training/v2/preferences")) {
+      const current = state.preferences.training_prefs;
+      const activePreferences = current.active_preferences || current;
+      state.preferences = {
+        status: "updated",
+        training_prefs: {
+          ...current,
+          ...payload,
+          effective_from: "2026-09-21",
+          active_preferences: activePreferences,
+        },
+      };
+      return Promise.resolve({ data: state.preferences });
+    }
     return Promise.resolve({ data: { success: true } });
   });
 }
@@ -175,7 +210,7 @@ describe("Settings UX V2", () => {
       expect(axios.get.mock.calls).toHaveLength(1);
     } else {
       expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
-      ["/training/v2/cycle", "/training/v2/week", "/user/goal"].forEach((endpoint) => {
+      ["/training/v2/cycle", "/user/goal", "/training/v2/preferences"].forEach((endpoint) => {
         expect(axios.get).toHaveBeenCalledWith(expect.stringContaining(endpoint));
       });
     }
@@ -233,7 +268,7 @@ describe("Settings UX V2", () => {
 
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.queryByTestId("settings-plan-locked")).not.toBeInTheDocument();
-    ["/training/v2/cycle", "/training/v2/week", "/user/goal"].forEach((endpoint) => {
+    ["/training/v2/cycle", "/user/goal", "/training/v2/preferences"].forEach((endpoint) => {
       expect(axios.get).toHaveBeenCalledWith(expect.stringContaining(endpoint));
     });
     await screen.findByTestId("settings-garmin-sync");
@@ -250,7 +285,7 @@ describe("Settings UX V2", () => {
 
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("4 sessions/week");
-    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("Maximum sessions per week");
+    expect(await screen.findByTestId("settings-sessions-current")).toHaveTextContent("Maximum sessions per week");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("RunIndex may schedule fewer sessions based on training state and plan safeguards.");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Aug 27, 2026");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Update the canonical Training V2 cycle anchor used by Settings and Training V2.");
@@ -289,7 +324,8 @@ describe("Settings UX V2", () => {
 
     const calledUrls = axios.get.mock.calls.map(([url]) => String(url));
     expect(calledUrls.some((url) => url.includes("/training/v2/cycle"))).toBe(true);
-    expect(calledUrls.some((url) => url.includes("/training/v2/week"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/training/v2/preferences"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/training/v2/week"))).toBe(false);
     expect(calledUrls.some((url) => url.includes("/training/full-cycle"))).toBe(false);
   });
 
@@ -446,7 +482,7 @@ describe("Settings UX V2", () => {
     const enView = renderPage({ lang: "en" });
 
     expect(await screen.findByText("Training Plan")).toBeInTheDocument();
-    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("Maximum sessions per week");
+    expect(await screen.findByTestId("settings-sessions-current")).toHaveTextContent("Maximum sessions per week");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("RunIndex may schedule fewer sessions based on training state and plan safeguards.");
     expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Remove race");
     expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Remove target time");
@@ -598,6 +634,8 @@ describe("Settings UX V2", () => {
     expect(screen.getByTestId("settings-sessions-grid").className).toContain("grid-cols-5");
 
     fireEvent.click(screen.getByTestId("sessions-per-week-btn-5"));
+    expect(screen.getByTestId("save-training-preferences")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("save-training-preferences"));
 
     await waitFor(() => {
       expect(axios.patch).toHaveBeenCalledWith(
@@ -605,7 +643,7 @@ describe("Settings UX V2", () => {
         { sessions_per_week: 5 }
       );
       expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/refresh"))).toBe(false);
-      expect(toast.success).toHaveBeenCalledWith("Maximum de 5 séances/semaine enregistré");
+      expect(screen.getByRole("status")).toHaveTextContent("Préférences d'entraînement enregistrées.");
     });
   });
 

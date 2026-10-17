@@ -17,6 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import UserIdentityAvatar from "@/components/UserIdentityAvatar";
+import TrainingPreferencesEditor from "@/components/training/TrainingPreferencesEditor";
 import { useAuth } from "@/context/AuthContext";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
@@ -37,7 +38,6 @@ const GOAL_OPTIONS = [
   { value: "MAINTENANCE", translationKey: "onboarding.goalLabels.MAINTENANCE", cycleValue: "maintenance", distanceType: null, hasRaceSettings: false },
 ];
 
-const SUPPORTED_SESSION_VALUES = [2, 3, 4, 5, 6];
 const TERMINAL_SYNC_STATUSES = new Set(["complete", "partial_success", "failed"]);
 const SUPPORTED_CYCLE_STATUSES = new Set(["active", "upcoming", "completed"]);
 
@@ -222,7 +222,6 @@ export default function Settings() {
   const [planLoading, setPlanLoading] = useState(true);
   const [planError, setPlanError] = useState("");
   const [trainingGoal, setTrainingGoal] = useState(null);
-  const [sessionsPerWeek, setSessionsPerWeek] = useState(null);
   const [planStartDate, setPlanStartDate] = useState(null);
   const [planStartDateDraft, setPlanStartDateDraft] = useState("");
   const [cycleStatus, setCycleStatus] = useState(null);
@@ -270,13 +269,12 @@ export default function Settings() {
 
     setPlanLoading(true);
     setPlanError("");
-    const [cycleV2Result, weekV2Result, userGoalResult] = await Promise.allSettled([
+    const [cycleV2Result, userGoalResult] = await Promise.allSettled([
       axios.get(`${API}/training/v2/cycle`),
-      axios.get(`${API}/training/v2/week`),
       axios.get(`${API}/user/goal`),
     ]);
 
-    const nextError = cycleV2Result.status === "rejected" || weekV2Result.status === "rejected"
+    const nextError = cycleV2Result.status === "rejected"
       ? "settingsV2.plan.loadError"
       : "";
 
@@ -291,13 +289,6 @@ export default function Settings() {
       setPlanStartDate(null);
       setPlanStartDateDraft("");
       setCycleStatus(null);
-    }
-
-    if (weekV2Result.status === "fulfilled") {
-      const sessionCount = weekV2Result.value.data?.training_prefs?.sessions_per_week;
-      setSessionsPerWeek(SUPPORTED_SESSION_VALUES.includes(sessionCount) ? sessionCount : null);
-    } else {
-      setSessionsPerWeek(null);
     }
 
     if (userGoalResult.status === "fulfilled" && userGoalResult.value.data) {
@@ -388,30 +379,6 @@ export default function Settings() {
       console.error("Failed to update training goal:", error);
       setPlanAction({ status: "error", message: t("settingsV2.plan.goalUpdateError") });
       toast.error(t("settingsV2.plan.goalUpdateError"));
-    }
-  };
-
-  const handleSetSessions = async (value) => {
-    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
-    try {
-      await axios.patch(`${API}/training/v2/preferences`, {
-        sessions_per_week: value,
-      });
-      const reloadSucceeded = await loadPlanSettings();
-      if (!reloadSucceeded) {
-        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
-        toast.error(t("settingsV2.plan.loadError"));
-        return;
-      }
-      setPlanAction({
-        status: "saved",
-        message: t("settingsV2.plan.sessionsUpdated").replace("{count}", String(value)),
-      });
-      toast.success(t("settingsV2.plan.sessionsUpdated").replace("{count}", String(value)));
-    } catch (error) {
-      console.error("Failed to update sessions per week:", error);
-      setPlanAction({ status: "error", message: t("settingsV2.plan.sessionsUpdateError") });
-      toast.error(t("settingsV2.plan.sessionsUpdateError"));
     }
   };
 
@@ -616,9 +583,6 @@ export default function Settings() {
   const currentGoalLabel = selectedGoalOption
     ? t(selectedGoalOption.translationKey)
     : t("settingsV2.common.missing");
-  const currentSessionsLabel = sessionsPerWeek
-    ? t("settingsV2.plan.sessionsValue").replace("{count}", String(sessionsPerWeek))
-    : t("settingsV2.common.missing");
   const planStartLabel = planStartDate
     ? formatIsoDate(planStartDate, locale)
     : t("settingsV2.common.missing");
@@ -736,33 +700,7 @@ export default function Settings() {
                 )}
               </div>
 
-              <SettingRow
-                label={t("settingsV2.plan.sessions")}
-                value={currentSessionsLabel}
-                helper={t("settingsV2.plan.sessionsHelp")}
-                testId="settings-sessions-current"
-              />
-
-              <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-sessions-options">
-                <div className="grid grid-cols-5 gap-2" data-testid="settings-sessions-grid">
-                  {SUPPORTED_SESSION_VALUES.map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`rounded-xl border px-3 py-3 text-sm font-semibold transition-colors ${
-                        sessionsPerWeek === value
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border bg-card text-foreground hover:border-primary/40"
-                      }`}
-                      data-testid={`sessions-per-week-btn-${value}`}
-                      disabled={planAction.status === "saving"}
-                      onClick={() => handleSetSessions(value)}
-                    >
-                      {value}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <TrainingPreferencesEditor />
 
               <SettingRow
                 label={t("settingsV2.plan.startDate")}
