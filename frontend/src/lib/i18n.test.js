@@ -44,6 +44,20 @@ describe("i18n auth coverage", () => {
     });
   });
 
+  test("training preference labels and interpolation placeholders match in FR/EN/ES", () => {
+    const reference = translations.en.settingsV2.plan.preferences;
+    ["fr", "en", "es"].forEach((language) => {
+      const labels = translations[language].settingsV2.plan.preferences;
+      expect(Object.keys(labels).sort()).toEqual(Object.keys(reference).sort());
+      Object.entries(reference).forEach(([key, value]) => {
+        expect(labels[key]).toEqual(expect.any(String));
+        expect(labels[key].trim()).not.toBe("");
+        expect((labels[key].match(/\{[^}]+\}/g) || []).sort()).toEqual((value.match(/\{[^}]+\}/g) || []).sort());
+        expect(getTranslation(language, `settingsV2.plan.preferences.${key}`)).toBe(labels[key]);
+      });
+    });
+  });
+
   test("auth keys exist in all supported languages", () => {
     const requiredKeys = [
       "auth.signIn",

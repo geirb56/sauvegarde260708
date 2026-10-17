@@ -34,7 +34,7 @@ const toDraft = (preferences) => ({
 
 const hasPreferences = (preferences) => (
   preferences.sessions_per_week != null
-  || preferences.preferred_training_days != null
+  || (Array.isArray(preferences.preferred_training_days) && preferences.preferred_training_days.length > 0)
   || preferences.preferred_long_run_day != null
 );
 
@@ -65,13 +65,13 @@ const formatDate = (value, locale) => {
 
 const getErrorMessage = (error, t) => {
   const status = error?.response?.status;
-  if (status === 401) return t("settingsV2.preferences.authError");
-  if (status === 409) return t("settingsV2.preferences.conflictError");
+  if (status === 401) return t("settingsV2.plan.preferences.authError");
+  if (status === 409) return t("settingsV2.plan.preferences.conflictError");
   if (status === 422) {
-    return t("settingsV2.preferences.validationError");
+    return t("settingsV2.plan.preferences.validationError");
   }
-  if (!error?.response) return t("settingsV2.preferences.networkError");
-  return t("settingsV2.preferences.saveError");
+  if (!error?.response) return t("settingsV2.plan.preferences.networkError");
+  return t("settingsV2.plan.preferences.saveError");
 };
 
 export default function TrainingPreferencesEditor() {
@@ -134,7 +134,7 @@ export default function TrainingPreferencesEditor() {
   const dayLabel = (day) => t(`trainingPlanDays.${day}`);
   const activeDaysLabel = active.preferred_training_days.length
     ? active.preferred_training_days.map(dayLabel).join(", ")
-    : t("settingsV2.preferences.none");
+    : t("settingsV2.plan.preferences.none");
   const visibleLongRunDays = draft.preferred_training_days.length
     ? draft.preferred_training_days
     : DAYS;
@@ -150,9 +150,12 @@ export default function TrainingPreferencesEditor() {
     const nextDays = selected
       ? draft.preferred_training_days.filter((selectedDay) => selectedDay !== day)
       : DAYS.filter((candidate) => draft.preferred_training_days.includes(candidate) || candidate === day);
+    const nextLongRunDay = nextDays.length && !nextDays.includes(draft.preferred_long_run_day)
+      ? null
+      : draft.preferred_long_run_day;
     updateDraft({
       preferred_training_days: nextDays,
-      ...(selected && draft.preferred_long_run_day === day ? { preferred_long_run_day: null } : {}),
+      preferred_long_run_day: nextLongRunDay,
     });
   };
 
@@ -171,6 +174,15 @@ export default function TrainingPreferencesEditor() {
     if (draft.preferred_long_run_day !== desired.preferred_long_run_day) {
       payload.preferred_long_run_day = draft.preferred_long_run_day;
     }
+    const nextTrainingDays = Object.prototype.hasOwnProperty.call(payload, "preferred_training_days")
+      ? payload.preferred_training_days
+      : desired.preferred_training_days;
+    const nextLongRunDay = Object.prototype.hasOwnProperty.call(payload, "preferred_long_run_day")
+      ? payload.preferred_long_run_day
+      : desired.preferred_long_run_day;
+    if (nextTrainingDays?.length && nextLongRunDay && !nextTrainingDays.includes(nextLongRunDay)) {
+      payload.preferred_long_run_day = null;
+    }
     if (!Object.keys(payload).length) return;
 
     savingRef.current = true;
@@ -185,7 +197,7 @@ export default function TrainingPreferencesEditor() {
         const reloaded = await loadPreferences();
         if (!reloaded) return;
       }
-      setSavedMessage(t("settingsV2.preferences.saved"));
+      setSavedMessage(t("settingsV2.plan.preferences.saved"));
     } catch (error) {
       setErrorMessage(getErrorMessage(error, t));
     } finally {
@@ -208,7 +220,7 @@ export default function TrainingPreferencesEditor() {
       <div className="space-y-3" data-testid="training-preferences-load-error">
         <p className="text-sm text-destructive">{loadError}</p>
         <Button type="button" variant="outline" onClick={loadPreferences}>
-          {t("settingsV2.preferences.retry")}
+          {t("settingsV2.plan.preferences.retry")}
         </Button>
       </div>
     );
@@ -253,10 +265,10 @@ export default function TrainingPreferencesEditor() {
 
       <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="preferred-training-days">
         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-          {t("settingsV2.preferences.trainingDays")}
+          {t("settingsV2.plan.preferences.trainingDays")}
         </p>
         <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-          {t("settingsV2.preferences.trainingDaysHelp")}
+          {t("settingsV2.plan.preferences.trainingDaysHelp")}
         </p>
         <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
           {DAYS.map((day) => {
@@ -281,7 +293,7 @@ export default function TrainingPreferencesEditor() {
           })}
         </div>
         <label className="mt-4 block text-sm font-medium text-foreground" htmlFor="preferred-long-run-day">
-          {t("settingsV2.preferences.longRunDay")}
+          {t("settingsV2.plan.preferences.longRunDay")}
         </label>
         <select
           id="preferred-long-run-day"
@@ -291,7 +303,7 @@ export default function TrainingPreferencesEditor() {
           disabled={saving}
           onChange={(event) => updateDraft({ preferred_long_run_day: event.target.value || null })}
         >
-          <option value="">{t("settingsV2.preferences.none")}</option>
+          <option value="">{t("settingsV2.plan.preferences.none")}</option>
           {visibleLongRunDays.map((day) => (
             <option key={day} value={day}>{dayLabel(day)}</option>
           ))}
@@ -300,23 +312,23 @@ export default function TrainingPreferencesEditor() {
 
       <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="active-training-preferences">
         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-          {t("settingsV2.preferences.activeTitle")}
+          {t("settingsV2.plan.preferences.activeTitle")}
         </p>
         {!hasPreferences(activePreferences) ? (
-          <p className="mt-1 text-sm text-muted-foreground">{t("settingsV2.preferences.empty")}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t("settingsV2.plan.preferences.empty")}</p>
         ) : (
           <>
             {active.sessions_per_week ? (
               <p className="mt-1 text-sm text-foreground">
-                {t("settingsV2.preferences.activeSessions").replace("{count}", String(active.sessions_per_week))}
+                {t("settingsV2.plan.preferences.activeSessions").replace("{count}", String(active.sessions_per_week))}
               </p>
             ) : null}
             <p className="mt-1 text-sm text-foreground">
-              {t("settingsV2.preferences.activeDays").replace("{days}", activeDaysLabel)}
+              {t("settingsV2.plan.preferences.activeDays").replace("{days}", activeDaysLabel)}
             </p>
             {active.preferred_long_run_day ? (
               <p className="mt-1 text-sm text-muted-foreground">
-                {t("settingsV2.preferences.activeLongRun").replace("{day}", dayLabel(active.preferred_long_run_day))}
+                {t("settingsV2.plan.preferences.activeLongRun").replace("{day}", dayLabel(active.preferred_long_run_day))}
               </p>
             ) : null}
           </>
@@ -325,7 +337,7 @@ export default function TrainingPreferencesEditor() {
 
       {hasPendingChanges && effectiveDate ? (
         <p className="text-sm text-muted-foreground" data-testid="training-preferences-effective-date">
-          {t("settingsV2.preferences.effectiveFrom").replace("{date}", effectiveDate)}
+          {t("settingsV2.plan.preferences.effectiveFrom").replace("{date}", effectiveDate)}
         </p>
       ) : null}
       {errorMessage ? <p className="text-sm text-destructive" role="alert">{errorMessage}</p> : null}
@@ -337,7 +349,7 @@ export default function TrainingPreferencesEditor() {
         data-testid="save-training-preferences"
       >
         {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-        {saving ? t("settingsV2.common.saving") : t("settingsV2.preferences.save")}
+        {saving ? t("settingsV2.common.saving") : t("settingsV2.plan.preferences.save")}
       </Button>
     </div>
   );
