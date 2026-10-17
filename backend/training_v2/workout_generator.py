@@ -1525,7 +1525,10 @@ def build_weekly_plan(
             else:
                 index = next(i for i, session in enumerate(remaining) if session.workout_type == kind)
                 assigned.append(remaining.pop(index).model_copy(update={"day": day}))
-        sessions = assigned
+        if remaining:
+            preference_codes.append("PREFERRED_TRAINING_DAYS_FALLBACK")
+        else:
+            sessions = assigned
         reason_codes = _merge_reason_codes(reason_codes, preference_codes)
 
     # --- ensure immutability of session list --------------------------------

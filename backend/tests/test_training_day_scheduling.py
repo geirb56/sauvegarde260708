@@ -146,6 +146,29 @@ def test_next_monday_race_keeps_guard_reductions_without_preference_induced_loss
     assert "PREFERRED_TRAINING_DAYS_FALLBACK" in preferred.reason_codes
 
 
+def test_cross_week_preference_pass_cannot_discard_surviving_sessions(monkeypatch):
+    import training_v2.workout_generator as generator
+
+    target = _wt_duration(90, sessions=3)
+    race_date = REF + timedelta(days=7)
+    baseline = _build(target, _profile(), phase="taper", race_date=race_date)
+    original_assign = generator._assign_days
+
+    def tighter_calendar(slots, profile, **kwargs):
+        skeleton, codes = original_assign(slots, profile, **kwargs)
+        if kwargs.get("allowed_training_days") is not None:
+            day_to_remove = next(day for day, kind in skeleton if kind != "rest")
+            skeleton = [(day, "rest" if day == day_to_remove else kind) for day, kind in skeleton]
+        return skeleton, codes
+
+    monkeypatch.setattr(generator, "_assign_days", tighter_calendar)
+    preferred = _build(target, _profile(["tuesday", "thursday"]), phase="taper", race_date=race_date)
+    assert preferred.sessions == baseline.sessions
+    assert preferred.session_count == baseline.session_count
+    assert preferred.planned_duration_minutes == baseline.planned_duration_minutes
+    assert "PREFERRED_TRAINING_DAYS_FALLBACK" in preferred.reason_codes
+
+
 def test_preference_order_does_not_change_deterministic_plan():
     days = ["tuesday", "thursday", "sunday"]
     target = _wt_distance(30, sessions=3)
