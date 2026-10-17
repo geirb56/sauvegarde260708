@@ -644,24 +644,36 @@ def _template(language: str, key: str, **params) -> str:
     }
     factual_templates = {
         "en": {
-            "fact.pacing_consistency": "Recorded pacing consistency score: {score}/100.",
-            "fact.pace_change": "Recorded pace change: {change} ({direction}).",
-            "fact.hr_drift_measured": "Recorded heart-rate drift: {drift} bpm.",
-            "fact.effort_hr_evolution": "Mean heart rate changes from {first} to {last} bpm between measured comparable efforts {first_number} and {last_number}.",
+            "fact.pacing_consistency": "Your pace scored {score}/100 for consistency.",
+            "fact.pace_change.slower": "Your pace slowed by {seconds} seconds per kilometre.",
+            "fact.pace_change.faster": "Your pace was {seconds} seconds per kilometre faster.",
+            "fact.hr_drift_measured": "Your measured heart-rate drift was {drift} bpm.",
+            "fact.faster_second_half": "Your second half was faster than your first.",
+            "fact.history_pace": "Over the last {days} days, your {count} comparable sessions averaged {baseline}. Your pace difference on this session: {delta}.",
+            "fact.history_hr": "Your {count} comparable sessions averaged {baseline} bpm. Your heart-rate difference on this session: {delta} bpm.",
+            "fact.effort_hr_evolution": "Your average heart rate went from {first} to {last} bpm between comparable repetitions {first_number} and {last_number}.",
             "fact.comparable_effort_extremes": "Among the {count} measured comparable efforts, effort {fastest} was fastest ({fast_pace}); effort {slowest} was slowest ({slow_pace}).",
         },
         "fr": {
-            "fact.pacing_consistency": "Score de régularité de l'allure enregistré : {score}/100.",
-            "fact.pace_change": "Variation d'allure enregistrée : {change} ({direction}).",
-            "fact.hr_drift_measured": "Dérive cardiaque enregistrée : {drift} bpm.",
-            "fact.effort_hr_evolution": "La fréquence cardiaque moyenne passe de {first} à {last} bpm entre les efforts comparables mesurés {first_number} et {last_number}.",
+            "fact.pacing_consistency": "Ton allure obtient {score}/100 pour sa régularité.",
+            "fact.pace_change.slower": "Ton allure a ralenti de {seconds} secondes par kilomètre.",
+            "fact.pace_change.faster": "Ton allure a accéléré de {seconds} secondes par kilomètre.",
+            "fact.hr_drift_measured": "Ta dérive cardiaque mesurée est de {drift} bpm.",
+            "fact.faster_second_half": "Ta seconde moitié a été plus rapide que la première.",
+            "fact.history_pace": "Sur les {days} derniers jours, tes {count} séances comparables étaient courues en moyenne à {baseline}. Ton écart d'allure sur cette séance : {delta}.",
+            "fact.history_hr": "Tes {count} séances comparables avaient une fréquence cardiaque moyenne de {baseline} bpm. Ton écart sur cette séance : {delta} bpm.",
+            "fact.effort_hr_evolution": "Ta fréquence cardiaque moyenne est passée de {first} à {last} bpm entre les répétitions comparables {first_number} et {last_number}.",
             "fact.comparable_effort_extremes": "Parmi les {count} efforts comparables mesurés, l'effort {fastest} est le plus rapide ({fast_pace}) ; l'effort {slowest} est le plus lent ({slow_pace}).",
         },
         "es": {
-            "fact.pacing_consistency": "Puntuación de regularidad del ritmo registrada: {score}/100.",
-            "fact.pace_change": "Cambio de ritmo registrado: {change} ({direction}).",
-            "fact.hr_drift_measured": "Deriva cardíaca registrada: {drift} bpm.",
-            "fact.effort_hr_evolution": "La frecuencia cardíaca media pasa de {first} a {last} bpm entre los esfuerzos comparables medidos {first_number} y {last_number}.",
+            "fact.pacing_consistency": "Tu ritmo obtiene {score}/100 en regularidad.",
+            "fact.pace_change.slower": "Tu ritmo fue {seconds} segundos por kilómetro más lento.",
+            "fact.pace_change.faster": "Tu ritmo fue {seconds} segundos por kilómetro más rápido.",
+            "fact.hr_drift_measured": "Tu deriva cardíaca medida fue de {drift} bpm.",
+            "fact.faster_second_half": "Tu segunda mitad fue más rápida que la primera.",
+            "fact.history_pace": "En los últimos {days} días, tus {count} sesiones comparables tuvieron un ritmo medio de {baseline}. Tu diferencia de ritmo en esta sesión: {delta}.",
+            "fact.history_hr": "Tus {count} sesiones comparables tuvieron una frecuencia cardíaca media de {baseline} bpm. Tu diferencia en esta sesión: {delta} bpm.",
+            "fact.effort_hr_evolution": "Tu frecuencia cardíaca media pasó de {first} a {last} bpm entre las repeticiones comparables {first_number} y {last_number}.",
             "fact.comparable_effort_extremes": "Entre los {count} esfuerzos comparables medidos, el esfuerzo {fastest} fue el más rápido ({fast_pace}); el esfuerzo {slowest} fue el más lento ({slow_pace}).",
         },
     }
@@ -1939,10 +1951,10 @@ def _build_factual_observations(
         drop = split_analysis.get("pace_drop")
         if _valid_finite_number(drop) and abs(drop) >= 0.4:
             add("fact.pace_change", {"pace_drop_min_km": drop},
-                change=_fmt_pace_delta(drop),
-                direction=_template(language, "pace.slower" if drop > 0 else "pace.faster"))
+                template_key="fact.pace_change.slower" if drop > 0 else "fact.pace_change.faster",
+                seconds=_phase_number(abs(drop) * 60, 1, language))
         if split_analysis.get("negative_split") is True:
-            add("fact.negative_split", {"negative_split": 1})
+            add("fact.negative_split", {"negative_split": 1}, template_key="fact.faster_second_half")
 
     if not multi_effort and _valid_finite_number(physiology.hr_drift):
         add("fact.hr_drift_measured", {"hr_drift_bpm": physiology.hr_drift},
@@ -2001,7 +2013,7 @@ def _build_factual_observations(
                 "pace_avg_distance_km": similar.pace_avg_distance_km,
                 "period_days": similar.period_days,
                 "distance_tolerance_pct": similar.distance_tolerance_pct,
-            }, count=similar.pace_sample_count, days=similar.period_days,
+            }, template_key="fact.history_pace", count=similar.pace_sample_count, days=similar.period_days,
                 tolerance=_fmt_number(similar.distance_tolerance_pct, 0),
                 avg_distance=_fmt_number(similar.pace_avg_distance_km, 2),
                 baseline=_fmt_pace(similar.avg_pace_min_km),
@@ -2014,7 +2026,7 @@ def _build_factual_observations(
                 "hr_sample_count": similar.hr_sample_count,
                 "baseline_heart_rate_bpm": similar.avg_heart_rate,
                 "heart_rate_difference_bpm": similar.heart_rate_difference_bpm,
-            }, count=similar.hr_sample_count, baseline=_fmt_number(similar.avg_heart_rate, 1),
+            }, template_key="fact.history_hr", count=similar.hr_sample_count, baseline=_fmt_number(similar.avg_heart_rate, 1),
                 delta=_fmt_signed(similar.heart_rate_difference_bpm, 1))
     return facts
 

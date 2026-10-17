@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { formatPaceDisplay } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 
 const formatDuration = (seconds) => {
   if (!Number.isFinite(seconds) || seconds < 0) return null;
@@ -41,10 +41,7 @@ const getPhaseMetrics = (phase, t) => [
 const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
   if (phaseAnalysis?.available !== true) return null;
 
-  const recordedPhases = Array.isArray(phaseAnalysis.phases) && phaseAnalysis.phases.length > 0
-    ? phaseAnalysis.phases
-    : [...(phaseAnalysis.efforts || []), ...(phaseAnalysis.recoveries || [])];
-  const phases = sortPhases(recordedPhases);
+  const phases = sortPhases(getRenderableAnalysisPhases(phaseAnalysis));
   if (phases.length === 0) return null;
 
   const efforts = phases.filter((phase) => phase?.phase_type === "effort");

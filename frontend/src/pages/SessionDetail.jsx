@@ -17,7 +17,7 @@ import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits"
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { getDistinctCoachObservation, getSessionClassification, getAnalysisObservations } from "@/lib/workoutAnalysis";
+import { getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 
@@ -125,9 +125,10 @@ export default function SessionDetail() {
   const classification = getSessionClassification(analysisForRender, t);
   const observation = getDistinctCoachObservation(analysisForRender);
   const observations = getAnalysisObservations(analysisForRender);
+  const fallback = getAnalysisFallback(analysisForRender, t);
 
   return (
-    <div className="p-4 pb-24 space-y-4" data-testid="session-detail-page">
+    <div className="min-w-0 break-words p-4 pb-24 space-y-4" data-testid="session-detail-page">
       <div className="space-y-3">
         <Link to="/sessions" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
           <ArrowLeft className="h-4 w-4" />
@@ -178,7 +179,7 @@ export default function SessionDetail() {
       />
 
       {canAccessAnalysis ? <>
-        {analysisForRender && (observations.length > 0 || classification || observation
+        {analysisForRender && (observations.length > 0 || fallback || classification || observation
           || (analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text)) && <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -188,6 +189,7 @@ export default function SessionDetail() {
         {observations.length > 0 && <div className="space-y-2 text-sm leading-6" data-testid="meaning-text">
           {observations.map((text) => <p key={text}>{text}</p>)}
         </div>}
+        {fallback && <p className="text-sm leading-6 text-muted-foreground" data-testid="analysis-fallback">{fallback}</p>}
         {classification && <p className="text-sm text-muted-foreground" data-testid="session-classification">{classification.label}: {classification.text}</p>}
         {analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text && (
           <p className="text-sm">{t("analysis.intensity")}: {analysisForRender.signals.intensity.text}</p>

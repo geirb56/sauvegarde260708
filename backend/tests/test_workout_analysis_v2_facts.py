@@ -76,7 +76,7 @@ def test_factual_pacing_and_drift_do_not_depend_on_intensity(language):
     assert analysis.signals.intensity.available is False
     assert observed["fact.pace_change"].evidence == {"pace_drop_min_km": 0.5}
     assert observed["fact.hr_drift_measured"].evidence == {"hr_drift_bpm": 3.5}
-    assert "+0:30/km" in observed["fact.pace_change"].text
+    assert "30" in observed["fact.pace_change"].text
     assert all(item.placement == "summary" for item in observed.values())
     assert all("intens" not in item.text.lower() for item in observed.values())
     assert all("cause" not in item.text.lower() for item in observed.values())
@@ -85,9 +85,9 @@ def test_factual_pacing_and_drift_do_not_depend_on_intensity(language):
         assert item.evidence
         assert all(math.isfinite(value) for value in item.evidence.values())
     expected = {
-        "fr": "Score de régularité",
-        "en": "Recorded pacing consistency",
-        "es": "Puntuación de regularidad",
+        "fr": "Ton allure obtient",
+        "en": "Your pace scored",
+        "es": "Tu ritmo obtiene",
     }
     assert observed["fact.pacing_consistency"].text.startswith(expected[language])
 
@@ -165,12 +165,12 @@ def test_pace_change_significance_uses_existing_unrounded_value(drop, expected):
     assert ("fact.pace_change" in observed) is expected
     if expected:
         assert observed["fact.pace_change"].evidence["pace_drop_min_km"] == drop
-        assert ("-" if drop < 0 else "+") in observed["fact.pace_change"].text
+        assert "24" in observed["fact.pace_change"].text
 
 
 @pytest.mark.parametrize("language,slower,faster", [
-    ("fr", "plus lent", "plus rapide"),
-    ("en", "slower", "faster"),
+    ("fr", "ralenti", "accéléré"),
+    ("en", "slowed", "faster"),
     ("es", "más lento", "más rápido"),
 ])
 @pytest.mark.parametrize("drop", [0.5, -0.5])
@@ -179,7 +179,8 @@ def test_pace_change_includes_localized_direction(language, slower, faster, drop
         workout(split_analysis={"pace_drop": drop}), [], language,
     ))["fact.pace_change"]
     assert (slower if drop > 0 else faster) in item.text
-    assert ("+0:30/km" if drop > 0 else "-0:30/km") in item.text
+    assert "30" in item.text
+    assert "/km" not in item.text
     assert item.evidence["pace_drop_min_km"] == drop
 
 
@@ -458,3 +459,48 @@ def test_addition_preserves_all_legacy_meaning_fields_and_roundtrips(language, s
 def test_typed_fact_contract_rejects_empty_and_nonfinite_evidence(evidence):
     with pytest.raises(ValidationError):
         WorkoutAnalysisFactualObservation(code="test", text="Test", evidence=evidence)
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("score", [0, 70, 89.9, 90, 94, 100])
+def test_consistency_wording_does_not_invent_qualitative_thresholds(language, score):
+    item = facts(build_workout_analysis_v2(
+        workout(split_analysis={"consistency_score": score}), [], language,
+    ))["fact.pacing_consistency"]
+    assert "/100" in item.text
+    assert not any(word in item.text.lower() for word in (
+        "très", "légère", "importante", "very", "slight", "significant", "muy", "leve",
+    ))
+    assert item.evidence["consistency_score"] == score
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("drift", [-3, 0, 3])
+def test_descriptive_drift_keeps_measurement_without_reinterpreting_it(language, drift):
+    current = workout(duration_minutes=120, hr_analysis={"hr_drift": drift})
+    analysis = build_workout_analysis_v2(current, [], language)
+    item = facts(analysis)["fact.hr_drift_measured"]
+    assert item.evidence == {"hr_drift_bpm": drift}
+    assert analysis.physiology.hr_drift == drift
+    assert str(drift) in item.text
+    assert not any(word in item.text.lower() for word in (
+        "fatigue", "hydr", "effort", "increased", "augment", "aument", "légèr", "slight",
+    ))
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_runner_wording_does_not_modify_any_legacy_fields(language):
+    current = workout(
+        km_splits=[{"pace_min_km": 5}, {"pace_min_km": 5.2}],
+        split_analysis={"negative_split": True, "pace_drop": -0.5},
+        hr_analysis={"hr_drift": 3},
+    )
+    analysis = build_workout_analysis_v2(current, [], language)
+    legacy = _build_meaning(
+        current, analysis.physiology, analysis.pacing, analysis.comparison,
+        analysis.signals, language,
+    )
+    assert analysis.meaning.model_dump(exclude={"factual_observations"}) == legacy.model_dump(
+        exclude={"factual_observations"},
+    )
+    assert facts(analysis)["fact.negative_split"].text != analysis.meaning.text
