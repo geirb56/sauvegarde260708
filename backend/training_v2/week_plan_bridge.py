@@ -471,6 +471,7 @@ def build_canonical_weekly_plan(
     target_distance_km: Optional[float] = None,
     target_time_seconds: Optional[int] = None,
     sessions_preference: Optional[int] = None,
+    training_preferences: Optional[dict] = None,
 ) -> CanonicalWeeklyPlan:
     """PR228 — Build the full canonical weekly plan including reconciliation audit.
 
@@ -489,6 +490,13 @@ def build_canonical_weekly_plan(
     sessions_preference seeds original_target, subject to availability/reprise
     caps; normal continuity preserves it against observed-frequency-only reduction.
     """
+    if training_preferences is not None:
+        sessions_preference = training_preferences.get("sessions_per_week")
+        user_profile = dict(user_profile or {})
+        for key in ("preferred_training_days", "preferred_long_run_day"):
+            if key in training_preferences:
+                user_profile[key] = training_preferences[key]
+
     ctx = _build_weekly_context_from_workouts(
         workouts=workouts,
         goal_type=goal_type,

@@ -98,6 +98,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from itertools import combinations, permutations
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -852,6 +853,53 @@ def _apply_cross_week_race_eve_guard(
     return guarded_sessions, (["RACE_EVE_REST_RESERVED"] if changed else [])
 
 
+def _assign_preferred_days(
+    session_slots: list[str],
+    candidates: list[str],
+    runner_profile: RunnerProfile,
+) -> tuple[dict[str, str], list[str]]:
+    """Rank the tiny weekly calendar without turning preferences into exclusions."""
+    preferred = set(runner_profile.preferred_training_days or ())
+    long_day = runner_profile.preferred_long_run_day
+    has_long = "long_easy" in session_slots
+    assignments = sorted(set(permutations(session_slots)))
+    best_score = None
+    best_mapping: dict[str, str] = {}
+    for selected in combinations(candidates, len(session_slots)):
+        positions = [_DAY_ORDER[day] for day in selected]
+        gaps = [
+            (positions[(i + 1) % len(positions)] - pos) % 7 or 7
+            for i, pos in enumerate(positions)
+        ]
+        adjacent_runs = sum(gap == 1 for gap in gaps)
+        for slots in assignments:
+            mapping = dict(zip(selected, slots))
+            # Recovery outranks preferences; only compare actual days of this week.
+            quality_before_long = sum(
+                kind == "quality"
+                and _DAY_ORDER[day] < 6
+                and mapping.get(_ALL_DAYS[_DAY_ORDER[day] + 1]) == "long_easy"
+                for day, kind in mapping.items()
+            )
+            score = (
+                quality_before_long,
+                adjacent_runs,
+                int(has_long and long_day is not None and mapping.get(long_day) != "long_easy"),
+                -sum(day in preferred for day in selected),
+                sum(gap * gap for gap in gaps),
+                int(has_long and long_day is None and mapping.get(selected[-1]) != "long_easy"),
+            )
+            if best_score is None or score < best_score:
+                best_score = score
+                best_mapping = mapping
+    codes: list[str] = []
+    if preferred and any(day not in preferred for day in best_mapping):
+        codes.append("PREFERRED_TRAINING_DAYS_FALLBACK")
+    if has_long and long_day is not None and best_mapping.get(long_day) != "long_easy":
+        codes.append("PREFERRED_LONG_RUN_DAY_FALLBACK")
+    return best_mapping, codes
+
+
 def _assign_days(
     session_slots: list[str],  # ordered session types to fill (no rest)
     runner_profile: RunnerProfile,
@@ -926,6 +974,13 @@ def _assign_days(
 
     if n == 0:
         return [(d, reserved_day_to_type.get(d, "rest")) for d in _ALL_DAYS], extra_reason_codes
+
+    if runner_profile.preferred_training_days or runner_profile.preferred_long_run_day:
+        mapping, preference_codes = _assign_preferred_days(session_slots, candidates, runner_profile)
+        return [
+            (day, reserved_day_to_type.get(day, mapping.get(day, "rest")))
+            for day in _ALL_DAYS
+        ], extra_reason_codes + preference_codes
 
     # --- preferred_long_run_day ---------------------------------------------
     # If the week contains long_easy and the runner has a valid preferred day
@@ -1380,6 +1435,15 @@ def build_weekly_plan(
         plan_goal=plan_goal,
         reference_date=reference_date,
     )
+    cross_week_preferences = None
+    if cross_week_race_eve is not None and (
+        runner_profile.preferred_training_days or runner_profile.preferred_long_run_day
+    ):
+        cross_week_preferences = runner_profile
+        runner_profile = runner_profile.model_copy(update={
+            "preferred_training_days": None,
+            "preferred_long_run_day": None,
+        })
 
     reason_codes: list[str] = list(weekly_target.reason_codes)
     if race_week is not None:
@@ -1443,6 +1507,26 @@ def build_weekly_plan(
         cross_week_race_eve=cross_week_race_eve,
     )
     reason_codes = _merge_reason_codes(reason_codes, cross_week_codes)
+
+    if cross_week_preferences is not None:
+        # Preserve the race-eve guard's actual reductions before placing preferences.
+        surviving = [s for s in sessions if _is_training_session(s)]
+        skeleton, preference_codes = _assign_days(
+            [s.workout_type for s in surviving],
+            cross_week_preferences,
+            allowed_training_days=[d for d in _ALL_DAYS if d != cross_week_race_eve.race_eve_day],
+        )
+        remaining = list(surviving)
+        assigned = []
+        for day, kind in skeleton:
+            if kind == "rest":
+                original = next(s for s in sessions if s.day == day)
+                assigned.append(original if original.workout_type == "rest" else _make_rest(day))
+            else:
+                index = next(i for i, session in enumerate(remaining) if session.workout_type == kind)
+                assigned.append(remaining.pop(index).model_copy(update={"day": day}))
+        sessions = assigned
+        reason_codes = _merge_reason_codes(reason_codes, preference_codes)
 
     # --- ensure immutability of session list --------------------------------
     immutable_sessions = tuple(sessions)

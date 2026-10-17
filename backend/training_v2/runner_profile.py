@@ -113,6 +113,7 @@ class RunnerProfile(BaseModel):
     preferred_days_per_week: Optional[int]
     max_days_per_week: Optional[int]
     preferred_long_run_day: Optional[str]
+    preferred_training_days: Optional[list[str]] = None
 
     injury_constraints: list[str]
     availability_constraints: list[str]
@@ -349,6 +350,10 @@ def build_runner_profile(
         preferred_days_per_week = None
 
     preferred_long_run_day = _first_valid_string(profile, "preferred_long_run_day", "long_run_day")
+    preferred_training_days = [
+        day for day in _normalize_string_list(profile.get("preferred_training_days"))
+        if day in {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+    ] or None
     injury_constraints = _normalize_string_list(profile.get("injury_constraints"))
     availability_constraints = _normalize_string_list(profile.get("availability_constraints"))
     available_history_days = max(0, int(training_history.available_history_days or 0))
@@ -463,6 +468,7 @@ def build_runner_profile(
         preferred_days_per_week=preferred_days_per_week,
         max_days_per_week=max_days_per_week,
         preferred_long_run_day=preferred_long_run_day,
+        preferred_training_days=preferred_training_days,
         injury_constraints=injury_constraints,
         availability_constraints=availability_constraints,
     )
