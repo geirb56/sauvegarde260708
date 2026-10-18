@@ -8,7 +8,7 @@ import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotic
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
@@ -182,6 +182,7 @@ export default function WorkoutDetail() {
   const hasWorkoutPace = hasPositiveFiniteMetric(workout.avg_pace_min_km);
   const hasAnalysis = Boolean(analysisForRender);
   const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
+  const coachConclusions = getCoachConclusions(analysisForRender);
   const coachObservation = getDistinctCoachObservation(analysisForRender);
   const observations = getAnalysisObservations(analysisForRender);
   const fallback = getAnalysisFallback(analysisForRender, t);
@@ -237,6 +238,10 @@ export default function WorkoutDetail() {
       </Card>
       </section>
 
+      {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
+        <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
+        {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
+      </section>}
       <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
       <WorkoutKilometerSplits
         splits={workout.km_splits}

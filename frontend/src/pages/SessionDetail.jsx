@@ -17,7 +17,7 @@ import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits"
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
+import { getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 
@@ -122,6 +122,7 @@ export default function SessionDetail() {
   }
 
   const analysisForRender = canAccessAnalysis ? analysis : null;
+  const coachConclusions = getCoachConclusions(analysisForRender);
   const classification = getSessionClassification(analysisForRender, t);
   const observation = getDistinctCoachObservation(analysisForRender);
   const observations = getAnalysisObservations(analysisForRender);
@@ -170,6 +171,10 @@ export default function SessionDetail() {
         </div>
       </section>
 
+      {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
+        <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
+        {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
+      </section>}
       <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
       <WorkoutKilometerSplits
         splits={session.km_splits}

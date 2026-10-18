@@ -13,7 +13,7 @@ import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits"
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 const isCycling = (type) => ["cycle", "cycling", "ride"].includes(type);
@@ -100,6 +100,7 @@ export default function DetailedAnalysis() {
       ? [t("workoutDetailExtended.averageHeartRate"), `${analysis.physiology.avg_hr} bpm`] : null,
   ].filter(Boolean);
   const classification = getSessionClassification(analysis, t);
+  const coachConclusions = getCoachConclusions(analysis);
   const observation = getDistinctCoachObservation(analysis);
   const observations = getAnalysisObservations(analysis);
   const fallback = getAnalysisFallback(analysis, t);
@@ -127,9 +128,13 @@ export default function DetailedAnalysis() {
             <dd className="text-sm font-semibold">{value}</dd>
           </div>)}
         </dl>}
-        {metrics.length === 0 && analysis.summary?.text && <p className="mt-3 font-sans text-sm leading-relaxed" data-testid="header-context">{analysis.summary.text}</p>}
+        {metrics.length === 0 && analysis.coach_language?.version !== "v1" && analysis.summary?.text && <p className="mt-3 font-sans text-sm leading-relaxed" data-testid="header-context">{analysis.summary.text}</p>}
       </section>
 
+      {coachConclusions.length > 0 && <section className="my-3 space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
+        <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
+        {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
+      </section>}
       <WorkoutPhaseAnalysis phaseAnalysis={analysis.phase_analysis} t={t} lang={lang} />
       <WorkoutKilometerSplits
         splits={workout?.km_splits}
