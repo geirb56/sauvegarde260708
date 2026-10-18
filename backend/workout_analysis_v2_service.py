@@ -5,6 +5,7 @@ import math
 from typing import Any, Optional
 
 from activity_phases import ACTIVITY_PHASE_SCHEMA_VERSION, ActivityPhase
+from garmin_laps_analysis import adapt_garmin_laps
 from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
@@ -177,12 +178,16 @@ def enrich_workout_from_garmin_activity(
                 break
 
     # Splits
-    if enriched.get("km_splits") is None:
+    if enriched.get("km_splits") is None or enriched.get("km_splits") == []:
         for k in ("km_splits", "splits"):
             val = candidates.get(k)
             if isinstance(val, list) and val:
                 enriched["km_splits"] = val
                 break
+    if enriched.get("km_splits") is None or enriched.get("km_splits") == []:
+        lap_splits = adapt_garmin_laps(enriched, activity_doc)
+        if lap_splits.status == "eligible":
+            enriched["km_splits"] = lap_splits.km_splits
 
     # Deep analyses if available
     for k in ("split_analysis", "hr_analysis", "cadence_analysis", "elevation_analysis", "pace_stats"):
