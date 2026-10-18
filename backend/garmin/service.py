@@ -609,20 +609,15 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
     """Queue details for at most one recent run per sync; never fetch inline.
 
     The scan is limited to the latest 50 Garmin summaries from the previous
-    14 days. The existing per-user sync cooldown (900 seconds by default) also
-    bounds repeat enrichment passes. Targeted queues provide deduplication,
-    worker concurrency limits, retries, and Mongo fetch-state cooldowns.
+    14 days. At most one activity, and therefore at most two targeted jobs, is
+    selected per user per sync. Existing targeted queues provide per-user
+    deduplication; workers enforce user/global concurrency and fetch cooldowns.
     """
     conn = await db.garmin_connections.find_one(
         {"user_id": user_id}, {"_id": 0, "connected": 1, "garmin_username": 1},
     )
     if not conn or not conn.get("connected") or not conn.get("garmin_username"):
         return {"status": "disconnected"}
-
-    from sync import rate_limiter
-
-    if not await rate_limiter.cooldown_ok(user_id):
-        return {"status": "cooldown"}
 
     from .activity_details import SCHEMA_VERSION as DETAILS_SCHEMA_VERSION
     from .activity_details import request_activity_details

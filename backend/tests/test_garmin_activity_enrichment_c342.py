@@ -3,19 +3,12 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
-
 from garmin import activity_details, activity_laps
 from garmin import service
 
 
 def run(coro):
     return asyncio.run(coro)
-
-
-@pytest.fixture(autouse=True)
-def allow_enrichment_pass(monkeypatch):
-    monkeypatch.setattr("sync.rate_limiter.cooldown_ok", AsyncMock(return_value=True))
 
 
 class Cursor:
@@ -190,23 +183,6 @@ def test_failed_activity_respects_cooldown(monkeypatch):
 
     assert run(service._enqueue_recent_activity_details(db, "user-1")) == {
         "status": "no_candidate",
-    }
-    details.assert_not_awaited()
-    laps.assert_not_awaited()
-
-
-def test_per_user_sync_cooldown_bounds_enrichment_passes(monkeypatch):
-    db = make_db([activity("123")])
-    monkeypatch.setattr(
-        "sync.rate_limiter.cooldown_ok", AsyncMock(return_value=False),
-    )
-    details = AsyncMock()
-    laps = AsyncMock()
-    monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
-    monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
-
-    assert run(service._enqueue_recent_activity_details(db, "user-1")) == {
-        "status": "cooldown",
     }
     details.assert_not_awaited()
     laps.assert_not_awaited()
