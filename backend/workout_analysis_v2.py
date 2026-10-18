@@ -8,6 +8,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from activity_phases import ActivityPhase
+from coach_language import CoachLanguageV1, build_coach_language
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
@@ -226,6 +227,7 @@ class WorkoutAnalysisV2Response(BaseModel):
     evidence: WorkoutAnalysisEvidence
     limitations: List[AnalysisText] = Field(default_factory=list)
     phase_analysis: WorkoutAnalysisPhaseAnalysis = Field(default_factory=WorkoutAnalysisPhaseAnalysis)
+    coach_language: Optional[CoachLanguageV1] = None
 
     @field_validator("meaning", mode="before")
     @classmethod
@@ -2063,4 +2065,8 @@ def build_workout_analysis_v2(
         evidence=evidence,
         limitations=_build_limitations(workout, signals, comparison, evidence, language, phase_analysis),
         phase_analysis=phase_analysis,
+        coach_language=build_coach_language(
+            workout, phase_analysis, comparison, *_effort_comparison_cohort(phase_analysis.efforts),
+            _efforts_comparable, _lang(language),
+        ),
     )

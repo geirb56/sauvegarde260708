@@ -17,6 +17,32 @@ export const hasCoachObservation = (analysis) =>
   && typeof analysis.advice.text === "string"
   && analysis.advice.text.trim().length > 0;
 
+export const getCoachConclusions = (analysis) => {
+  if (analysis?.coach_language?.version !== "v1"
+    || !Array.isArray(analysis.coach_language.conclusions)) return [];
+  const categories = new Set();
+  const codes = new Set();
+  const texts = new Set();
+  return analysis.coach_language.conclusions
+    .filter((item) => item?.available === true
+      && typeof item.code === "string" && item.code.trim()
+      && typeof item.text === "string" && item.text.trim()
+      && typeof item.category === "string" && item.category.trim()
+      && Number.isFinite(item.priority)
+      && item.evidence && typeof item.evidence === "object" && !Array.isArray(item.evidence)
+      && Object.keys(item.evidence).length > 0
+      && Object.values(item.evidence).every(Number.isFinite))
+    .sort((left, right) => left.priority - right.priority || left.code.localeCompare(right.code))
+    .filter((item) => {
+      if (categories.has(item.category) || codes.has(item.code) || texts.has(item.text.trim())) return false;
+      categories.add(item.category);
+      codes.add(item.code);
+      texts.add(item.text.trim());
+      return true;
+    })
+    .slice(0, 3);
+};
+
 export const getSessionClassification = (analysis, t) => {
   const structure = analysis?.signals?.session_structure;
   if (structure?.available === true && ["intervals", "continuous"].includes(structure.code)) {
@@ -33,11 +59,16 @@ export const getSessionClassification = (analysis, t) => {
 
 export const getAnalysisObservations = (analysis) => {
   const facts = analysis?.meaning?.factual_observations;
+  const conclusions = getCoachConclusions(analysis);
+  const replacedCodes = new Set(conclusions.flatMap((item) =>
+    Array.isArray(item.replaces_factual_codes) ? item.replaces_factual_codes : []));
+  const coachTexts = new Set(conclusions.map((item) => item.text.trim()));
   if (Array.isArray(facts)) {
     const codes = new Set();
     const texts = new Set();
     return facts.filter((fact) => {
       if (fact?.placement !== "summary"
+        || replacedCodes.has(fact.code) || coachTexts.has(fact.text?.trim?.())
         || typeof fact.code !== "string" || !fact.code.trim()
         || ["fact.pacing_consistency", "fact.consistency", "fact.hr_drift_measured", "fact.hr_drift"].includes(fact.code.trim())
         || typeof fact.text !== "string" || !fact.text.trim()
@@ -58,6 +89,7 @@ export const getAnalysisObservations = (analysis) => {
 export const getAnalysisTakeaway = (analysis) => getAnalysisObservations(analysis)[0] || null;
 
 export const getDistinctCoachObservation = (analysis) => {
+  if (analysis?.coach_language?.version === "v1") return null;
   const advice = analysis?.advice;
   if (advice?.available !== true || typeof advice.text !== "string" || !advice.text.trim()) return null;
 
@@ -118,7 +150,8 @@ const hasMeasuredPhaseObservations = (phaseAnalysis) => {
 };
 
 export const getAnalysisFallback = (analysis, t) =>
-  analysis && getAnalysisObservations(analysis).length === 0
+  analysis && getCoachConclusions(analysis).length === 0
+    && getAnalysisObservations(analysis).length === 0
     && !getDistinctCoachObservation(analysis)
     && !hasMeasuredPhaseObservations(analysis.phase_analysis)
     ? t("workoutDetailExtended.noReliableObservations")

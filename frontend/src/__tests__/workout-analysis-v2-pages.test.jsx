@@ -14,7 +14,7 @@ import { UnitProvider } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
-import { getAnalysisTakeaway, getAnalysisObservations, getDistinctCoachObservation } from "@/lib/workoutAnalysis";
+import { getCoachConclusions, getAnalysisTakeaway, getAnalysisObservations, getDistinctCoachObservation } from "@/lib/workoutAnalysis";
 
 jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
@@ -261,6 +261,119 @@ function mockAxios({ analysisPayload = analysis, workoutPayload = workout, delay
 beforeEach(() => {
   jest.clearAllMocks();
   setAnalysisAccess();
+});
+
+const coachConclusion = (updates = {}) => ({
+  code: "coach.pacing",
+  text: "Tu as gardé une allure stable sur les kilomètres enregistrés.",
+  category: "pacing",
+  priority: 30,
+  available: true,
+  kind: "conclusion",
+  evidence: { split_count: 4, fastest_pace_sec_per_km: 300, slowest_pace_sec_per_km: 304 },
+  replaces_factual_codes: ["fact.pace_change"],
+  ...updates,
+});
+
+const coachScreens = [
+  ["workout", "/workout/w1", "/workout/:id", WorkoutDetail],
+  ["session", "/session/w1", "/session/:id", SessionDetail],
+  ["detailed", "/analysis/w1", "/analysis/:id", DetailedAnalysis],
+];
+
+test("Coach V1 validates evidence, sorts, deduplicates and never pads conclusions", () => {
+  const primary = coachConclusion({ code: "coach.execution.pace_hr", category: "execution", priority: 10 });
+  const history = coachConclusion({ code: "coach.history.pace", category: "history", priority: 40, text: "Historical pace." });
+  const payload = { coach_language: { version: "v1", conclusions: [
+    history,
+    coachConclusion({ evidence: { value: NaN } }),
+    coachConclusion({ evidence: { value: "300" } }),
+    coachConclusion({ evidence: {} }),
+    coachConclusion({ available: false }),
+    coachConclusion({ priority: Infinity }),
+    coachConclusion({ category: "" }),
+    coachConclusion({ text: "Complement." }),
+    primary,
+    coachConclusion({ code: "duplicate-category", text: "Same phenomenon." }),
+    coachConclusion({ code: "fourth", category: "other", priority: 50, text: "Not selected." }),
+  ] } };
+  expect(getCoachConclusions(payload).map((item) => item.code)).toEqual([
+    "coach.execution.pace_hr", "coach.pacing", "coach.history.pace",
+  ]);
+  expect(payload.coach_language.conclusions[0]).toBe(history);
+  expect(getCoachConclusions({ coach_language: { version: "v1", conclusions: [primary] } })).toEqual([primary]);
+  expect(getCoachConclusions({ coach_language: { version: "v1", conclusions: [] } })).toEqual([]);
+  expect(getCoachConclusions({ coach_language: { version: "v2", conclusions: [primary] } })).toEqual([]);
+});
+
+test.each(coachScreens)("%s renders Coach V1 before factual phase and split details without duplicates", async (_, route, path, Page) => {
+  const primary = coachConclusion();
+  const extra = coachConclusion({
+    code: "coach.history.hr", category: "history_hr", priority: 40,
+    text: "Ta fréquence cardiaque moyenne est supérieure de 4 bpm aux sorties comparables.",
+    evidence: { current_hr_bpm: 154, baseline_hr_bpm: 150, difference_bpm: 4 },
+    replaces_factual_codes: ["fact.similar_hr"],
+  });
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    phase_analysis: makeStructuredPhaseAnalysis(),
+    coach_language: { version: "v1", conclusions: [extra, primary] },
+    meaning: { ...analysis.meaning, factual_observations: [
+      { code: "fact.pace_change", placement: "summary", text: "Replaced pace fact.", evidence: { delta: 4 } },
+      { code: "fact.similar_hr", placement: "summary", text: "Replaced HR fact.", evidence: { delta: 4 } },
+      { code: "fact.other", placement: "summary", text: "A distinct factual detail.", evidence: { count: 6 } },
+    ] },
+  } });
+  renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
+  expect(await screen.findByTestId("coach-primary")).toHaveTextContent(primary.text);
+  expect(screen.getAllByTestId("coach-complementary")).toHaveLength(1);
+  expect(screen.getByTestId("coach-complementary")).toHaveTextContent(extra.text);
+  expect(screen.getByTestId("coach-primary").compareDocumentPosition(screen.getByTestId("structured-phase-analysis")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByTestId("coach-primary").compareDocumentPosition(screen.getByTestId("kilometer-splits")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByText("A distinct factual detail.")).toBeInTheDocument();
+  expect(screen.queryByText("Replaced pace fact.")).not.toBeInTheDocument();
+  expect(screen.queryByText("Replaced HR fact.")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+});
+
+describe.each(coachScreens)("%s Coach V1 access and localization", (_, route, path, Page) => {
+  test.each([
+    ["fr", "Tu as accéléré de 30 secondes par kilomètre."],
+    ["en", "You ran 30 seconds per kilometre faster."],
+    ["es", "Corriste 30 segundos por kilómetro más rápido."],
+  ])("preserves the localized backend conclusion in %s", async (language, text) => {
+    mockAxios({ analysisPayload: { ...analysis, coach_language: {
+      version: "v1", conclusions: [coachConclusion({ text })],
+    } } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(text);
+    expect(axios.get.mock.calls.some(([url]) => url.includes(`language=${language}`))).toBe(true);
+  });
+
+  test.each([{ allowed: false }, { loading: true }])("does not fetch or expose Coach V1 without entitlement: %j", async (access) => {
+    setAnalysisAccess(access);
+    mockAxios({ analysisPayload: { ...analysis, coach_language: {
+      version: "v1", conclusions: [coachConclusion()],
+    } } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    await waitFor(() => {
+      if (Page !== DetailedAnalysis) expect(axios.get.mock.calls.some(([url]) => url.includes("/workouts/w1"))).toBe(true);
+      expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
+    });
+    expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  });
+
+  test("empty or invalid conclusions preserve honest fallback and suppress legacy generic advice", async () => {
+    mockAxios({ analysisPayload: { ...analysisMissingEvidence, coach_language: {
+      version: "v1", conclusions: [coachConclusion({ evidence: { value: null } })],
+    } } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("analysis-fallback")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("header-context")).not.toBeInTheDocument();
+  });
 });
 
 test("legacy takeaway fields never become factual observations, including trusted intensity and phases", () => {
