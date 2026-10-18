@@ -93,12 +93,12 @@ def test_last_partial_lap_is_measured_not_promoted_to_kilometre():
     workout["session_structure"] = "continuous"
     result = adapt_garmin_laps(workout, activity)
     assert result.status == "eligible"
-    assert result.km_splits[-1] == {
-        "km": 3, "distance_m": 250, "duration_s": 90, "pace_min_km": 6, "avg_hr": 155,
-    }
+    assert len(result.km_splits) == 2
+    assert all(row["distance_m"] == 1000 for row in result.km_splits)
     item, = analyze(workout, activity).coach_language.conclusions
-    assert item.evidence["measured_distance_km"] == 2.25
-    assert item.evidence["split_count"] == 3
+    assert item.evidence["measured_distance_km"] == 2
+    assert item.evidence["split_count"] == 2
+    assert item.metadata["coverage"] == "measured_segments"
     assert item.metadata["comparison_scope"] == "first_last_measured_segments"
     assert "second_half_pace_change_sec_per_km" not in item.evidence
 
@@ -200,9 +200,9 @@ def test_chronology_rejects_unaccounted_gaps_overlaps_or_mixed_timestamps(change
     elif change == "reverse":
         lap["start_time_gmt"] = "2026-10-10T07:55:00Z"
     elif change == "overlap":
-        lap["start_time_gmt"] = "2026-10-10T08:04:59Z"
+        lap["start_time_gmt"] = "2026-10-10T08:04:58Z"
     elif change == "gap":
-        lap["start_time_gmt"] = "2026-10-10T08:05:01Z"
+        lap["start_time_gmt"] = "2026-10-10T08:05:02Z"
     elif change == "offset":
         lap["start_time_gmt"] = "2026-10-10T08:05:00+02:00"
     else:
@@ -230,6 +230,33 @@ def test_accounted_pause_uses_elapsed_for_chronology_not_for_pace():
     assert result.km_splits[0]["duration_s"] == 300
     assert result.km_splits[0]["pace_min_km"] == 5
     assert "session_structure" not in enrich_workout_from_garmin_activity(workout, activity)
+
+
+def test_second_resolution_start_times_accept_measured_fractional_durations():
+    workout, activity = fixture(durations=(341.128, 341.128, 341.128, 341.128))
+    for lap in activity["activity_laps"]["laps"]:
+        lap["start_time_gmt"] = datetime.fromisoformat(lap["start_time_gmt"]).replace(
+            microsecond=0,
+        ).isoformat()
+    result = adapt_garmin_laps(workout, activity)
+    assert result.status == "eligible"
+    assert all(row["duration_s"] == 341.128 for row in result.km_splits)
+
+
+def test_second_resolution_tolerance_cannot_accumulate_unmeasured_gaps():
+    workout, activity = fixture()
+    for index, lap in enumerate(activity["activity_laps"]["laps"]):
+        start = datetime.fromisoformat(lap["start_time_gmt"])
+        lap["start_time_gmt"] = (start + timedelta(seconds=index * 0.75)).isoformat()
+    assert adapt_garmin_laps(workout, activity).status == "incoherent_chronology"
+
+
+def test_single_kilometre_and_partial_tail_cannot_make_two_coach_samples():
+    workout, activity = fixture((1000, 250), (300, 90))
+    workout["session_structure"] = "continuous"
+    result = adapt_garmin_laps(workout, activity)
+    assert len(result.km_splits) == 1
+    assert analyze(workout, activity).coach_language.conclusions == []
 
 
 @pytest.mark.parametrize("distances,eligible", [

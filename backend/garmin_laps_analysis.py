@@ -1,7 +1,8 @@
 """Read-only adapter for the normalized Garmin activity_laps schema v1.
 
-Only consecutive measured kilometres, optionally followed by a measured tail,
-can populate km_splits. Eligibility is not evidence of a continuous session.
+Only consecutive measured kilometres can populate km_splits. A measured tail
+is validated for coverage but not published as a kilometre. Eligibility is not
+evidence of a continuous session.
 """
 
 from dataclasses import dataclass, field
@@ -44,7 +45,7 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
     calculated from those measurements, and nullable measured avg_hr (bpm).
 
     Full laps and cumulative km boundaries allow 1 m recording error; only the
-    last lap may be shorter. Coverage reconciles to the summary within 5 m
+    last lap may be shorter (excluded from output). Coverage reconciles to the summary within 5 m
     (distance_km rounded to .01 km) and 30 s (whole-minute duration). These are
     representation allowances, not interpolation or physiological thresholds.
     """
@@ -75,7 +76,8 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
     rows = []
     total_distance = total_duration = 0.0
     previous_order = -1
-    previous_start = previous_elapsed = None
+    first_start = previous_start = previous_elapsed = None
+    total_elapsed = 0.0
     timestamps = [isinstance(lap, dict) and lap.get("start_time_gmt") is not None for lap in laps]
     if any(timestamps) and not all(timestamps):
         return GarminLapSplits("incomplete_chronology")
@@ -115,12 +117,21 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
                     return GarminLapSplits("incoherent_speed")
             if all(timestamps):
                 start = _timestamp(lap["start_time_gmt"])
-                if previous_start is not None and not math.isclose(
-                    (start - previous_start).total_seconds(), previous_elapsed,
-                    rel_tol=0, abs_tol=0.01,
-                ):
-                    return GarminLapSplits("incoherent_chronology")
+                if first_start is None:
+                    first_start = start
+                if previous_start is not None:
+                    # Garmin start times may have only second precision. Bound
+                    # both local and cumulative error so tolerance cannot accrue.
+                    if (start < previous_start or not math.isclose(
+                        (start - previous_start).total_seconds(), previous_elapsed,
+                        rel_tol=0, abs_tol=1,
+                    ) or not math.isclose(
+                        (start - first_start).total_seconds(), total_elapsed,
+                        rel_tol=0, abs_tol=1,
+                    )):
+                        return GarminLapSplits("incoherent_chronology")
                 previous_start, previous_elapsed = start, elapsed if elapsed is not None else duration
+                total_elapsed += previous_elapsed
             intensity = lap.get("intensity_type")
             if intensity is not None and intensity != "ACTIVE":
                 return GarminLapSplits("non_kilometric")
@@ -134,10 +145,11 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
             pace = duration / (distance / 1000) / 60
             if not _positive(pace):
                 return GarminLapSplits("invalid_measurement")
-            rows.append({
-                "km": index, "distance_m": distance, "duration_s": duration,
-                "pace_min_km": pace, "avg_hr": lap.get("average_hr"),
-            })
+            if full_km:
+                rows.append({
+                    "km": index, "distance_m": distance, "duration_s": duration,
+                    "pace_min_km": pace, "avg_hr": lap.get("average_hr"),
+                })
         if not math.isclose(total_distance, workout["distance_km"] * 1000, rel_tol=0, abs_tol=5):
             return GarminLapSplits("incoherent_distance")
         if not math.isclose(total_duration, workout["duration_minutes"] * 60, rel_tol=0, abs_tol=30):
@@ -145,6 +157,6 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
     except (OverflowError, TypeError, ValueError, ZeroDivisionError):
         return GarminLapSplits("invalid_measurement")
     # A lone partial lap is not a kilometre split.
-    if not any(math.isclose(row["distance_m"], 1000, rel_tol=0, abs_tol=1) for row in rows):
+    if not rows:
         return GarminLapSplits("non_kilometric")
     return GarminLapSplits("eligible", rows)
