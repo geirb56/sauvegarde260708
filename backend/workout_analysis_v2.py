@@ -647,10 +647,8 @@ def _template(language: str, key: str, **params) -> str:
     }
     factual_templates = {
         "en": {
-            "fact.pacing_consistency": "Your pace scored {score}/100 for consistency.",
             "fact.pace_change.slower": "Your pace slowed by {seconds} seconds per kilometre.",
-            "fact.pace_change.faster": "Your pace was {seconds} seconds per kilometre faster.",
-            "fact.hr_drift_measured": "Your heart rate changed by {drift} bpm between the start and the end.",
+            "fact.pace_change.faster": "You ran {seconds} seconds per kilometre faster.",
             "fact.faster_second_half": "Your second half was faster than your first.",
             "fact.history_pace": "Over the last {days} days, your {count} comparable sessions averaged {baseline}. Your pace difference on this session: {delta}.",
             "fact.history_hr": "Your {count} comparable sessions averaged {baseline} bpm. Your heart-rate difference on this session: {delta} bpm.",
@@ -658,10 +656,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.comparable_effort_extremes": "Among the {count} measured comparable efforts, effort {fastest} was fastest ({fast_pace}); effort {slowest} was slowest ({slow_pace}).",
         },
         "fr": {
-            "fact.pacing_consistency": "Ton allure obtient {score}/100 pour sa régularité.",
             "fact.pace_change.slower": "Ton allure a ralenti de {seconds} secondes par kilomètre.",
-            "fact.pace_change.faster": "Ton allure a accéléré de {seconds} secondes par kilomètre.",
-            "fact.hr_drift_measured": "Ta fréquence cardiaque a varié de {drift} bpm entre le début et la fin.",
+            "fact.pace_change.faster": "Tu as accéléré de {seconds} secondes par kilomètre.",
             "fact.faster_second_half": "Ta seconde moitié a été plus rapide que la première.",
             "fact.history_pace": "Sur les {days} derniers jours, tes {count} séances comparables étaient courues en moyenne à {baseline}. Ton écart d'allure sur cette séance : {delta}.",
             "fact.history_hr": "Tes {count} séances comparables avaient une fréquence cardiaque moyenne de {baseline} bpm. Ton écart sur cette séance : {delta} bpm.",
@@ -669,10 +665,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.comparable_effort_extremes": "Parmi les {count} efforts comparables mesurés, l'effort {fastest} est le plus rapide ({fast_pace}) ; l'effort {slowest} est le plus lent ({slow_pace}).",
         },
         "es": {
-            "fact.pacing_consistency": "Tu ritmo obtiene {score}/100 en regularidad.",
             "fact.pace_change.slower": "Tu ritmo fue {seconds} segundos por kilómetro más lento.",
-            "fact.pace_change.faster": "Tu ritmo fue {seconds} segundos por kilómetro más rápido.",
-            "fact.hr_drift_measured": "Tu frecuencia cardíaca cambió {drift} bpm entre el inicio y el final.",
+            "fact.pace_change.faster": "Aceleraste {seconds} segundos por kilómetro.",
             "fact.faster_second_half": "Tu segunda mitad fue más rápida que la primera.",
             "fact.history_pace": "En los últimos {days} días, tus {count} sesiones comparables tuvieron un ritmo medio de {baseline}. Tu diferencia de ritmo en esta sesión: {delta}.",
             "fact.history_hr": "Tus {count} sesiones comparables tuvieron una frecuencia cardíaca media de {baseline} bpm. Tu diferencia en esta sesión: {delta} bpm.",
@@ -1026,7 +1020,7 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
         max_dev = max(abs(pace - avg_split) for pace in split_paces)
         consistency = max(0.0, min(100.0, 100.0 - (max_dev / avg_split * 100.0))) if avg_split else None
 
-    available = any(value is not None for value in [avg_pace, avg_speed, fastest_split, slowest_split, pace_drop, variability, consistency])
+    available = any(value is not None for value in [avg_pace, avg_speed, fastest_split, slowest_split, pace_drop, variability])
     return WorkoutAnalysisPacing(
         available=available,
         average_pace_min_km=_safe_round(avg_pace, 3),
@@ -1071,7 +1065,7 @@ def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology
     max_hr = _usable_metric(workout, "max_heart_rate")
     zone_distribution = _normalize_zone_distribution(workout.get("effort_zone_distribution"))
     hr_drift = _safe_round(hr_analysis.get("hr_drift"), 2)
-    available = any(value is not None for value in [avg_hr, max_hr, hr_drift]) or bool(zone_distribution)
+    available = any(value is not None for value in [avg_hr, max_hr]) or bool(zone_distribution)
 
     return WorkoutAnalysisPhysiology(
         available=available,
@@ -1462,7 +1456,6 @@ def _build_meaning(
             "advice.even_pacing": "meaning.pace_change",
             "advice.negative_split_confirmed": "meaning.negative_split",
             "advice.maintain_consistency": "meaning.consistent_pacing",
-            "advice.monitor_hr_drift": "meaning.hr_drift",
         }.get(_advice_primary_code(physiology, pacing, signals))
         if observed_code:
             text = _join_sentences([
@@ -1487,10 +1480,6 @@ def _advice_primary_code(
         return "advice.even_pacing"
     if pacing.negative_split is True:
         return "advice.negative_split_confirmed"
-    if pacing.consistency_score is not None and pacing.consistency_score >= 90:
-        return "advice.maintain_consistency"
-    if physiology.hr_drift is not None and abs(physiology.hr_drift) >= 8:
-        return "advice.monitor_hr_drift"
     if signals.session_type.code == "long":
         return "advice.recover_after_long"
     if physiology.available:
@@ -1940,19 +1929,7 @@ def _build_factual_observations(
     )
     split_analysis = workout.get("split_analysis")
     split_analysis = split_analysis if isinstance(split_analysis, dict) else {}
-    split_count = len(_extract_split_paces(workout))
-    raw_score = split_analysis.get("consistency_score")
-    score_from_analysis = _valid_finite_number(raw_score) and 0 <= raw_score <= 100
     if not multi_effort:
-        if (
-            _valid_finite_number(pacing.consistency_score)
-            and 0 <= pacing.consistency_score <= 100
-            and (split_count >= 2 or score_from_analysis)
-        ):
-            add("fact.pacing_consistency", {
-                "consistency_score": pacing.consistency_score,
-                "valid_split_count": split_count,
-            }, score=_phase_number(pacing.consistency_score, 1, language))
         # Use the source value for thresholding: rounding must not promote 0.3999.
         drop = split_analysis.get("pace_drop")
         if _valid_finite_number(drop) and abs(drop) >= 0.4:
@@ -1961,10 +1938,6 @@ def _build_factual_observations(
                 seconds=_phase_number(abs(drop) * 60, 1, language))
         if split_analysis.get("negative_split") is True:
             add("fact.negative_split", {"negative_split": 1}, template_key="fact.faster_second_half")
-
-    if not multi_effort and _valid_finite_number(physiology.hr_drift):
-        add("fact.hr_drift_measured", {"hr_drift_bpm": physiology.hr_drift},
-            drift=_phase_number(physiology.hr_drift, 2, language))
 
     regularity = phases.effort_regularity
     cohort, _ = _effort_comparison_cohort(phases.efforts)

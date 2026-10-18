@@ -1231,7 +1231,7 @@ test("late responses are ignored after the workout route changes even if transpo
     return Promise.resolve({ data: {
       ...analysis,
       meaning: { factual_observations: [
-        { code: "fact.pacing_consistency", text: "New measured observation", evidence: { score: 90 }, placement: "summary" },
+        { code: "fact.pace_change", text: "New measured observation", evidence: { pace_drop_min_km: 0.5 }, placement: "summary" },
       ] },
     } });
   });
@@ -1707,9 +1707,58 @@ test("absent facts never expose mixed legacy observations even with trusted inte
   })).toEqual([]);
 });
 
+test.each(["fact.pacing_consistency", "fact.consistency", "fact.hr_drift_measured", "fact.hr_drift"])(
+  "does not display unsupported score or drift fact %s", (code) => {
+    expect(getAnalysisObservations({ meaning: { factual_observations: [
+      factualObservation(code, "Unsupported score or drift.", { value: 90 }),
+    ] } })).toEqual([]);
+  },
+);
+
 test("ungrounded legacy advice is not a factual observation", () => {
   expect(getDistinctCoachObservation(analysis)).toBeNull();
 });
+
+test.each([
+  ["advice.high_intensity_observation", "high", true],
+  ["advice.low_intensity_observation", "low", true],
+  ["advice.high_intensity_observation", "high", false],
+])("retains only intensity advice backed by matching zone classification: %s", (code, intensityCode, available) => {
+  const adviceText = "Zone-supported intensity observation.";
+  expect(getDistinctCoachObservation({
+    ...analysis,
+    advice: { available: true, code, text: adviceText },
+    signals: { ...analysis.signals, intensity: { available, code: intensityCode } },
+  })).toBe(available ? adviceText : null);
+});
+
+test.each([
+  ["advice.even_pacing", { pace_drop_min_km: 0.5 }, "fact.pace_change"],
+  ["advice.negative_split_confirmed", { negative_split: true }, "fact.negative_split"],
+])("keeps supported legacy pacing advice only when no equivalent fact is visible: %s",
+  (code, metric, factCode) => {
+    const adviceText = "Supported legacy pacing observation.";
+    const base = {
+      ...analysis,
+      advice: { available: true, code, text: adviceText },
+      pacing: { ...analysis.pacing, ...metric },
+      meaning: { factual_observations: [] },
+    };
+    expect(getDistinctCoachObservation(base)).toBe(adviceText);
+    expect(getDistinctCoachObservation({
+      ...base,
+      meaning: { factual_observations: [factualObservation(factCode, "Equivalent measured fact.")] },
+    })).toBeNull();
+  });
+
+test.each(["advice.maintain_consistency", "advice.monitor_hr_drift", "advice.recover_after_long"])(
+  "does not restore score, unverified drift, or recommendation advice: %s", (code) => {
+    expect(getDistinctCoachObservation({
+      ...analysis,
+      advice: { available: true, code, text: "Unsupported observation." },
+    })).toBeNull();
+  },
+);
 
 test.each([
   { code: "   " },
@@ -1744,7 +1793,7 @@ test.each([[[]], [[factualObservation("fact.pacing_consistency", "Malformed.", {
 );
 
 test("structured facts override mixed legacy text without requiring intensity", () => {
-  const fact = factualObservation("fact.consistency", "Measured pace consistency: 94.");
+  const fact = factualObservation("fact.pace_change", "Measured pace change.", { pace_drop_min_km: 0.5 });
   const payload = {
    ...analysis,
    meaning: { ...analysis.meaning, factual_observations: [fact, fact, { ...fact, code: "duplicate" }] },
@@ -1779,6 +1828,19 @@ test.each([
 });
 
 describe.each(editorialPages)("%s factual observation contract", (_name, route, path, Page, testId) => {
+  test("shows supported legacy pacing advice when its factual contract is absent", async () => {
+    const adviceText = "The recorded pace change is a useful comparison point.";
+    mockAxios({ analysisPayload: {
+      ...analysis,
+      advice: { available: true, code: "advice.even_pacing", text: adviceText },
+      pacing: { ...analysis.pacing, pace_drop_min_km: 0.5 },
+      meaning: { factual_observations: [] },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("advice-text")).toHaveTextContent(adviceText);
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
   test("no-fact recovery advice never replaces missing observations or revives legacy mixed text", async () => {
     mockAxios({ analysisPayload: {
       ...analysis,
@@ -1931,11 +1993,11 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
   });
 
   test("pace-only evidence needs no HR or intensity and deduplicates valid observations", async () => {
-    const fact = factualObservation("fact.pacing_consistency", "Measured pace consistency: 94.", { score: 94 });
+    const fact = factualObservation("fact.pace_change", "Measured pace change.", { pace_drop_min_km: 0.5 });
     mockAxios({
       workoutPayload: { ...workout, avg_heart_rate: null, max_heart_rate: null },
       analysisPayload: { ...analysisMissingEvidence, meaning: { factual_observations: [
-        fact, { ...fact, code: " fact.pacing_consistency ", text: "Duplicate measurement." }, { ...fact, code: "another" },
+        fact, { ...fact, code: " fact.pace_change ", text: "Duplicate measurement." }, { ...fact, code: "another" },
       ] } },
     });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
@@ -1973,9 +2035,9 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
 
   test.each(["fr", "en", "es"])("shows backend-localized pace and descriptive HR facts without zones in %s", async (language) => {
    const texts = {
-     fr: ["Régularité mesurée : 94.", "FC observée : 151 à 159 bpm."],
-     en: ["Measured consistency: 94.", "Observed HR: 151 to 159 bpm."],
-     es: ["Regularidad medida: 94.", "FC observada: 151 a 159 bpm."],
+     fr: ["Tu as accéléré de 30 secondes par kilomètre.", "FC observée : 151 à 159 bpm."],
+     en: ["You ran 30 seconds per kilometre faster.", "Observed HR: 151 to 159 bpm."],
+     es: ["Aceleraste 30 segundos por kilómetro.", "FC observada: 151 a 159 bpm."],
    }[language];
    mockAxios({ analysisPayload: {
      ...analysis,
@@ -1983,7 +2045,7 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
        ...analysis.meaning,
        caveats: ["Intensity cannot be classified."],
        factual_observations: [
-         factualObservation("fact.consistency", texts[0], { consistency_score: 94 }),
+         factualObservation("fact.pace_change", texts[0], { pace_drop_min_km: -0.5 }),
          factualObservation("fact.effort_hr", texts[1], { first_hr: 151, last_hr: 159 }),
        ],
      },
@@ -2046,7 +2108,7 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
    setAnalysisAccess({ allowed: false });
    mockAxios({ analysisPayload: {
      ...analysis,
-     meaning: { factual_observations: [factualObservation("fact.consistency", "Premium factual observation.")] },
+     meaning: { factual_observations: [factualObservation("fact.pace_change", "Premium factual observation.", { pace_drop_min_km: 0.5 })] },
    } });
    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
    await screen.findByTestId("analysis-upgrade-notice");
@@ -2127,7 +2189,7 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
   });
 
   describe.each(editorialPages)("%s PR320 contract", (name, route, path, Page, testId) => {
-    test.each(["fr", "en", "es"])("validated observation is factual and localized in %s", async (language) => {
+    test.each(["fr", "en", "es"])("unexplained consistency score is suppressed in %s", async (language) => {
       const text = {
         fr: "L’allure est restée régulière sur les portions mesurées.",
         en: "Pace remained consistent across the measured splits.",
@@ -2139,7 +2201,8 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
       await screen.findByTestId(testId);
       const labels = translations[language].workoutDetailExtended;
-      expect(await screen.findByText(text)).toBeVisible();
+      expect(await screen.findByTestId(testId)).toBeVisible();
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
       expect(screen.queryByText(labels.coachObservation)).not.toBeInTheDocument();
       expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
       expect(screen.queryByText(analysis.meaning.text)).not.toBeInTheDocument();

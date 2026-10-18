@@ -39,6 +39,7 @@ export const getAnalysisObservations = (analysis) => {
     return facts.filter((fact) => {
       if (fact?.placement !== "summary"
         || typeof fact.code !== "string" || !fact.code.trim()
+        || ["fact.pacing_consistency", "fact.consistency", "fact.hr_drift_measured", "fact.hr_drift"].includes(fact.code.trim())
         || typeof fact.text !== "string" || !fact.text.trim()
         || !fact.evidence || typeof fact.evidence !== "object" || Array.isArray(fact.evidence)
         || Object.keys(fact.evidence).length === 0
@@ -56,8 +57,35 @@ export const getAnalysisObservations = (analysis) => {
 
 export const getAnalysisTakeaway = (analysis) => getAnalysisObservations(analysis)[0] || null;
 
-// Legacy advice has no independent factual evidence contract and may mix conclusions.
-export const getDistinctCoachObservation = () => null;
+export const getDistinctCoachObservation = (analysis) => {
+  const advice = analysis?.advice;
+  if (advice?.available !== true || typeof advice.text !== "string" || !advice.text.trim()) return null;
+
+  const facts = Array.isArray(analysis?.meaning?.factual_observations)
+    ? analysis.meaning.factual_observations : [];
+  const hasFact = (code) => facts.some((fact) =>
+    fact?.code === code
+    && fact?.placement === "summary"
+    && typeof fact.text === "string" && fact.text.trim()
+    && fact.evidence && typeof fact.evidence === "object" && !Array.isArray(fact.evidence)
+    && Object.keys(fact.evidence).length > 0
+    && Object.values(fact.evidence).every(Number.isFinite));
+  const intensity = analysis?.signals?.intensity;
+  const paceChange = analysis?.pacing?.pace_drop_min_km;
+
+  if (advice.code === "advice.high_intensity_observation"
+    && intensity?.available === true && ["high", "very_high"].includes(intensity.code)) return advice.text.trim();
+  if (advice.code === "advice.low_intensity_observation"
+    && intensity?.available === true && intensity.code === "low") return advice.text.trim();
+  if (advice.code === "advice.even_pacing"
+    && Number.isFinite(paceChange) && Math.abs(paceChange) >= 0.4
+    && !hasFact("fact.pace_change")) return advice.text.trim();
+  if (advice.code === "advice.negative_split_confirmed"
+    && analysis?.pacing?.negative_split === true
+    && !hasFact("fact.negative_split") && !hasFact("fact.faster_second_half")) return advice.text.trim();
+
+  return null;
+};
 
 export const getRenderableAnalysisPhases = (phaseAnalysis) => {
   if (phaseAnalysis?.available !== true) return [];
@@ -87,6 +115,7 @@ const hasMeasuredPhaseObservations = (phaseAnalysis) => {
 
 export const getAnalysisFallback = (analysis, t) =>
   analysis && getAnalysisObservations(analysis).length === 0
+    && !getDistinctCoachObservation(analysis)
     && !hasMeasuredPhaseObservations(analysis.phase_analysis)
     ? t("workoutDetailExtended.noReliableObservations")
     : null;
