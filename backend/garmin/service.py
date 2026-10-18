@@ -10,7 +10,7 @@ import asyncio
 import calendar
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from .factory import get_provider_for_user, active_provider_name
@@ -34,6 +34,8 @@ INITIAL_DAILY_METRICS_DAYS = 7
 ENRICHMENT_DAILY_METRICS_START_DAYS_AGO = 8
 ENRICHMENT_DAILY_METRICS_DAYS = 23
 INITIAL_VO2MAX_BACKFILL_MONTHS = 12
+AUTO_ACTIVITY_DETAILS_LOOKBACK_DAYS = 14
+AUTO_ACTIVITY_DETAILS_SCAN_LIMIT = 50
 _RUNNING_ACTIVITY_TYPES = frozenset(
     {"running", "run", "trail_running", "trail_run", "treadmill_running"}
 )
@@ -603,6 +605,116 @@ async def _ingest_activities(db, user_id: str, activities: list) -> dict:
     }
 
 
+async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
+    """Queue details for at most one recent run per sync; never fetch inline.
+
+    The scan is limited to the latest 50 Garmin summaries from the previous
+    14 days. The existing per-user sync cooldown (900 seconds by default) also
+    bounds repeat enrichment passes. Targeted queues provide deduplication,
+    worker concurrency limits, retries, and Mongo fetch-state cooldowns.
+    """
+    conn = await db.garmin_connections.find_one(
+        {"user_id": user_id}, {"_id": 0, "connected": 1, "garmin_username": 1},
+    )
+    if not conn or not conn.get("connected") or not conn.get("garmin_username"):
+        return {"status": "disconnected"}
+
+    from sync import rate_limiter
+
+    if not await rate_limiter.cooldown_ok(user_id):
+        return {"status": "cooldown"}
+
+    from .activity_details import SCHEMA_VERSION as DETAILS_SCHEMA_VERSION
+    from .activity_details import request_activity_details
+    from .activity_laps import SCHEMA_VERSION as LAPS_SCHEMA_VERSION
+    from .activity_laps import request_activity_laps
+    from .activity_laps import validate_activity_id
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=AUTO_ACTIVITY_DETAILS_LOOKBACK_DAYS)).isoformat()
+    cursor = db.garmin_activities.find(
+        {
+            "user_id": user_id,
+            "source": "garmin",
+            "start_time": {"$gte": cutoff},
+        },
+        {
+            "_id": 0,
+            "external_id": 1,
+            "activity_type": 1,
+            "start_time": 1,
+            "activity_details": 1,
+            "activity_details_fetch": 1,
+            "activity_laps": 1,
+            "activity_laps_fetch": 1,
+        },
+    ).sort("start_time", -1).limit(AUTO_ACTIVITY_DETAILS_SCAN_LIMIT)
+    activities = await cursor.to_list(length=AUTO_ACTIVITY_DETAILS_SCAN_LIMIT)
+    now_iso = now.isoformat()
+
+    def needs_request(cache, fetch, schema_version, terminal_statuses):
+        if (cache or {}).get("schema_version") == schema_version and (
+            cache or {}
+        ).get("status") in terminal_statuses:
+            return False
+        fetch = fetch or {}
+        if fetch.get("status") in {"queued", "running"}:
+            return True
+        next_attempt_at = fetch.get("next_attempt_at")
+        return not isinstance(next_attempt_at, str) or next_attempt_at <= now_iso
+
+    for activity in activities:
+        if not _is_running_activity(activity):
+            continue
+        try:
+            activity_id = validate_activity_id(activity.get("external_id"))
+        except (TypeError, ValueError):
+            continue
+
+        details_needed = needs_request(
+            activity.get("activity_details"),
+            activity.get("activity_details_fetch"),
+            DETAILS_SCHEMA_VERSION,
+            {"complete", "no_data"},
+        )
+        laps_needed = needs_request(
+            activity.get("activity_laps"),
+            activity.get("activity_laps_fetch"),
+            LAPS_SCHEMA_VERSION,
+            {"complete", "empty"},
+        )
+        if not details_needed and not laps_needed:
+            continue
+
+        outcomes = {}
+        for key, request in (
+            ("details", request_activity_details),
+            ("laps", request_activity_laps),
+        ):
+            try:
+                outcomes[key] = await request(db, user_id, activity_id)
+            except Exception as exc:
+                logger.warning(
+                    "[Garmin] automatic activity %s enqueue failed user=%s activity=%s: %s",
+                    key, user_id, activity_id, exc,
+                )
+                outcomes[key] = {"status": "queue_unavailable"}
+        return {"status": "requested", "activity_id": activity_id, **outcomes}
+
+    return {"status": "no_candidate"}
+
+
+async def _schedule_recent_activity_details(db, user_id: str) -> dict:
+    try:
+        return await _enqueue_recent_activity_details(db, user_id)
+    except Exception as exc:
+        logger.warning(
+            "[Garmin] automatic activity detail scan failed user=%s: %s",
+            user_id, exc,
+        )
+        return {"status": "failed"}
+
+
 async def _finalize_connection(
     db,
     user_id: str,
@@ -1037,6 +1149,7 @@ async def deep_sync(db, user_id: str) -> dict:
         }
 
     ingest = await _ingest_activities(db, user_id, activities)
+    await _schedule_recent_activity_details(db, user_id)
 
     # Mark deep sync done so subsequent syncs use the incremental path.
     await db.garmin_connections.update_one(
@@ -1220,6 +1333,7 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
         return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Sync failed, please reconnect"}
 
     ingest = await _ingest_activities(db, user_id, activities)
+    await _schedule_recent_activity_details(db, user_id)
     activity_count = await _finalize_connection(db, user_id, ingest["newest_start"])
     try:
         try:
@@ -1318,6 +1432,7 @@ async def incremental_sync(db, user_id: str) -> dict:
         return {"success": False, "synced_count": 0, "new_count": 0, "message": "Sync failed"}
 
     ingest = await _ingest_activities(db, user_id, activities)
+    await _schedule_recent_activity_details(db, user_id)
     activity_count = await _finalize_connection(
         db,
         user_id,
