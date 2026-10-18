@@ -39,10 +39,17 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
     """Return eligible UI rows or an explicit abstention; never mutate inputs.
 
     Input: activity_laps {schema_version: 1, status: complete, source: garmin,
-    endpoint: splits, laps: [...]}. Required lap fields: lap_index (1-based,
-    consecutive), order (strictly increasing), distance_m and duration_s > 0.
+    endpoint: splits, laps: [...]}. Required lap fields: lap_index (positive
+    integer, strictly increasing, gaps allowed), order (nonnegative integer,
+    strictly increasing), distance_m and duration_s > 0.
     Output rows carry ordinal km, original distance_m/duration_s, min/km pace
     calculated from those measurements, and nullable measured avg_hr (bpm).
+    The km ordinal is the measured position, never the native lap_index.
+
+    Only explicit ACTIVE or absent intensity is eligible. The producer has no
+    intensity enum; the repository fixture demonstrates ACTIVE, not all Garmin
+    runtime values. Other explicit values fail closed without a semantic mapping.
+    Missing intensity never establishes a continuous-session classification.
 
     Full laps and cumulative km boundaries allow 1 m recording error; only the
     last lap may be shorter (excluded from output). Coverage reconciles to the summary within 5 m
@@ -75,6 +82,7 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
 
     rows = []
     total_distance = total_duration = 0.0
+    previous_index = 0
     previous_order = -1
     first_start = previous_start = previous_elapsed = None
     total_elapsed = 0.0
@@ -85,10 +93,12 @@ def adapt_garmin_laps(workout: dict, activity_doc: dict) -> GarminLapSplits:
         for index, lap in enumerate(laps, 1):
             if not isinstance(lap, dict):
                 return GarminLapSplits("invalid_lap")
+            lap_index = lap.get("lap_index")
             order = lap.get("order")
-            if (type(lap.get("lap_index")) is not int or lap["lap_index"] != index
+            if (type(lap_index) is not int or lap_index <= previous_index
                     or type(order) is not int or order <= previous_order):
                 return GarminLapSplits("invalid_order")
+            previous_index = lap_index
             previous_order = order
             distance, duration = lap.get("distance_m"), lap.get("duration_s")
             if not _positive(distance) or not _positive(duration):

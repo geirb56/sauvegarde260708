@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from garmin.activity_laps import FIELDS, normalize_activity_laps
 from garmin_laps_analysis import adapt_garmin_laps
 from workout_analysis_v2 import build_workout_analysis_v2
 from workout_analysis_v2_service import (
@@ -169,7 +170,7 @@ def test_missing_or_incoherent_summary_prevents_partial_coverage(field, value):
     assert adapt_garmin_laps(workout, activity).km_splits == []
 
 
-@pytest.mark.parametrize("change", ["reverse", "duplicate", "missing_first", "gap",
+@pytest.mark.parametrize("change", ["reverse", "duplicate", "missing_first", "duplicate_index",
                                          "order", "boolean_index", "bad_lap"])
 def test_lap_order_is_validated_never_sorted_or_skipped(change):
     workout, activity = fixture()
@@ -180,7 +181,7 @@ def test_lap_order_is_validated_never_sorted_or_skipped(change):
         laps[1] = deepcopy(laps[0])
     elif change == "missing_first":
         del laps[0]
-    elif change == "gap":
+    elif change == "duplicate_index":
         laps[1]["lap_index"] = 3
     elif change == "order":
         laps[1]["order"] = 0
@@ -189,6 +190,126 @@ def test_lap_order_is_validated_never_sorted_or_skipped(change):
     else:
         laps[0] = None
     assert adapt_garmin_laps(workout, activity).km_splits == []
+
+
+def normalize_synthetic_laps(laps):
+    raw = [{source: lap[target] for source, target in FIELDS.items() if target in lap}
+           for lap in laps]
+    return normalize_activity_laps({"activityId": 123, "lapDTOs": raw}, "123")
+
+
+@pytest.mark.parametrize("indices,accepted", [
+    ((1, 2, 3, 4), True),
+    ((0, 1, 2, 3), False),
+    ((2, 4, 6, 8), True),
+    ((21, 22, 24, 30), True),
+    ((1, 2, 2, 4), False),
+    ((4, 3, 2, 1), False),
+    ((-1, 1, 2, 3), False),
+    ((True, 2, 3, 4), False),
+    ((1.0, 2, 3, 4), False),
+    ((None, 2, 3, 4), False),
+])
+def test_native_indices_match_producer_without_changing_kilometre_ordinals(indices, accepted):
+    workout, activity = fixture()
+    laps = activity["activity_laps"]["laps"]
+    for lap, native_index in zip(laps, indices):
+        lap["lap_index"] = native_index
+    original = deepcopy(activity)
+    if accepted:
+        normalized = normalize_synthetic_laps(laps)
+        assert [lap["lap_index"] for lap in normalized] == list(indices)
+        activity["activity_laps"]["laps"] = normalized
+        result = adapt_garmin_laps(workout, activity)
+        assert result.status == "eligible"
+        assert [row["km"] for row in result.km_splits] == [1, 2, 3, 4]
+        assert [row["duration_s"] for row in result.km_splits] == [300, 300, 330, 330]
+        assert [lap["lap_index"] for lap in normalized] == list(indices)
+        analysis = analyze(workout, activity)
+        assert not analysis.signals.session_structure.available
+        assert analysis.coach_language.conclusions == []
+    else:
+        with pytest.raises(ValueError, match="Invalid lap order or duplicate"):
+            normalize_synthetic_laps(laps)
+        assert adapt_garmin_laps(workout, activity).status == "invalid_order"
+        assert activity == original
+
+
+@pytest.mark.parametrize("orders,accepted", [
+    ((0, 1, 2, 3), True), ((2, 4, 6, 8), True),
+    ((0, 1, 1, 3), False), ((3, 2, 1, 0), False),
+    ((-1, 1, 2, 3), False), ((False, 1, 2, 3), False),
+])
+def test_order_contract_still_matches_producer_for_nonconsecutive_native_indices(orders, accepted):
+    workout, activity = fixture()
+    laps = activity["activity_laps"]["laps"]
+    for lap, native_index, order in zip(laps, (2, 4, 6, 8), orders):
+        lap.update(lap_index=native_index, order=order)
+    if accepted:
+        activity["activity_laps"]["laps"] = normalize_synthetic_laps(laps)
+        assert adapt_garmin_laps(workout, activity).status == "eligible"
+    else:
+        with pytest.raises(ValueError, match="Invalid lap order or duplicate"):
+            normalize_synthetic_laps(laps)
+        assert adapt_garmin_laps(workout, activity).status == "invalid_order"
+
+
+@pytest.mark.parametrize("intensity", ["ACTIVE", "RECOVERY", "REST", "WARMUP", "COOLDOWN",
+                                      "UNKNOWN", "active", "UNVERIFIED_NATIVE_VALUE"])
+def test_producer_preserves_intensity_strings_but_adapter_does_not_invent_mapping(intensity):
+    workout, activity = fixture()
+    for lap in activity["activity_laps"]["laps"]:
+        lap["intensity_type"] = intensity
+    normalized = normalize_synthetic_laps(activity["activity_laps"]["laps"])
+    assert all(lap["intensity_type"] == intensity for lap in normalized)
+    activity["activity_laps"]["laps"] = normalized
+    result = adapt_garmin_laps(workout, activity)
+    assert result.status == ("eligible" if intensity == "ACTIVE" else "non_kilometric")
+    assert analyze(workout, activity).coach_language.conclusions == []
+
+
+@pytest.mark.parametrize("omit", [True, False])
+def test_missing_intensity_requires_other_measurements_and_never_proves_continuous(omit):
+    workout, activity = fixture()
+    for lap in activity["activity_laps"]["laps"]:
+        if omit:
+            lap.pop("intensity_type")
+        else:
+            lap["intensity_type"] = None
+    normalized = normalize_synthetic_laps(activity["activity_laps"]["laps"])
+    assert all(lap["intensity_type"] is None for lap in normalized)
+    activity["activity_laps"]["laps"] = normalized
+    assert adapt_garmin_laps(workout, activity).status == "eligible"
+    analysis = analyze(workout, activity)
+    assert not analysis.signals.session_structure.available
+    assert analysis.coach_language.conclusions == []
+    normalized[0]["duration_s"] = None
+    assert adapt_garmin_laps(workout, activity).km_splits == []
+
+
+@pytest.mark.parametrize("change", ["distance", "duration", "chronology", "partial"])
+def test_gapped_native_indices_preserve_measurement_and_tail_guards(change):
+    workout, activity = fixture()
+    laps = activity["activity_laps"]["laps"]
+    for lap, native_index in zip(laps, (2, 4, 6, 8)):
+        lap["lap_index"] = native_index
+    if change == "distance":
+        for lap in laps:
+            lap.update(distance_m=1001, average_speed_mps=1001 / lap["duration_s"])
+        assert adapt_garmin_laps(workout, activity).status == "non_kilometric"
+    elif change == "duration":
+        workout["duration_minutes"] += 1
+        assert adapt_garmin_laps(workout, activity).status == "incoherent_duration"
+    elif change == "chronology":
+        laps[1]["start_time_gmt"] = "2026-10-10T08:05:02Z"
+        assert adapt_garmin_laps(workout, activity).status == "incoherent_chronology"
+    else:
+        laps[-1].update(distance_m=250, average_speed_mps=250 / laps[-1]["duration_s"])
+        workout["distance_km"] = 3.25
+        result = adapt_garmin_laps(workout, activity)
+        assert result.status == "eligible"
+        assert [row["km"] for row in result.km_splits] == [1, 2, 3]
+        assert all(row["distance_m"] == 1000 for row in result.km_splits)
 
 
 @pytest.mark.parametrize("change", ["missing", "reverse", "overlap", "gap", "offset", "invalid"])
