@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { formatPaceDisplay } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 
 const formatDuration = (seconds) => {
   if (!Number.isFinite(seconds) || seconds < 0) return null;
@@ -41,10 +41,7 @@ const getPhaseMetrics = (phase, t) => [
 const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
   if (phaseAnalysis?.available !== true) return null;
 
-  const recordedPhases = Array.isArray(phaseAnalysis.phases) && phaseAnalysis.phases.length > 0
-    ? phaseAnalysis.phases
-    : [...(phaseAnalysis.efforts || []), ...(phaseAnalysis.recoveries || [])];
-  const phases = sortPhases(recordedPhases);
+  const phases = sortPhases(getRenderableAnalysisPhases(phaseAnalysis));
   if (phases.length === 0) return null;
 
   const efforts = phases.filter((phase) => phase?.phase_type === "effort");
@@ -90,17 +87,17 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
       : null;
 
   const renderRecovery = (phase, number) => {
-    const metrics = getPhaseMetrics(phase, t);
     const duration = Number.isFinite(phase?.duration_s) && phase.duration_s >= 0
       ? formatDuration(phase.duration_s)
       : null;
+    const metrics = getPhaseMetrics(phase, t).slice(duration === null ? 0 : 1);
     return (
       <details className="mt-1 rounded-md bg-muted/20 px-3 py-1" data-testid="phase-recovery-row">
         <summary className="min-h-9 cursor-pointer text-sm">
           {t("workoutDetailExtended.phaseRecoveryNumber").replace("{number}", String(number))}
           {duration ? ` · ${duration}` : ""}
         </summary>
-        {metrics.length > 1 && <p className="pb-2 text-xs text-muted-foreground">{metrics.slice(1).join(" · ")}</p>}
+        {metrics.length > 0 && <p className="pb-2 text-xs text-muted-foreground">{metrics.join(" · ")}</p>}
       </details>
     );
   };

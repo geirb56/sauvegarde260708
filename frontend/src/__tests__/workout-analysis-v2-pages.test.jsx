@@ -14,7 +14,7 @@ import { UnitProvider } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
-import { getAnalysisTakeaway } from "@/lib/workoutAnalysis";
+import { getAnalysisTakeaway, getAnalysisObservations, getDistinctCoachObservation } from "@/lib/workoutAnalysis";
 
 jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
@@ -263,7 +263,7 @@ beforeEach(() => {
   setAnalysisAccess();
 });
 
-test("takeaway selection preserves backend facts only when structured evidence supports them", () => {
+test("legacy takeaway fields never become factual observations, including trusted intensity and phases", () => {
   expect(getAnalysisTakeaway({
     meaning: { text: "Legacy historical figures.", observations: [], caveats: ["Scientific uncertainty."] },
     signals: { intensity: { available: true } },
@@ -276,7 +276,7 @@ test("takeaway selection preserves backend facts only when structured evidence s
     meaning: { code: "meaning.structured_phases", observations: ["Effort dispersion: 7.7 s/km.", "Second observation."] },
     phase_analysis: { effort_regularity: { available: true } },
     signals: { intensity: { available: false } },
-  })).toBe("Effort dispersion: 7.7 s/km.");
+  })).toBeNull();
   expect(getAnalysisTakeaway({
     meaning: { code: "meaning.structured_phases", observations: ["Physiological conclusion."] },
     phase_analysis: { effort_regularity: { available: false } },
@@ -285,7 +285,7 @@ test("takeaway selection preserves backend facts only when structured evidence s
   expect(getAnalysisTakeaway({
     meaning: { code: "meaning.with_hr_high", observations: ["Reliable high-intensity classification."] },
     signals: { intensity: { available: true, code: "high" } },
-  })).toBe("Reliable high-intensity classification.");
+  })).toBeNull();
   expect(getAnalysisTakeaway({
     meaning: { code: "meaning.with_hr_high", observations: ["Unsupported high-intensity classification."] },
     signals: { intensity: { available: false, code: null } },
@@ -317,7 +317,9 @@ test.each(["fr", "en", "es"])("interval analysis hides diagnostics and history i
   expect(screen.getByTestId("session-classification")).toHaveTextContent(`${labels.structure}: ${labels.structureIntervals}`);
   expect(screen.queryByText(/Standard session/)).not.toBeInTheDocument();
   expect(section).toHaveTextContent(labels.averageEffortPace);
-  expect(screen.getByTestId("meaning-text")).toHaveTextContent("Synthetic effort dispersion 7.7 s/km.");
+  expect(screen.getByTestId("effort-regularity")).toHaveTextContent("7,7 s/km".replace(",", language === "en" ? "." : ","));
+  expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
   expect(screen.queryByText(/14 days|180 days|historical comparison|Synthetic physiological uncertainty/)).not.toBeInTheDocument();
@@ -340,7 +342,11 @@ test.each([
   });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
-  expect(screen.getByTestId("session-classification")).toHaveTextContent(structure ? "Structure: Continuous" : "Type: Standard session");
+  if (structure) {
+    expect(screen.getByTestId("session-classification")).toHaveTextContent("Structure: Continuous");
+  } else {
+    expect(screen.queryByTestId("session-classification")).not.toBeInTheDocument();
+  }
   expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
   expect(screen.queryByText(translations.en.workoutDetailExtended.intensityUnavailable)).not.toBeInTheDocument();
@@ -399,8 +405,8 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
   expect(analysisCalls.some((url) => url.includes("/coach/detailed-analysis/"))).toBe(false);
   expect(analysisCalls.some((url) => url.includes("/rag/workout/"))).toBe(false);
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
-  expect(screen.getByTestId("advice-text")).toBeInTheDocument();
-  expect(screen.getByTestId("advice-text")).toBeVisible();
+  expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  expect(screen.getByTestId("analysis-fallback")).toBeVisible();
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("1h");
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("6:00/km");
@@ -408,7 +414,7 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
   expect(screen.queryByTestId("evidence-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
   expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
-  expect(screen.getByRole("heading", { name: "Coach observation" })).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Coach observation" })).not.toBeInTheDocument();
   expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
   expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
@@ -563,7 +569,9 @@ test.each([
   });
   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
   await screen.findByTestId(pageId);
-  expect(screen.getByTestId("meaning-text")).toHaveTextContent("Measured comparable efforts show 7.7 s/km pace dispersion.");
+  expect(screen.getByTestId("effort-regularity")).toHaveTextContent("7.7 s/km");
+  expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   expect(screen.getByTestId("structured-phase-analysis")).toHaveAttribute("data-testid", "structured-phase-analysis");
   expect(screen.queryByText("Execution details and unavailable intensity caveat.")).not.toBeInTheDocument();
   expect(screen.queryByText(/intensity.*unavailable/i)).not.toBeInTheDocument();
@@ -1222,7 +1230,9 @@ test("late responses are ignored after the workout route changes even if transpo
     if (url.includes("/workouts/w2")) return Promise.resolve({ data: { ...workout, id: "w2", name: "New activity" } });
     return Promise.resolve({ data: {
       ...analysis,
-      advice: { available: true, code: "advice.other", text: "New Coach note" },
+      meaning: { factual_observations: [
+        { code: "fact.pace_change", text: "New measured observation", evidence: { pace_drop_min_km: 0.5 }, placement: "summary" },
+      ] },
     } });
   });
   renderWithProviders(
@@ -1232,10 +1242,10 @@ test("late responses are ignored after the workout route changes even if transpo
   const firstSignals = axios.get.mock.calls.map(([, options]) => options.signal);
   fireEvent.click(screen.getByText("Next activity"));
   expect(firstSignals.every((signal) => signal.aborted)).toBe(true);
-  await screen.findByText("New Coach note");
+  await screen.findByText("New measured observation");
   resolveWorkout({ data: workout });
   resolveAnalysis({ data: analysis });
-  await waitFor(() => expect(screen.getByTestId("workout-detail")).toHaveTextContent("New Coach note"));
+  await waitFor(() => expect(screen.getByTestId("workout-detail")).toHaveTextContent("New measured observation"));
   expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("New activity");
 });
 
@@ -1678,6 +1688,455 @@ const editorialPages = [
     ["SessionDetail", "/sessions/w1", "/sessions/:id", SessionDetail, "session-detail-page"],
   ];
 
+const factualObservation = (code, text, evidence = { sample_count: 4 }, placement = "summary") => ({
+  code, text, evidence, placement,
+});
+
+test.each([true, "94", null, undefined, NaN, Infinity, -Infinity, {}, []])(
+  "rejects nonnumeric or nonfinite factual evidence %p", (value) => {
+    expect(getAnalysisObservations({ meaning: { factual_observations: [
+      factualObservation("fact.bad", "Unreliable observation.", { value }),
+    ] } })).toEqual([]);
+  },
+);
+
+test("absent facts never expose mixed legacy observations even with trusted intensity", () => {
+  expect(getAnalysisObservations({
+    meaning: { code: "meaning.with_hr_high", observations: ["Mixed legacy conclusion."] },
+    signals: { intensity: { available: true, code: "high" } },
+  })).toEqual([]);
+});
+
+test.each(["fact.pacing_consistency", "fact.consistency", "fact.hr_drift_measured", "fact.hr_drift"])(
+  "does not display unsupported score or drift fact %s", (code) => {
+    expect(getAnalysisObservations({ meaning: { factual_observations: [
+      factualObservation(code, "Unsupported score or drift.", { value: 90 }),
+    ] } })).toEqual([]);
+  },
+);
+
+test("ungrounded legacy advice is not a factual observation", () => {
+  expect(getDistinctCoachObservation(analysis)).toBeNull();
+});
+
+test.each([
+  ["advice.high_intensity_observation", "high", true],
+  ["advice.low_intensity_observation", "low", true],
+  ["advice.high_intensity_observation", "high", false],
+])("retains only intensity advice backed by matching zone classification: %s", (code, intensityCode, available) => {
+  const adviceText = "Zone-supported intensity observation.";
+  expect(getDistinctCoachObservation({
+    ...analysis,
+    advice: { available: true, code, text: adviceText },
+    signals: { ...analysis.signals, intensity: { available, code: intensityCode } },
+  })).toBe(available ? adviceText : null);
+});
+
+test.each([
+  ["advice.even_pacing", { pace_drop_min_km: 0.5 }, "fact.pace_change"],
+  ["advice.negative_split_confirmed", { negative_split: true }, "fact.negative_split"],
+])("keeps supported legacy pacing advice only when no equivalent fact is visible: %s",
+  (code, metric, factCode) => {
+    const adviceText = "Supported legacy pacing observation.";
+    const base = {
+      ...analysis,
+      advice: { available: true, code, text: adviceText },
+      pacing: { ...analysis.pacing, ...metric },
+      signals: { ...analysis.signals, session_structure: { available: true, code: "continuous" } },
+      meaning: { factual_observations: [] },
+    };
+    expect(getDistinctCoachObservation(base)).toBe(adviceText);
+    expect(getDistinctCoachObservation({
+      ...base,
+      meaning: { factual_observations: [factualObservation(factCode, "Equivalent measured fact.")] },
+    })).toBeNull();
+  });
+
+test.each([
+  ["advice.even_pacing", 0.4, "continuous"],
+  ["advice.even_pacing", 0.3999, "continuous"],
+  ["advice.negative_split_confirmed", null, "intervals"],
+  ["advice.even_pacing", 0.5, undefined],
+])("rejects legacy global pacing advice for rounded subthreshold or non-continuous data: %s %s %s",
+  (code, paceChange, structure) => {
+    expect(getDistinctCoachObservation({
+      ...analysis,
+      advice: { available: true, code, text: "Unsupported global pacing advice." },
+      pacing: { ...analysis.pacing, pace_drop_min_km: paceChange, negative_split: code === "advice.negative_split_confirmed" },
+      signals: {
+        ...analysis.signals,
+        session_structure: structure ? { available: true, code: structure } : { available: false, code: null },
+      },
+    })).toBeNull();
+  });
+
+test.each(["advice.maintain_consistency", "advice.monitor_hr_drift", "advice.recover_after_long"])(
+  "does not restore score, unverified drift, or recommendation advice: %s", (code) => {
+    expect(getDistinctCoachObservation({
+      ...analysis,
+      advice: { available: true, code, text: "Unsupported observation." },
+    })).toBeNull();
+  },
+);
+
+test.each([
+  { code: "   " },
+  { text: " \n " },
+  { placement: "invalid" },
+  { placement: undefined },
+  { evidence: {} },
+  { evidence: [] },
+  { evidence: { valid: 94, invalid: null } },
+])("rejects malformed fact fields %p", (fields) => {
+  expect(getAnalysisObservations({ meaning: { factual_observations: [
+    { ...factualObservation("fact.pacing_consistency", "Measured consistency."), ...fields },
+  ] } })).toEqual([]);
+});
+
+test("valid facts deduplicate normalized codes and texts without losing zero or signed evidence", () => {
+  expect(getAnalysisObservations({ meaning: { factual_observations: [
+    factualObservation(" fact.zero ", " Zero drift. ", { drift: 0 }),
+    factualObservation("fact.zero", "Duplicate code.", { drift: 0 }),
+    factualObservation("fact.other", "Zero drift.", { drift: 0 }),
+    factualObservation("fact.change", "Faster measured pace.", { change: -0.5 }),
+    factualObservation("fact.bad", "Invalid.", { value: true }),
+  ] } })).toEqual(["Zero drift.", "Faster measured pace."]);
+});
+
+test.each([[[]], [[factualObservation("fact.pacing_consistency", "Malformed.", { score: null })]]])(
+  "legacy advice stays suppressed independently of raw fact codes: %p", (facts) => {
+    expect(getDistinctCoachObservation({
+      ...analysis, meaning: { factual_observations: facts },
+    })).toBeNull();
+  },
+);
+
+test("structured facts override mixed legacy text without requiring intensity", () => {
+  const fact = factualObservation("fact.pace_change", "Measured pace change.", { pace_drop_min_km: 0.5 });
+  const payload = {
+   ...analysis,
+   meaning: { ...analysis.meaning, factual_observations: [fact, fact, { ...fact, code: "duplicate" }] },
+  };
+  expect(getAnalysisTakeaway(payload)).toBe(fact.text);
+  expect(getAnalysisObservations(payload)).toEqual([fact.text]);
+  expect(getAnalysisObservations({ ...payload, meaning: {
+   ...payload.meaning, factual_observations: [],
+  } })).toEqual([]);
+});
+
+test.each([null, {}, "invalid", [null, {}, { code: "fact.bad", text: "No proof." }]])(
+  "invalid factual contract %p never falls back to mixed legacy meaning", (facts) => {
+   expect(getAnalysisObservations({
+     ...analysis,
+     meaning: { ...analysis.meaning, factual_observations: facts },
+   })).toEqual([]);
+  },
+);
+
+test.each([
+  ["advice.even_pacing", "fact.pace_change"],
+  ["advice.negative_split_confirmed", "fact.negative_split"],
+  ["advice.maintain_consistency", "fact.pacing_consistency"],
+  ["advice.monitor_hr_drift", "fact.hr_drift_measured"],
+])("does not repeat %s as coach advice when its measured fact is displayed", (adviceCode, factCode) => {
+  expect(getDistinctCoachObservation({
+    ...analysis,
+    advice: { available: true, code: adviceCode, text: "Same measurement, different wording." },
+    meaning: { factual_observations: [factualObservation(factCode, "Measured fact.")] },
+  })).toBeNull();
+});
+
+describe.each(editorialPages)("%s factual observation contract", (_name, route, path, Page, testId) => {
+  test("shows supported legacy pacing advice when its factual contract is absent", async () => {
+    const adviceText = "The recorded pace change is a useful comparison point.";
+    mockAxios({ analysisPayload: {
+      ...analysis,
+      advice: { available: true, code: "advice.even_pacing", text: adviceText },
+      pacing: { ...analysis.pacing, pace_drop_min_km: 0.5 },
+      signals: { ...analysis.signals, session_structure: { available: true, code: "continuous" } },
+      meaning: { factual_observations: [] },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("advice-text")).toHaveTextContent(adviceText);
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test("no-fact recovery advice never replaces missing observations or revives legacy mixed text", async () => {
+    mockAxios({ analysisPayload: {
+      ...analysis,
+      meaning: {
+        code: "meaning.with_hr_high",
+        text: "Legacy mixed meaning.",
+        observations: ["Legacy mixed observation."],
+        caveats: ["Legacy mixed caveat."],
+      },
+      advice: { available: true, code: "advice.recover_after_long", text: "Unsupported recovery advice." },
+      signals: { ...analysis.signals, intensity: { available: true, code: "high", text: "Supported intensity" } },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("analysis-fallback")).toBeVisible();
+    expect(screen.getByTestId(testId)).not.toHaveTextContent(/Legacy mixed|Unsupported recovery advice/);
+    expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  });
+
+  test.each(["fr", "en", "es"].flatMap((language) => [
+    [language, "absent", undefined],
+    [language, "empty", []],
+    [language, "invalid", [factualObservation("fact.bad", "Invalid fact must stay hidden.", { value: "94" })]],
+  ]))("uses an honest localized fallback in %s for %s facts, never mixed legacy text", async (language, _state, facts) => {
+    mockAxios({ analysisPayload: {
+      ...analysis,
+      meaning: {
+        code: "meaning.with_hr_high",
+        text: "Mixed legacy meaning.",
+        observations: ["Mixed legacy observation."],
+        caveats: ["Mixed legacy caveat."],
+        ...(facts === undefined ? {} : { factual_observations: facts }),
+      },
+      signals: { ...analysis.signals, intensity: { available: true, code: "high", text: "Supported intensity" } },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+    const fallback = await screen.findByTestId("analysis-fallback");
+    expect(fallback).toHaveTextContent(translations[language].workoutDetailExtended.noReliableObservations);
+    expect(fallback).toBeVisible();
+    expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+    expect(screen.getByTestId(testId)).not.toHaveTextContent(/Mixed legacy|Invalid fact must stay hidden/);
+    expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("analysis-fallback")).toHaveLength(1);
+    expect(screen.getByTestId(testId)).toHaveClass("min-w-0", "break-words");
+  });
+
+  test.each([true, null, NaN, Infinity, -Infinity, "94"])("rejects invalid numeric evidence %p on the page", async (value) => {
+    mockAxios({ analysisPayload: { ...analysis, meaning: { factual_observations: [
+      factualObservation("fact.bad", "Unreliable fact.", { value }),
+    ] } } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("analysis-fallback")).toBeVisible();
+    expect(screen.queryByText("Unreliable fact.")).not.toBeInTheDocument();
+  });
+
+  test("phase-only observations keep actual regularity and rows without a false fallback or duplicate", async () => {
+    mockAxios({ analysisPayload: {
+      ...analysis,
+      phase_analysis: makeStructuredPhaseAnalysis(),
+      meaning: { factual_observations: [
+        factualObservation("fact.effort_dispersion", "Already represented in phase regularity.", { dispersion: 7.7 }, "phases"),
+      ] },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("effort-regularity")).toHaveTextContent("7.7 s/km");
+    expect(screen.getAllByTestId("phase-effort-row")).toHaveLength(4);
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+    expect(screen.queryByText("Already represented in phase regularity.")).not.toBeInTheDocument();
+  });
+
+  test.each([
+    [[]],
+    [[null, "invalid"]],
+    [[{}]],
+    [[{ phase_type: "unknown" }]],
+    [[{ phase_type: "effort", duration_s: null, distance_m: null, pace_sec_per_km: "94", average_hr: true }]],
+    [[{ phase_type: "effort", distance_m: 800 }]],
+    [[{ phase_type: "effort", duration_s: -1, distance_m: NaN, pace_sec_per_km: Infinity, average_hr: -Infinity }]],
+  ])("phase rows without useful measured data %p do not hide the fallback", async (phases) => {
+    mockAxios({ analysisPayload: { ...analysis,
+      phase_analysis: { available: true, phases, effort_regularity: { available: true } },
+      meaning: { factual_observations: [
+        factualObservation("fact.effort_dispersion", "Invisible phase fact.", { dispersion: 0 }, "phases"),
+      ] },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("analysis-fallback")).toBeVisible();
+    expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
+  });
+
+  test.each([
+    { duration_s: 240 },
+    { duration_s: 0 },
+    { pace_sec_per_km: 300 },
+    { average_hr: 151 },
+  ])("actually rendered finite phase measurement %p prevents a false fallback", async (metric) => {
+    mockAxios({ analysisPayload: { ...analysis,
+      meaning: { factual_observations: [] },
+      phase_analysis: { available: true, phases: [{ phase_type: "effort", ...metric }] },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test("actually rendered average effort pace prevents a false fallback", async () => {
+    mockAxios({ analysisPayload: { ...analysis,
+      meaning: { factual_observations: [] },
+      phase_analysis: {
+        available: true, phases: [{ phase_type: "effort" }],
+        effort_statistics: { average_pace_sec_per_km: 300 },
+      },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("phase-summary")).toHaveTextContent("5:00/km");
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test.each(["fr", "en", "es"].flatMap((language) => [
+    [language, { pace_sec_per_km: 300 }, "5:00/km"],
+    [language, { average_hr: 151 }, "151 bpm"],
+    [language, { duration_s: 0, average_hr: 151 }, "151 bpm"],
+    [language, { pace_sec_per_km: 300, average_hr: 151 }, "5:00/km · 151 bpm"],
+  ]))("recovery measurements without duration remain accessible in %s: %p", async (language, metric, text) => {
+    mockAxios({ analysisPayload: { ...analysis,
+      meaning: { factual_observations: [] },
+      phase_analysis: {
+        available: true,
+        phases: [{ phase_type: "recovery", ...metric }],
+      },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+    const recovery = await screen.findByTestId("phase-recovery-row");
+    fireEvent.click(within(recovery).getByText(translations[language].workoutDetailExtended.phaseRecoveryNumber.replace("{number}", "1"), { exact: false }));
+    expect(within(recovery).getByText(text)).toBeVisible();
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test("actually rendered zero phase dispersion is an observation, not missing evidence", async () => {
+    mockAxios({ analysisPayload: { ...analysis,
+      meaning: { factual_observations: [] },
+      phase_analysis: {
+        available: true, phases: [{ phase_type: "effort" }],
+        effort_regularity: { available: true, pace_dispersion_sec_per_km: 0 },
+      },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("effort-regularity")).toHaveTextContent("0 s/km");
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test("pace-only evidence needs no HR or intensity and deduplicates valid observations", async () => {
+    const fact = factualObservation("fact.pace_change", "Measured pace change.", { pace_drop_min_km: 0.5 });
+    mockAxios({
+      workoutPayload: { ...workout, avg_heart_rate: null, max_heart_rate: null },
+      analysisPayload: { ...analysisMissingEvidence, meaning: { factual_observations: [
+        fact, { ...fact, code: " fact.pace_change ", text: "Duplicate measurement." }, { ...fact, code: "another" },
+      ] } },
+    });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    expect(await screen.findByTestId("meaning-text")).toHaveTextContent(fact.text);
+    expect(screen.getAllByText(fact.text)).toHaveLength(1);
+    expect(screen.queryByText("Duplicate measurement.")).not.toBeInTheDocument();
+    expect(screen.getByTestId(testId)).not.toHaveTextContent(/bpm|High intensity/);
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test.each([["FREE", false], ["active TRIAL", true], ["PREMIUM", true]])(
+    "%s uses the feature entitlement for successful empty analysis", async (_tier, allowed) => {
+      setAnalysisAccess({ allowed });
+      mockAxios();
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+      if (allowed) {
+        expect(await screen.findByTestId("analysis-fallback")).toBeVisible();
+        expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-analysis/"))).toHaveLength(1);
+      } else {
+        expect(await screen.findByTestId("analysis-upgrade-notice")).toBeVisible();
+        expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+        expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
+      }
+    },
+  );
+
+  test("unresolved entitlement never exposes the empty-analysis fallback", async () => {
+    setAnalysisAccess({ loading: true, allowed: true });
+    mockAxios();
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    await waitFor(() => expect(useSubscription).toHaveBeenCalled());
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  });
+
+  test.each(["fr", "en", "es"])("shows backend-localized pace and descriptive HR facts without zones in %s", async (language) => {
+   const texts = {
+     fr: ["Tu as accéléré de 30 secondes par kilomètre.", "FC observée : 151 à 159 bpm."],
+     en: ["You ran 30 seconds per kilometre faster.", "Observed HR: 151 to 159 bpm."],
+     es: ["Aceleraste 30 segundos por kilómetro.", "FC observada: 151 a 159 bpm."],
+   }[language];
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     meaning: {
+       ...analysis.meaning,
+       caveats: ["Intensity cannot be classified."],
+       factual_observations: [
+         factualObservation("fact.pace_change", texts[0], { pace_drop_min_km: -0.5 }),
+         factualObservation("fact.effort_hr", texts[1], { first_hr: 151, last_hr: 159 }),
+       ],
+     },
+     advice: { available: false },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+   const meaning = await screen.findByTestId("meaning-text");
+   texts.forEach((text) => expect(within(meaning).getByText(text)).toBeVisible());
+   expect(screen.getByTestId(testId)).not.toHaveTextContent(analysis.meaning.text);
+   expect(screen.queryByText("Intensity cannot be classified.")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("available-intensity")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("session-classification")).not.toBeInTheDocument();
+  });
+
+  test("retains phase rows but does not duplicate phase regularity in the takeaway", async () => {
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     phase_analysis: makeStructuredPhaseAnalysis(),
+     meaning: { ...analysis.meaning, factual_observations: [
+       factualObservation("fact.effort_dispersion", "Dispersion already shown in phases.", { dispersion: 7.7 }, "phases"),
+       factualObservation("fact.effort_hr", "Measured HR increases from 151 to 159 bpm."),
+     ] },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   expect(await screen.findByTestId("effort-regularity")).toBeVisible();
+   expect(screen.getByTestId("meaning-text")).toHaveTextContent("Measured HR increases from 151 to 159 bpm.");
+   expect(screen.queryByText("Dispersion already shown in phases.")).not.toBeInTheDocument();
+  });
+
+  test("renders a comparable historical fact without restoring historical panels", async () => {
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     meaning: { ...analysis.meaning, factual_observations: [
+       factualObservation("fact.similar_pace", "Measured pace gap against 3 comparable sessions: -0:06/km.", { pace_sample_count: 3 }),
+     ] },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   expect(await screen.findByTestId("meaning-text")).toHaveTextContent("3 comparable sessions");
+   expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
+  });
+
+  test("no factual evidence and no splits produces no artificial conclusion", async () => {
+   mockAxios({
+     workoutPayload: { ...workout, km_splits: [] },
+     analysisPayload: {
+       ...analysisMissingEvidence,
+       meaning: { ...analysis.meaning, factual_observations: [] },
+       advice: { available: false },
+     },
+   });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   await screen.findByTestId("ask-coach-btn");
+   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("session-classification")).not.toBeInTheDocument();
+   expect(screen.queryByTestId("splits-section")).not.toBeInTheDocument();
+   expect(screen.getByTestId("analysis-fallback")).toBeVisible();
+  });
+
+  test("FREE cannot request or expose structured factual observations", async () => {
+   setAnalysisAccess({ allowed: false });
+   mockAxios({ analysisPayload: {
+     ...analysis,
+     meaning: { factual_observations: [factualObservation("fact.pace_change", "Premium factual observation.", { pace_drop_min_km: 0.5 })] },
+   } });
+   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+   await screen.findByTestId("analysis-upgrade-notice");
+   expect(screen.queryByText("Premium factual observation.")).not.toBeInTheDocument();
+   expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  });
+});
+
   test.each(editorialPages)("FREE cannot load V2 through %s", async (_name, route, path, Page, testId) => {
     setAnalysisAccess({ allowed: false });
     mockAxios();
@@ -1750,13 +2209,22 @@ const editorialPages = [
   });
 
   describe.each(editorialPages)("%s PR320 contract", (name, route, path, Page, testId) => {
-    test.each(["fr", "en", "es"])("available observation is factual and localized in %s", async (language) => {
-      mockAxios();
+    test.each(["fr", "en", "es"])("unexplained consistency score is suppressed in %s", async (language) => {
+      const text = {
+        fr: "L’allure est restée régulière sur les portions mesurées.",
+        en: "Pace remained consistent across the measured splits.",
+        es: "El ritmo se mantuvo regular en los parciales medidos.",
+      }[language];
+      mockAxios({ analysisPayload: { ...analysis, meaning: { factual_observations: [
+        factualObservation("fact.pacing_consistency", text, { consistency_score: 90 }),
+      ] } } });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
       await screen.findByTestId(testId);
       const labels = translations[language].workoutDetailExtended;
-      expect(screen.getByText(labels.coachObservation)).toBeVisible();
-      expect(screen.getByText(analysis.advice.text)).toBeVisible();
+      expect(await screen.findByTestId(testId)).toBeVisible();
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+      expect(screen.queryByText(labels.coachObservation)).not.toBeInTheDocument();
+      expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
       expect(screen.queryByText(analysis.meaning.text)).not.toBeInTheDocument();
       expect(screen.queryByText(translations[language].sessions.nextSession)).not.toBeInTheDocument();
       expect(screen.queryByText(labels.adviceUnavailable)).not.toBeInTheDocument();
@@ -1803,7 +2271,8 @@ const editorialPages = [
       expect(screen.queryByText(analysis.signals.intensity.reason_unavailable)).not.toBeInTheDocument();
       expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
       expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
-      expect(screen.getByText(analysis.advice.text)).toBeVisible();
+      expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
+      expect(screen.getByTestId("analysis-fallback")).toBeVisible();
     });
 
     test.each([undefined, [], null])("absent or empty limitations (%s) do not create an empty section", async (limitations) => {
@@ -1824,6 +2293,7 @@ const editorialPages = [
         expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
         expect(screen.getByTestId(testId)).not.toHaveTextContent("undefined");
       }
+      expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
     });
 
     test("loading analysis does not prematurely expose an observation", async () => {
@@ -1831,8 +2301,10 @@ const editorialPages = [
       mockAxios({ delayedAnalysis: new Promise((resolve) => { resolveAnalysis = resolve; }) });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
       expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
+      expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
       resolveAnalysis({ data: analysis });
-      expect(await screen.findByText(analysis.advice.text)).toBeVisible();
+      expect(await screen.findByTestId("analysis-fallback")).toBeVisible();
+      expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
     });
   });
 

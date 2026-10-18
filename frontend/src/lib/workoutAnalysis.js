@@ -26,36 +26,103 @@ export const getSessionClassification = (analysis, t) => {
     };
   }
   const type = analysis?.signals?.session_type;
-  return type?.available === true && type.text
+  return type?.available === true && type.code !== "standard" && type.text
     ? { label: t("analysis.type"), text: type.text }
     : null;
 };
 
-export const getAnalysisTakeaway = (analysis) => {
-  const observations = analysis?.meaning?.observations;
-  if (!Array.isArray(observations)) return null;
-  if (analysis?.meaning?.code === "meaning.structured_phases") {
-    if (analysis?.phase_analysis?.effort_regularity?.available !== true) return null;
-    return observations.find((text) => typeof text === "string" && text.trim()) || null;
+export const getAnalysisObservations = (analysis) => {
+  const facts = analysis?.meaning?.factual_observations;
+  if (Array.isArray(facts)) {
+    const codes = new Set();
+    const texts = new Set();
+    return facts.filter((fact) => {
+      if (fact?.placement !== "summary"
+        || typeof fact.code !== "string" || !fact.code.trim()
+        || ["fact.pacing_consistency", "fact.consistency", "fact.hr_drift_measured", "fact.hr_drift"].includes(fact.code.trim())
+        || typeof fact.text !== "string" || !fact.text.trim()
+        || !fact.evidence || typeof fact.evidence !== "object" || Array.isArray(fact.evidence)
+        || Object.keys(fact.evidence).length === 0
+        || !Object.values(fact.evidence).every(Number.isFinite)) return false;
+      const code = fact.code.trim();
+      const text = fact.text.trim();
+      if (codes.has(code) || texts.has(text)) return false;
+      codes.add(code);
+      texts.add(text);
+      return true;
+    }).map((fact) => fact.text.trim());
   }
-  const intensityCode = analysis?.signals?.intensity?.code;
-  if (analysis?.signals?.intensity?.available !== true
-    || !["low", "moderate", "high", "very_high"].includes(intensityCode)
-    || !["meaning.with_hr_easy", "meaning.with_hr_moderate", "meaning.with_hr_high"].includes(analysis?.meaning?.code)) {
-    return null;
-  }
-  return observations.find((text) => typeof text === "string" && text.trim()) || null;
+  return [];
 };
 
+export const getAnalysisTakeaway = (analysis) => getAnalysisObservations(analysis)[0] || null;
+
 export const getDistinctCoachObservation = (analysis) => {
-  if (!hasCoachObservation(analysis)) return null;
-  const observation = analysis.advice.text.trim();
-  if (analysis?.advice?.code === "advice.structured_phases"
-    && analysis?.signals?.intensity?.available !== true) return null;
-  if (analysis?.advice?.code === "advice.effort_dispersion"
-    && analysis?.phase_analysis?.effort_regularity?.available === true) return null;
-  return observation === getAnalysisTakeaway(analysis)?.trim() ? null : observation;
+  const advice = analysis?.advice;
+  if (advice?.available !== true || typeof advice.text !== "string" || !advice.text.trim()) return null;
+
+  const facts = Array.isArray(analysis?.meaning?.factual_observations)
+    ? analysis.meaning.factual_observations : [];
+  const hasFact = (code) => facts.some((fact) =>
+    fact?.code === code
+    && fact?.placement === "summary"
+    && typeof fact.text === "string" && fact.text.trim()
+    && fact.evidence && typeof fact.evidence === "object" && !Array.isArray(fact.evidence)
+    && Object.keys(fact.evidence).length > 0
+    && Object.values(fact.evidence).every(Number.isFinite));
+  const intensity = analysis?.signals?.intensity;
+  const paceChange = analysis?.pacing?.pace_drop_min_km;
+  const continuousSession = analysis?.signals?.session_structure?.available === true
+    && analysis.signals.session_structure.code === "continuous";
+
+  if (advice.code === "advice.high_intensity_observation"
+    && intensity?.available === true && ["high", "very_high"].includes(intensity.code)) return advice.text.trim();
+  if (advice.code === "advice.low_intensity_observation"
+    && intensity?.available === true && intensity.code === "low") return advice.text.trim();
+  // pace_drop_min_km is rounded to three decimals; account for half a display step.
+  if (advice.code === "advice.even_pacing"
+    && continuousSession && Number.isFinite(paceChange)
+    && Math.abs(paceChange) - 0.0005 >= 0.4
+    && !hasFact("fact.pace_change")) return advice.text.trim();
+  if (advice.code === "advice.negative_split_confirmed"
+    && continuousSession && analysis?.pacing?.negative_split === true
+    && !hasFact("fact.negative_split") && !hasFact("fact.faster_second_half")) return advice.text.trim();
+
+  return null;
 };
+
+export const getRenderableAnalysisPhases = (phaseAnalysis) => {
+  if (phaseAnalysis?.available !== true) return [];
+  const phases = Array.isArray(phaseAnalysis.phases) && phaseAnalysis.phases.length > 0
+    ? phaseAnalysis.phases
+    : [
+      ...(Array.isArray(phaseAnalysis.efforts) ? phaseAnalysis.efforts : []),
+      ...(Array.isArray(phaseAnalysis.recoveries) ? phaseAnalysis.recoveries : []),
+    ];
+  return phases.filter((phase) => phase && typeof phase === "object" && !Array.isArray(phase));
+};
+
+const hasMeasuredPhaseObservations = (phaseAnalysis) => {
+  const phases = getRenderableAnalysisPhases(phaseAnalysis);
+  if (phases.length === 0) return false;
+  if (phases.some((phase) =>
+    (Number.isFinite(phase.duration_s) && phase.duration_s >= 0)
+    || (Number.isFinite(phase.pace_sec_per_km) && phase.pace_sec_per_km > 0)
+    || (Number.isFinite(phase.average_hr) && phase.average_hr > 0))) return true;
+  const averagePace = phaseAnalysis.effort_statistics?.average_pace_sec_per_km;
+  if (Number.isFinite(averagePace) && averagePace > 0) return true;
+  const regularity = phaseAnalysis.effort_regularity;
+  return regularity?.available === true
+    && ((Number.isFinite(regularity.pace_dispersion_sec_per_km) && regularity.pace_dispersion_sec_per_km >= 0)
+      || Number.isFinite(regularity.first_to_last_pace_change_sec_per_km));
+};
+
+export const getAnalysisFallback = (analysis, t) =>
+  analysis && getAnalysisObservations(analysis).length === 0
+    && !getDistinctCoachObservation(analysis)
+    && !hasMeasuredPhaseObservations(analysis.phase_analysis)
+    ? t("workoutDetailExtended.noReliableObservations")
+    : null;
 
 export const getAnalysisLimitations = (analysis, t) => {
   const items = Array.isArray(analysis?.limitations) ? [...analysis.limitations] : [];

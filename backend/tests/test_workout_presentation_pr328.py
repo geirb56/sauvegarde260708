@@ -175,7 +175,9 @@ def test_legacy_presentation_and_comparison_invariants(language, kind):
     current, phases = scenario(kind)
     analysis = build_workout_analysis_v2(current, [], language, phases)
     payload = analysis.model_dump()
-    assert set(payload["meaning"]) == {"code", "text", "observations", "caveats"}
+    assert set(payload["meaning"]) == {
+        "code", "text", "observations", "caveats", "factual_observations",
+    }
     text = LEGACY_TEXT[language]
     meaning_keys = ["dispersion", "extremes", "hr", "maximum", "reserve"]
     advice_keys = ["advice", "reserve"]
@@ -370,7 +372,7 @@ def test_response_accepts_legacy_analysis_text_instance(language, constructor):
     assert isinstance(restored.meaning, WorkoutAnalysisMeaning)
     assert restored.meaning.model_dump() == {
         "code": legacy_meaning.code, "text": legacy_meaning.text,
-        "observations": [], "caveats": [],
+        "observations": [], "caveats": [], "factual_observations": [],
     }
     assert legacy_meaning.model_dump() == {
         "code": analysis.meaning.code, "text": analysis.meaning.text,

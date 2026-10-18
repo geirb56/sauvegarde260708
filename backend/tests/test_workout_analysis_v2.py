@@ -1732,10 +1732,10 @@ def test_no_interpretable_signal_has_honest_meaning_and_unavailable_advice(langu
     ({"pace_drop": 0.6}, {}, "meaning.pace_change", "advice.even_pacing"),
     ({"pace_drop": -0.6}, {}, "meaning.pace_change", "advice.even_pacing"),
     ({"negative_split": True}, {}, "meaning.negative_split", "advice.negative_split_confirmed"),
-    ({"consistency_score": 95}, {}, "meaning.consistent_pacing", "advice.maintain_consistency"),
-    ({}, {"hr_drift": 9}, "meaning.hr_drift", "advice.monitor_hr_drift"),
+    ({"consistency_score": 95}, {}, "meaning.no_hr_no_pacing", "advice.no_hr"),
+    ({}, {"hr_drift": 9}, "meaning.no_hr_no_pacing", "advice.no_hr"),
 ])
-def test_meaning_selects_only_the_demonstrated_signal(language, split_analysis, hr_analysis, meaning_code, advice_code):
+def test_meaning_does_not_promote_internal_scores_or_unverified_drift(language, split_analysis, hr_analysis, meaning_code, advice_code):
     workout = _workout(
         "observed", user_id="u", date="2025-06-15", distance_km=8, duration_minutes=40,
         split_analysis=split_analysis, hr_analysis=hr_analysis,
@@ -1743,7 +1743,7 @@ def test_meaning_selects_only_the_demonstrated_signal(language, split_analysis, 
     analysis = workout_analysis_v2.build_workout_analysis_v2(workout, [], language)
     assert analysis.meaning.code == meaning_code
     assert analysis.advice.code == advice_code
-    assert analysis.advice.available is True
+    assert analysis.advice.available is (advice_code != "advice.no_hr")
     assert analysis.signals.intensity.available is False
     assert len(analysis.meaning.text) <= 240
     if meaning_code == "meaning.pace_change":
