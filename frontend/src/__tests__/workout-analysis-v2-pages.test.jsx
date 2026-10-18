@@ -338,6 +338,72 @@ test.each(coachScreens)("%s renders Coach V1 before factual phase and split deta
   expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
 });
 
+describe.each(coachScreens)("%s post-audit Coach conclusions", (_, route, path, Page) => {
+  test.each([
+    ["fr", "Tu cours la seconde moitié 30 s/km plus lentement, avec une fréquence cardiaque moyenne plus élevée."],
+    ["en", "Your second half is 30 s/km slower, with a higher average heart rate."],
+    ["es", "Tu segunda mitad es 30 s/km más lenta, con una frecuencia cardíaca media más alta."],
+  ])("preserves the aligned half-session conclusion without duplicate facts in %s", async (language, text) => {
+    const conclusion = coachConclusion({
+      code: "coach.execution.pace_hr", category: "execution", priority: 10, text,
+      metadata: { comparison_method: "distance_halves" },
+      evidence: {
+        first_half_pace_sec_per_km: 300, second_half_pace_sec_per_km: 330,
+        second_half_pace_change_sec_per_km: 30,
+        first_half_hr_bpm: 145, second_half_hr_bpm: 155,
+      },
+      replaces_factual_codes: ["fact.pace_change", "fact.negative_split"],
+    });
+    mockAxios({ analysisPayload: {
+      ...analysis,
+      coach_language: { version: "v1", conclusions: [conclusion] },
+      meaning: { ...analysis.meaning, factual_observations: [
+        { code: "fact.pace_change", placement: "summary", text: "Duplicate pace change.", evidence: { delta: 30 } },
+        { code: "fact.negative_split", placement: "summary", text: "Duplicate half comparison.", evidence: { delta: 30 } },
+      ] },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(text);
+    expect(screen.queryByTestId("coach-complementary")).not.toBeInTheDocument();
+    expect(screen.queryByText("Duplicate pace change.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Duplicate half comparison.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  });
+
+  test("keeps a reliable pace-only conclusion when heart rate is incomplete", async () => {
+    const text = "Tu cours la seconde moitié de ta séance 30 s/km plus lentement.";
+    mockAxios({ analysisPayload: { ...analysis, coach_language: {
+      version: "v1", conclusions: [coachConclusion({
+        text,
+        evidence: { first_half_pace_sec_per_km: 300, second_half_pace_sec_per_km: 330 },
+        metadata: { comparison_method: "distance_halves" },
+      })],
+    } } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
+    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(text);
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
+  test("shows informative history ahead of an unchanged pace/HR endpoint comparison", async () => {
+    const unchanged = coachConclusion({
+      code: "coach.execution.pace_hr", category: "execution", priority: 90,
+      kind: "descriptive", text: "Ton premier et ton dernier segment ont la même allure et la même FC moyenne.",
+      evidence: { first_pace_sec_per_km: 300, last_pace_sec_per_km: 300, first_hr_bpm: 150, last_hr_bpm: 150 },
+    });
+    const history = coachConclusion({
+      code: "coach.history.pace", category: "history", priority: 40,
+      text: "Tu cours 30 s/km plus vite que sur tes deux séances comparables.",
+      evidence: { current_pace_min_km: 5, baseline_pace_min_km: 5.5, pace_sample_count: 2 },
+    });
+    mockAxios({ analysisPayload: { ...analysis, coach_language: {
+      version: "v1", conclusions: [unchanged, history],
+    } } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
+    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(history.text);
+    expect(screen.getByTestId("coach-complementary")).toHaveTextContent(unchanged.text);
+  });
+});
+
 describe.each(coachScreens)("%s Coach V1 access and localization", (_, route, path, Page) => {
   test.each([
     ["fr", "Tu as accéléré de 30 secondes par kilomètre."],
