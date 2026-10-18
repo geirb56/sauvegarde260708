@@ -1742,12 +1742,31 @@ test.each([
       ...analysis,
       advice: { available: true, code, text: adviceText },
       pacing: { ...analysis.pacing, ...metric },
+      signals: { ...analysis.signals, session_structure: { available: true, code: "continuous" } },
       meaning: { factual_observations: [] },
     };
     expect(getDistinctCoachObservation(base)).toBe(adviceText);
     expect(getDistinctCoachObservation({
       ...base,
       meaning: { factual_observations: [factualObservation(factCode, "Equivalent measured fact.")] },
+    })).toBeNull();
+  });
+
+test.each([
+  ["advice.even_pacing", 0.4, "continuous"],
+  ["advice.even_pacing", 0.3999, "continuous"],
+  ["advice.negative_split_confirmed", null, "intervals"],
+  ["advice.even_pacing", 0.5, undefined],
+])("rejects legacy global pacing advice for rounded subthreshold or non-continuous data: %s %s %s",
+  (code, paceChange, structure) => {
+    expect(getDistinctCoachObservation({
+      ...analysis,
+      advice: { available: true, code, text: "Unsupported global pacing advice." },
+      pacing: { ...analysis.pacing, pace_drop_min_km: paceChange, negative_split: code === "advice.negative_split_confirmed" },
+      signals: {
+        ...analysis.signals,
+        session_structure: structure ? { available: true, code: structure } : { available: false, code: null },
+      },
     })).toBeNull();
   });
 
@@ -1834,6 +1853,7 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       ...analysis,
       advice: { available: true, code: "advice.even_pacing", text: adviceText },
       pacing: { ...analysis.pacing, pace_drop_min_km: 0.5 },
+      signals: { ...analysis.signals, session_structure: { available: true, code: "continuous" } },
       meaning: { factual_observations: [] },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);

@@ -72,16 +72,20 @@ export const getDistinctCoachObservation = (analysis) => {
     && Object.values(fact.evidence).every(Number.isFinite));
   const intensity = analysis?.signals?.intensity;
   const paceChange = analysis?.pacing?.pace_drop_min_km;
+  const continuousSession = analysis?.signals?.session_structure?.available === true
+    && analysis.signals.session_structure.code === "continuous";
 
   if (advice.code === "advice.high_intensity_observation"
     && intensity?.available === true && ["high", "very_high"].includes(intensity.code)) return advice.text.trim();
   if (advice.code === "advice.low_intensity_observation"
     && intensity?.available === true && intensity.code === "low") return advice.text.trim();
+  // pace_drop_min_km is rounded to three decimals; account for half a display step.
   if (advice.code === "advice.even_pacing"
-    && Number.isFinite(paceChange) && Math.abs(paceChange) >= 0.4
+    && continuousSession && Number.isFinite(paceChange)
+    && Math.abs(paceChange) - 0.0005 >= 0.4
     && !hasFact("fact.pace_change")) return advice.text.trim();
   if (advice.code === "advice.negative_split_confirmed"
-    && analysis?.pacing?.negative_split === true
+    && continuousSession && analysis?.pacing?.negative_split === true
     && !hasFact("fact.negative_split") && !hasFact("fact.faster_second_half")) return advice.text.trim();
 
   return null;
