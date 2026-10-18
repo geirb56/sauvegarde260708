@@ -2068,5 +2068,6 @@ def build_workout_analysis_v2(
         coach_language=build_coach_language(
             workout, phase_analysis, comparison, *_effort_comparison_cohort(phase_analysis.efforts),
             _efforts_comparable, _lang(language),
+            session_structure=signals.session_structure,
         ),
     )

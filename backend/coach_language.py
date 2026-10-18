@@ -114,14 +114,10 @@ def _crossed_description(paces, first_hr, last_hr, language):
     )
 
 
-def _continuous_structure(workout, phases):
-    """Require affirmative homogeneity, not merely the absence of known recoveries."""
-    structure = workout.get("session_structure")
-    if isinstance(structure, dict):
-        if structure.get("available") is False:
-            return False
-        structure = structure.get("code")
-    if "session_structure" in workout and structure != "continuous":
+def _continuous_structure(workout, phases, session_structure):
+    """Require V2's classification plus coherent full-session observations."""
+    if (getattr(session_structure, "available", None) is not True
+            or getattr(session_structure, "code", None) != "continuous"):
         return False
     if phases.phases:
         if len(phases.phases) != 1 or phases.phases[0].phase_type != "effort":
@@ -136,7 +132,7 @@ def _continuous_structure(workout, phases):
                              rel_tol=MEASUREMENT_RECONCILIATION_REL_TOL)
             and "incoherent_pace" not in phases.limitations
         )
-    return structure == "continuous"
+    return True
 
 
 def _measured_rows(workout):
@@ -268,7 +264,8 @@ def _semantic_priority(direction, crossed=False, hr_values=None, equality=False)
     return 60 if equality and not visible_hr_change else 30
 
 
-def build_coach_language(workout, phase_analysis, comparison, cohort, basis, comparable, language="en"):
+def build_coach_language(workout, phase_analysis, comparison, cohort, basis, comparable, language="en",
+                         *, session_structure=None):
     """Consume validated phase output and raw measured km rows, without legacy changes."""
     candidates = []
 
@@ -284,7 +281,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
             kind=kind, replaces_factual_codes=replaces,
         ))
 
-    rows = _measured_rows(workout) if _continuous_structure(workout, phase_analysis) else []
+    rows = _measured_rows(workout) if _continuous_structure(
+        workout, phase_analysis, session_structure,
+    ) else []
     if rows:
         paces = [row["pace"] for row in rows]
         direction, description = _pace_description(paces, language)

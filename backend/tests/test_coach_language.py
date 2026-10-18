@@ -2,12 +2,13 @@
 
 import json
 import math
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from activity_phases import ActivityPhase
-from coach_language import CoachConclusionV1, CoachLanguageV1
+from coach_language import CoachConclusionV1, CoachLanguageV1, build_coach_language
 from workout_analysis_v2 import WorkoutAnalysisV2Response, build_workout_analysis_v2
 
 
@@ -426,6 +427,144 @@ def test_max_three_contract_enforced():
         CoachLanguageV1(conclusions=[item] * 4)
 
 
+def full_session_phase(value, **updates):
+    fields = dict(order=0, phase_type="effort",
+                  duration_s=value["duration_minutes"] * 60,
+                  distance_m=value["distance_km"] * 1000, source="synthetic")
+    fields.update(updates)
+    return ActivityPhase(**fields)
+
+
+@pytest.mark.parametrize("language,word", [("fr", "Tu"), ("en", "You"), ("es", "Corres")])
+@pytest.mark.parametrize("raw_structure", [
+    "omitted", None, "intervals", {"code": "continuous", "available": False},
+])
+def test_canonical_continuous_observation_is_authority_not_raw_label(language, word, raw_structure):
+    value = continuous_session(km_splits=splits())
+    if raw_structure == "omitted":
+        del value["session_structure"]
+    else:
+        value["session_structure"] = raw_structure
+    analysis = build_workout_analysis_v2(value, [], language, [full_session_phase(value)])
+    assert analysis.signals.session_structure.available is True
+    assert analysis.signals.session_structure.code == "continuous"
+    item, = analysis.coach_language.conclusions
+    assert item.code == "coach.pacing"
+    assert word in item.text
+    assert item.metadata["coverage"] == "whole_session"
+    assert item.evidence["second_half_pace_change_sec_per_km"] == 30
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("structure", ["intervals", "unavailable"])
+def test_canonical_noncontinuous_observation_blocks_global_conclusions(language, structure):
+    value = continuous_session(km_splits=splits())
+    phases = efforts() if structure == "intervals" else [full_session_phase(value, phase_type="unknown")]
+    analysis = build_workout_analysis_v2(value, [], language, phases)
+    signal = analysis.signals.session_structure
+    assert signal.available is (structure == "intervals")
+    assert signal.code == ("intervals" if structure == "intervals" else None)
+    assert not {"coach.pacing", "coach.execution.pace_hr"} & {
+        item.code for item in analysis.coach_language.conclusions
+    }
+
+
+@pytest.mark.parametrize("offset", [-30, 30])
+def test_coach_duration_rounding_does_not_override_canonical_short_session_classification(offset):
+    value = continuous_session(distance_km=2, km_splits=splits((3.5, 4)),
+                               duration_minutes=(450 + offset) / 60)
+    del value["session_structure"]
+    phase = full_session_phase(value, duration_s=450)
+    analysis = build_workout_analysis_v2(value, [], phases=[phase])
+    assert analysis.signals.session_structure.code == "other"
+    assert analysis.coach_language.conclusions == []
+
+
+@pytest.mark.parametrize("guard", ["distance", "phase_pace", "split_time", "duration"])
+def test_canonical_continuous_is_necessary_not_sufficient_for_coherent_measurements(guard):
+    value = continuous_session(distance_km=11, km_splits=splits([5] * 11))
+    del value["session_structure"]
+    phase_updates = {}
+    if guard == "distance":
+        phase_updates["distance_m"] = 9000
+    elif guard == "phase_pace":
+        phase_updates["average_speed_mps"] = 10
+    elif guard == "split_time":
+        value["km_splits"][0]["duration_s"] = 600
+    else:
+        # 31 s fits V2's relative 1% but not Coach's absolute rounding allowance.
+        phase_updates["duration_s"] = value["duration_minutes"] * 60 - 31
+    analysis = build_workout_analysis_v2(value, [], phases=[full_session_phase(value, **phase_updates)])
+    assert analysis.signals.session_structure.available is True
+    assert analysis.signals.session_structure.code == "continuous"
+    assert analysis.coach_language.conclusions == []
+
+
+@pytest.mark.parametrize("phase_type", ["warmup", "recovery", "unknown"])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_direct_canonical_continuous_cannot_override_contradictory_phases(phase_type, mixed):
+    value = continuous_session(km_splits=splits())
+    phases = [full_session_phase(value, phase_type=phase_type)]
+    if mixed:
+        phases.insert(0, full_session_phase(value, order=1))
+    analysis = build_workout_analysis_v2(value, [], phases=phases)
+    result = build_coach_language(
+        value, analysis.phase_analysis, analysis.comparison, [], None, lambda *_: False,
+        session_structure=SimpleNamespace(available=True, code="continuous"),
+    )
+    assert result.conclusions == []
+
+
+@pytest.mark.parametrize("signal", [
+    None, SimpleNamespace(available=False, code="continuous"),
+    SimpleNamespace(available=True, code="intervals"),
+    SimpleNamespace(available=True, code=None),
+    SimpleNamespace(available=1, code="continuous"),
+    SimpleNamespace(code="continuous"), SimpleNamespace(available=True),
+])
+def test_direct_missing_or_noncontinuous_canonical_signal_abstains_despite_raw_continuous(signal):
+    value = continuous_session(km_splits=splits())
+    analysis = build_workout_analysis_v2(value, [])
+    assert analysis.coach_language.conclusions
+    result = build_coach_language(
+        value, analysis.phase_analysis, analysis.comparison, [], None, lambda *_: False,
+        session_structure=signal,
+    )
+    assert result.conclusions == []
+
+
+def test_direct_legacy_positional_language_remains_compatible_and_safely_abstains():
+    value = continuous_session(km_splits=splits())
+    analysis = build_workout_analysis_v2(value, [])
+    args = (value, analysis.phase_analysis, analysis.comparison, [], None, lambda *_: False, "fr")
+    assert build_coach_language(*args).conclusions == []
+    result = build_coach_language(*args, session_structure=analysis.signals.session_structure)
+    assert "Tu" in result.conclusions[0].text
+    with pytest.raises(TypeError):
+        build_coach_language(*args, analysis.signals.session_structure)
+
+
+def test_canonical_signal_handoff_keeps_exact_serialized_api_fields():
+    value = continuous_session(km_splits=splits())
+    del value["session_structure"]
+    payload = build_workout_analysis_v2(value, [], phases=[full_session_phase(value)]).model_dump()
+    assert set(payload) == {
+        "version", "workout", "summary", "signals", "physiology", "pacing", "comparison",
+        "meaning", "advice", "evidence", "limitations", "phase_analysis", "coach_language",
+    }
+    assert set(payload["signals"]["session_structure"]) == {
+        "available", "code", "text", "reason_unavailable",
+    }
+    assert set(payload["coach_language"]) == {"version", "conclusions"}
+    item, = payload["coach_language"]["conclusions"]
+    assert set(item) == {
+        "code", "text", "evidence", "metadata", "category", "priority", "available",
+        "kind", "replaces_factual_codes",
+    }
+    assert item["available"] is True
+    json.dumps(payload, allow_nan=False)
+
+
 def measured_segments(distances, paces, hrs=None):
     """Explicit test-only segments; no claim that a production producer exists."""
     return [
@@ -433,6 +572,31 @@ def measured_segments(distances, paces, hrs=None):
              pace_min_km=pace, **({"avg_hr": hrs[index - 1]} if hrs is not None else {}))
         for index, (distance, pace) in enumerate(zip(distances, paces), 1)
     ]
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+@pytest.mark.parametrize("distance", [9.33, 11.4])
+@pytest.mark.parametrize("with_tail", [False, True])
+def test_canonical_no_raw_full_phase_preserves_measured_tail_and_midpoint_scope(
+    language, distance, with_tail,
+):
+    whole = int(distance)
+    rows = measured_segments([1] * whole, [5 + i * 0.1 for i in range(whole)],
+                             [150 + i for i in range(whole)])
+    if with_tail:
+        rows += measured_segments([distance - whole], [6], [170])
+        rows[-1]["km"] = whole + 1
+    value = continuous_session(distance_km=distance, km_splits=rows)
+    del value["session_structure"]
+    analysis = build_workout_analysis_v2(value, [], language, [full_session_phase(value)])
+    assert analysis.signals.session_structure.code == "continuous"
+    item, = analysis.coach_language.conclusions
+    assert item.metadata["comparison_scope"] == "first_last_measured_segments"
+    assert item.metadata["coverage"] == ("whole_session" if with_tail else "measured_segments")
+    assert item.evidence["measured_distance_km"] == pytest.approx(distance if with_tail else whole)
+    assert not any("half" in key for key in item.evidence)
+    assert item.evidence["first_hr_bpm"] == 150
+    assert item.evidence["last_hr_bpm"] == (170 if with_tail else 150 + whole - 1)
 
 
 @pytest.mark.parametrize("language", ["en", "fr", "es"])
@@ -750,14 +914,15 @@ def test_endpoint_cross_does_not_claim_whole_series_regularity():
                                              (30, True), (31, False)])
 @pytest.mark.parametrize("observed_phase", [False, True])
 def test_workout_duration_rounding_has_documented_absolute_boundary(offset, available, observed_phase):
-    rows = measured_segments((1, 1), (3.5, 4), (150, 155))
-    value = continuous_session(distance_km=2, km_splits=rows,
-                               duration_minutes=(450 + offset) / 60)
+    # V2's independent 1% classification must also accept these rounding offsets.
+    rows = measured_segments((5, 5), (5, 5.5), (150, 155))
+    value = continuous_session(distance_km=10, km_splits=rows,
+                               duration_minutes=(3150 + offset) / 60)
     phases = None
     if observed_phase:
         del value["session_structure"]
-        phases = [ActivityPhase(order=0, phase_type="effort", duration_s=450,
-                                distance_m=2000, source="synthetic")]
+        phases = [ActivityPhase(order=0, phase_type="effort", duration_s=3150,
+                                distance_m=10000, source="synthetic")]
     assert bool(conclusions(value, phases=phases)) == available
 
 
