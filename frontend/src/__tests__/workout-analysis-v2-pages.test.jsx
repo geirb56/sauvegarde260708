@@ -1897,6 +1897,26 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
     expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   });
 
+  test.each(["fr", "en", "es"].flatMap((language) => [
+    [language, { pace_sec_per_km: 300 }, "5:00/km"],
+    [language, { average_hr: 151 }, "151 bpm"],
+    [language, { duration_s: 0, average_hr: 151 }, "151 bpm"],
+    [language, { pace_sec_per_km: 300, average_hr: 151 }, "5:00/km · 151 bpm"],
+  ]))("recovery measurements without duration remain accessible in %s: %p", async (language, metric, text) => {
+    mockAxios({ analysisPayload: { ...analysis,
+      meaning: { factual_observations: [] },
+      phase_analysis: {
+        available: true,
+        phases: [{ phase_type: "recovery", ...metric }],
+      },
+    } });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+    const recovery = await screen.findByTestId("phase-recovery-row");
+    fireEvent.click(within(recovery).getByText(translations[language].workoutDetailExtended.phaseRecoveryNumber.replace("{number}", "1"), { exact: false }));
+    expect(within(recovery).getByText(text)).toBeVisible();
+    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+  });
+
   test("actually rendered zero phase dispersion is an observation, not missing evidence", async () => {
     mockAxios({ analysisPayload: { ...analysis,
       meaning: { factual_observations: [] },

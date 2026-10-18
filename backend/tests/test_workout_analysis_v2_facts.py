@@ -455,8 +455,12 @@ def test_addition_preserves_all_legacy_meaning_fields_and_roundtrips(language, s
     assert WorkoutAnalysisMeaning(code="legacy", text="Legacy").factual_observations == []
 
 
-@pytest.mark.parametrize("evidence", [{}, {"value": float("nan")}, {"value": float("inf")}])
-def test_typed_fact_contract_rejects_empty_and_nonfinite_evidence(evidence):
+@pytest.mark.parametrize("evidence", [
+    None, [], {}, {"value": True}, {"value": "94"}, {"value": None},
+    {"value": float("nan")}, {"value": float("inf")}, {"value": float("-inf")},
+    {"valid": 94, "invalid": False},
+])
+def test_typed_fact_contract_rejects_invalid_evidence_before_coercion(evidence):
     with pytest.raises(ValidationError):
         WorkoutAnalysisFactualObservation(code="test", text="Test", evidence=evidence)
 
@@ -484,8 +488,14 @@ def test_descriptive_drift_keeps_measurement_without_reinterpreting_it(language,
     assert analysis.physiology.hr_drift == drift
     assert str(drift) in item.text
     assert not any(word in item.text.lower() for word in (
-        "fatigue", "hydr", "effort", "increased", "augment", "aument", "légèr", "slight",
+        "fatigue", "hydr", "effort", "augment", "aument", "légèr", "slight",
+        "drift", "dérive", "deriva",
     ))
+    assert {
+        "fr": "entre le début et la fin",
+        "en": "between the start and the end",
+        "es": "entre el inicio y el final",
+    }[language] in item.text
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -504,3 +514,26 @@ def test_runner_wording_does_not_modify_any_legacy_fields(language):
         exclude={"factual_observations"},
     )
     assert facts(analysis)["fact.negative_split"].text != analysis.meaning.text
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("effort_count", [0, 1])
+def test_recoveries_never_support_continuous_pacing_or_hr_conclusions(language, effort_count):
+    phases = repetitions()[:2] if effort_count else repetitions()[1:2]
+    current = workout(
+        km_splits=[{"pace_min_km": 5}, {"pace_min_km": 6}],
+        split_analysis={"consistency_score": 90, "pace_drop": 1, "negative_split": True},
+        hr_analysis={"hr_drift": 12},
+    )
+    analysis = build_workout_analysis_v2(current, [], language, phases)
+    assert analysis.meaning.factual_observations == []
+    assert analysis.pacing.consistency_score == 90
+    assert analysis.pacing.pace_drop_min_km == 1
+    assert analysis.pacing.negative_split is True
+    assert analysis.physiology.hr_drift == 12
+
+
+@pytest.mark.parametrize("value", [0, -3, 94, 3.5])
+def test_typed_fact_contract_preserves_real_numeric_evidence(value):
+    item = WorkoutAnalysisFactualObservation(code="test", text="Test", evidence={"value": value})
+    assert item.evidence == {"value": value}

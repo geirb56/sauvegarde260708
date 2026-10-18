@@ -87,17 +87,17 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
       : null;
 
   const renderRecovery = (phase, number) => {
-    const metrics = getPhaseMetrics(phase, t);
     const duration = Number.isFinite(phase?.duration_s) && phase.duration_s >= 0
       ? formatDuration(phase.duration_s)
       : null;
+    const metrics = getPhaseMetrics(phase, t).slice(duration === null ? 0 : 1);
     return (
       <details className="mt-1 rounded-md bg-muted/20 px-3 py-1" data-testid="phase-recovery-row">
         <summary className="min-h-9 cursor-pointer text-sm">
           {t("workoutDetailExtended.phaseRecoveryNumber").replace("{number}", String(number))}
           {duration ? ` · ${duration}` : ""}
         </summary>
-        {metrics.length > 1 && <p className="pb-2 text-xs text-muted-foreground">{metrics.slice(1).join(" · ")}</p>}
+        {metrics.length > 0 && <p className="pb-2 text-xs text-muted-foreground">{metrics.join(" · ")}</p>}
       </details>
     );
   };

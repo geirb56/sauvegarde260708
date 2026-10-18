@@ -39,10 +39,13 @@ class WorkoutAnalysisFactualObservation(AnalysisText):
     evidence: Dict[str, float]
     placement: Literal["summary", "phases"] = "summary"
 
-    @field_validator("evidence")
+    @field_validator("evidence", mode="before")
     @classmethod
     def _finite_evidence(cls, value):
-        if not value or not all(math.isfinite(number) for number in value.values()):
+        if (
+            not isinstance(value, dict) or not value
+            or not all(_valid_finite_number(number) for number in value.values())
+        ):
             raise ValueError("Factual observations require finite numeric evidence")
         return value
 
@@ -647,7 +650,7 @@ def _template(language: str, key: str, **params) -> str:
             "fact.pacing_consistency": "Your pace scored {score}/100 for consistency.",
             "fact.pace_change.slower": "Your pace slowed by {seconds} seconds per kilometre.",
             "fact.pace_change.faster": "Your pace was {seconds} seconds per kilometre faster.",
-            "fact.hr_drift_measured": "Your measured heart-rate drift was {drift} bpm.",
+            "fact.hr_drift_measured": "Your heart rate changed by {drift} bpm between the start and the end.",
             "fact.faster_second_half": "Your second half was faster than your first.",
             "fact.history_pace": "Over the last {days} days, your {count} comparable sessions averaged {baseline}. Your pace difference on this session: {delta}.",
             "fact.history_hr": "Your {count} comparable sessions averaged {baseline} bpm. Your heart-rate difference on this session: {delta} bpm.",
@@ -658,7 +661,7 @@ def _template(language: str, key: str, **params) -> str:
             "fact.pacing_consistency": "Ton allure obtient {score}/100 pour sa régularité.",
             "fact.pace_change.slower": "Ton allure a ralenti de {seconds} secondes par kilomètre.",
             "fact.pace_change.faster": "Ton allure a accéléré de {seconds} secondes par kilomètre.",
-            "fact.hr_drift_measured": "Ta dérive cardiaque mesurée est de {drift} bpm.",
+            "fact.hr_drift_measured": "Ta fréquence cardiaque a varié de {drift} bpm entre le début et la fin.",
             "fact.faster_second_half": "Ta seconde moitié a été plus rapide que la première.",
             "fact.history_pace": "Sur les {days} derniers jours, tes {count} séances comparables étaient courues en moyenne à {baseline}. Ton écart d'allure sur cette séance : {delta}.",
             "fact.history_hr": "Tes {count} séances comparables avaient une fréquence cardiaque moyenne de {baseline} bpm. Ton écart sur cette séance : {delta} bpm.",
@@ -669,7 +672,7 @@ def _template(language: str, key: str, **params) -> str:
             "fact.pacing_consistency": "Tu ritmo obtiene {score}/100 en regularidad.",
             "fact.pace_change.slower": "Tu ritmo fue {seconds} segundos por kilómetro más lento.",
             "fact.pace_change.faster": "Tu ritmo fue {seconds} segundos por kilómetro más rápido.",
-            "fact.hr_drift_measured": "Tu deriva cardíaca medida fue de {drift} bpm.",
+            "fact.hr_drift_measured": "Tu frecuencia cardíaca cambió {drift} bpm entre el inicio y el final.",
             "fact.faster_second_half": "Tu segunda mitad fue más rápida que la primera.",
             "fact.history_pace": "En los últimos {days} días, tus {count} sesiones comparables tuvieron un ritmo medio de {baseline}. Tu diferencia de ritmo en esta sesión: {delta}.",
             "fact.history_hr": "Tus {count} sesiones comparables tuvieron una frecuencia cardíaca media de {baseline} bpm. Tu diferencia en esta sesión: {delta} bpm.",
@@ -1931,7 +1934,10 @@ def _build_factual_observations(
             ))
 
     # Recovery and effort paces must not become a global execution conclusion.
-    multi_effort = len(phases.efforts) > 1 or workout.get("session_structure") == "intervals"
+    multi_effort = (
+        len(phases.efforts) > 1 or bool(phases.recoveries)
+        or workout.get("session_structure") == "intervals"
+    )
     split_analysis = workout.get("split_analysis")
     split_analysis = split_analysis if isinstance(split_analysis, dict) else {}
     split_count = len(_extract_split_paces(workout))
