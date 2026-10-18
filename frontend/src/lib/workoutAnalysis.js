@@ -25,6 +25,7 @@ export const getCoachConclusions = (analysis) => {
   const texts = new Set();
   return analysis.coach_language.conclusions
     .filter((item) => item?.available === true
+      && ["conclusion", "descriptive"].includes(item.kind)
       && typeof item.code === "string" && item.code.trim()
       && typeof item.text === "string" && item.text.trim()
       && typeof item.category === "string" && item.category.trim()

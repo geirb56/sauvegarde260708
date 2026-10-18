@@ -292,6 +292,7 @@ test("Coach V1 validates evidence, sorts, deduplicates and never pads conclusion
     coachConclusion({ available: false }),
     coachConclusion({ priority: Infinity }),
     coachConclusion({ category: "" }),
+    coachConclusion({ kind: "unsupported" }),
     coachConclusion({ text: "Complement." }),
     primary,
     coachConclusion({ code: "duplicate-category", text: "Same phenomenon." }),

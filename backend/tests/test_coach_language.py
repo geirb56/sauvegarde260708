@@ -62,13 +62,13 @@ def test_localized_full_session_halves(language, word):
     assert result[0].code == "coach.pacing"
     assert word in result[0].text
     assert result[0].evidence["second_half_pace_change_sec_per_km"] == 30
-    assert result[0].evidence["coverage"] == "whole_session"
+    assert result[0].metadata["coverage"] == "whole_session"
 
 
 @pytest.mark.parametrize("distance", [4.2, 8])
 def test_partial_distance_never_called_session_halves(distance):
     item = conclusions(session(distance_km=distance, km_splits=splits()))[0]
-    assert item.evidence["coverage"] == "measured_full_km"
+    assert item.metadata["coverage"] == "measured_full_km"
     assert "half" not in item.text
     assert "second_half_pace_change_sec_per_km" not in item.evidence
 
@@ -77,12 +77,12 @@ def test_partial_distance_never_called_session_halves(distance):
                                          (5.40001, "slower"), (4.59999, "faster")])
 def test_display_threshold_boundaries(pace, direction):
     item = conclusions(session(distance_km=2, km_splits=splits((5, pace))))[0]
-    assert item.evidence["direction"] == direction
+    assert item.metadata["direction"] == direction
 
 
 def test_variable_pace_not_falsely_stable_or_directional():
     item = conclusions(session(distance_km=3, km_splits=splits((5, 6, 5))))[0]
-    assert item.evidence["direction"] == "variable"
+    assert item.metadata["direction"] == "variable"
     assert item.kind == "descriptive"
     assert item.evidence["pace_range_sec_per_km"] == 60
 
@@ -171,7 +171,7 @@ def test_excluded_efforts_keep_original_numbers():
 def test_excluded_middle_effort_keeps_exact_number_sequence():
     item = conclusions(phases=efforts(paces=(300, 300, 300),
                                      distances=(1000, 100, 1000)))[0]
-    assert item.evidence["effort_numbers"] == "1, 3"
+    assert item.metadata["effort_numbers"] == "1, 3"
     assert "numbers 1, 3" in item.text
 
 
@@ -191,7 +191,7 @@ def test_history_separate_populations_never_cross():
     items = conclusions(session(avg_heart_rate=155), history=history)
     assert len(items) == 1
     assert items[0].code == "coach.history.pace"
-    assert items[0].evidence["population"] == "pace_only"
+    assert items[0].metadata["population"] == "pace_only"
     assert not any("heart_rate" in key for key in items[0].evidence)
 
 
@@ -206,11 +206,102 @@ def test_priorities_dedup_and_max_three_without_padding():
     items = conclusions(session(km_splits=splits(hrs=(140, 145, 150, 155))),
                         phases=efforts(), history=prior())
     assert [item.code for item in items] == [
-        "coach.execution.pace_hr", "coach.repetitions.pace_hr", "coach.history.pace",
+        "coach.repetitions.pace_hr", "coach.history.pace",
     ]
     assert [item.priority for item in items] == sorted(item.priority for item in items)
     assert len(conclusions()) == 0
     assert len(conclusions(phases=efforts())) == 1
+    assert len(items) <= 3
+    assert len({item.category for item in items}) == len(items)
+
+
+@pytest.mark.parametrize("phase_type", ["warmup", "cooldown", "recovery"])
+@pytest.mark.parametrize("hrs", [None, (140, 145, 150, 155)])
+def test_mixed_phase_blocks_global_km_inference(phase_type, hrs):
+    phase = ActivityPhase(order=0, phase_type=phase_type, duration_s=300,
+                          distance_m=1000, source="synthetic")
+    assert conclusions(session(km_splits=splits(hrs=hrs)), phases=[phase]) == []
+
+
+@pytest.mark.parametrize("structure", ["intervals", {"code": "intervals", "available": True}])
+@pytest.mark.parametrize("hrs", [None, (140, 145, 150, 155)])
+def test_explicit_intervals_block_global_km_inference(structure, hrs):
+    assert conclusions(session(session_structure=structure, km_splits=splits(hrs=hrs))) == []
+
+
+def test_multiple_efforts_without_recovery_block_global_km_inference():
+    phases = [phase for phase in efforts() if phase.phase_type == "effort"]
+    items = conclusions(session(km_splits=splits(hrs=(140, 145, 150, 155))), phases=phases)
+    assert [item.category for item in items] == ["repetitions"]
+
+
+def test_nonmonotonic_pace_and_hr_only_compare_endpoints():
+    item = conclusions(session(km_splits=splits((5, 6, 4, 5.5), (150, 160, 140, 155))))[0]
+    assert "last segment" in item.text and "first" in item.text
+    assert "progressively" not in item.text and "drift" not in item.text
+
+
+@pytest.mark.parametrize("language,relationship", [
+    ("fr", "Tu maintiens"), ("en", "You maintain"), ("es", "Mantienes"),
+])
+def test_stable_pace_cross_is_relationship_not_unrelated_facts(language, relationship):
+    item = conclusions(session(km_splits=splits((5, 5, 5, 5), (145, 150, 155, 160))),
+                       language=language)[0]
+    assert relationship in item.text
+    assert "first" in item.text if language == "en" else True
+
+
+@pytest.mark.parametrize("pace,direction", [(4.5, "faster"), (5.5, "slower"), (5, "matches")])
+def test_history_direction_baseline_and_current_are_explicit(pace, direction):
+    item = conclusions(session(avg_pace_min_km=pace), history=prior())[0]
+    assert direction in item.text
+    assert item.evidence["baseline_pace_min_km"] == 5
+    assert item.evidence["current_pace_min_km"] == pace
+    assert "positive" not in item.text and "gap" not in item.text
+
+
+@pytest.mark.parametrize("hr,direction", [(140, "lower"), (160, "higher"), (150, "matches")])
+def test_hr_history_direction_baseline_and_current_are_explicit(hr, direction):
+    item = conclusions(session(avg_pace_min_km=None, avg_heart_rate=hr), history=prior())[0]
+    assert direction in item.text
+    assert item.evidence["baseline_heart_rate_bpm"] == 150
+    assert item.evidence["current_heart_rate_bpm"] == hr
+
+
+def test_crossed_execution_replaces_single_pace_phenomenon():
+    items = conclusions(session(km_splits=splits(hrs=(145, 150, 155, 160))), history=prior())
+    assert [item.category for item in items] == ["execution", "history"]
+    assert [item.priority for item in items] == sorted(item.priority for item in items)
+    assert len({item.category for item in items}) == len(items)
+    assert len(items) <= 3
+
+
+@pytest.mark.parametrize("hrs", [None, (145, 150, 155, 160)])
+def test_km_endpoint_evidence_is_independently_auditable(hrs):
+    item = conclusions(session(km_splits=splits(hrs=hrs)))[0]
+    assert item.evidence["first_pace_sec_per_km"] == 300
+    assert item.evidence["last_pace_sec_per_km"] == 330
+    assert item.evidence["first_to_last_pace_change_sec_per_km"] == (
+        item.evidence["last_pace_sec_per_km"] - item.evidence["first_pace_sec_per_km"]
+    )
+
+
+def test_half_comparison_includes_both_measured_means():
+    item = conclusions(session(km_splits=splits()))[0]
+    assert item.evidence["first_half_pace_sec_per_km"] == 300
+    assert item.evidence["second_half_pace_sec_per_km"] == 330
+    assert item.evidence["second_half_pace_change_sec_per_km"] == (
+        item.evidence["second_half_pace_sec_per_km"] - item.evidence["first_half_pace_sec_per_km"]
+    )
+
+
+def test_repetition_endpoint_evidence_is_independently_auditable():
+    item = conclusions(phases=efforts())[0]
+    assert item.evidence["first_pace_sec_per_km"] == 300
+    assert item.evidence["last_pace_sec_per_km"] == 330
+    assert item.evidence["first_to_last_pace_change_sec_per_km"] == (
+        item.evidence["last_pace_sec_per_km"] - item.evidence["first_pace_sec_per_km"]
+    )
 
 
 def test_descriptive_last_after_reliable_history():
@@ -241,7 +332,7 @@ def test_pace_and_hr_directions_have_no_physiological_threshold(pace, hrs):
 
 def test_odd_full_distance_not_called_equal_halves():
     item = conclusions(session(distance_km=3, km_splits=splits((5, 5.5, 6))))[0]
-    assert item.evidence["coverage"] == "whole_session"
+    assert item.metadata["coverage"] == "whole_session"
     assert "half" not in item.text
 
 
@@ -277,7 +368,8 @@ def test_legacy_derived_metrics_do_not_substitute_for_measured_rows():
                                hr_analysis={"hr_drift": 10})) == []
 
 
-@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf"), True, None, {}, ""])
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf"), True, None,
+                                    {}, "", "5", "stable"])
 def test_evidence_contract_rejects_nonfinite_or_invalid(invalid):
     with pytest.raises(ValidationError):
         CoachConclusionV1(code="x", text="x", evidence={"x": invalid},
@@ -290,7 +382,8 @@ def test_legacy_serialization_and_finite_evidence():
     assert payload["coach_language"]["version"] == "v1"
     for item in payload["coach_language"]["conclusions"]:
         assert item["available"] is True
-        assert all(isinstance(value, str) or math.isfinite(value) for value in item["evidence"].values())
+        assert all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and math.isfinite(value) for value in item["evidence"].values())
     json.dumps(payload, allow_nan=False)
     del payload["coach_language"]
     legacy = WorkoutAnalysisV2Response.model_validate(payload)
