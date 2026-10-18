@@ -53,6 +53,20 @@ class Activities:
         self.cursor = Cursor(docs)
         return self.cursor
 
+    async def update_one(self, query, update, upsert=False):
+        existing = next((
+            doc for doc in self.docs
+            if doc.get("user_id") == query["user_id"]
+            and doc.get("external_id") == query["external_id"]
+        ), None)
+        if existing is not None:
+            existing.update(update["$set"])
+            return SimpleNamespace(modified_count=1, upserted_id=None)
+        if upsert:
+            self.docs.append(dict(update["$set"]))
+            return SimpleNamespace(modified_count=0, upserted_id="synthetic-insert")
+        return SimpleNamespace(modified_count=0, upserted_id=None)
+
 
 class Connections:
     def __init__(self, doc):
@@ -128,16 +142,13 @@ def test_non_running_and_invalid_activity_ids_are_skipped(monkeypatch):
     laps.assert_awaited_once_with(db, "user-1", "456")
 
 
-def test_enriched_newest_activity_is_skipped_for_next_incomplete_run(monkeypatch):
+def test_pending_newest_activity_is_skipped_for_next_ready_run(monkeypatch):
     db = make_db([
-        activity(
-            "123",
-            details={
-                "schema_version": activity_details.SCHEMA_VERSION,
-                "status": "no_data",
-            },
-            laps={"schema_version": activity_laps.SCHEMA_VERSION, "status": "empty"},
-        ),
+        activity("123", details_fetch={"status": "running", "next_attempt_at": (
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat()}, laps_fetch={"status": "running", "next_attempt_at": (
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat()}),
         activity("456", days_ago=1),
     ])
     details = AsyncMock(return_value={"status": "queued"})
@@ -152,12 +163,11 @@ def test_enriched_newest_activity_is_skipped_for_next_incomplete_run(monkeypatch
     laps.assert_awaited_once_with(db, "user-1", "456")
 
 
-def test_in_progress_activity_is_not_replaced_by_another_target(monkeypatch):
-    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
-    db = make_db([
-        activity("123", details_fetch={"status": "running", "next_attempt_at": future}),
-        activity("456", days_ago=1),
-    ])
+def test_complete_phases_request_laps_only(monkeypatch):
+    db = make_db([activity(
+        "123",
+        details={"schema_version": activity_details.SCHEMA_VERSION, "status": "complete"},
+    )])
     details = AsyncMock(return_value={"status": "cooldown"})
     laps = AsyncMock(return_value={"status": "queued"})
     monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
@@ -166,16 +176,73 @@ def test_in_progress_activity_is_not_replaced_by_another_target(monkeypatch):
     result = run(service._enqueue_recent_activity_details(db, "user-1"))
 
     assert result["activity_id"] == "123"
-    details.assert_awaited_once_with(db, "user-1", "123")
+    assert "details" not in result
+    details.assert_not_awaited()
     laps.assert_awaited_once_with(db, "user-1", "123")
 
 
-def test_failed_activity_respects_cooldown(monkeypatch):
+def test_complete_laps_request_phases_only(monkeypatch):
+    db = make_db([activity(
+        "123",
+        laps={"schema_version": activity_laps.SCHEMA_VERSION, "status": "complete"},
+    )])
+    details = AsyncMock(return_value={"status": "queued"})
+    laps = AsyncMock(return_value={"status": "cached"})
+    monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
+    monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
+
+    result = run(service._enqueue_recent_activity_details(db, "user-1"))
+
+    assert result["activity_id"] == "123"
+    assert "laps" not in result
+    details.assert_awaited_once_with(db, "user-1", "123")
+    laps.assert_not_awaited()
+
+
+def test_cooldown_newest_activity_is_skipped_for_next_ready_run(monkeypatch):
     future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     db = make_db([
         activity("123", details_fetch={"status": "failed", "next_attempt_at": future},
                  laps_fetch={"status": "failed", "next_attempt_at": future}),
+        activity("456", days_ago=1),
     ])
+    details = AsyncMock(return_value={"status": "queued"})
+    laps = AsyncMock(return_value={"status": "queued"})
+    monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
+    monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
+
+    result = run(service._enqueue_recent_activity_details(db, "user-1"))
+
+    assert result["activity_id"] == "456"
+    details.assert_awaited_once_with(db, "user-1", "456")
+    laps.assert_awaited_once_with(db, "user-1", "456")
+
+
+def test_pending_phases_with_ready_laps_requests_laps_only(monkeypatch):
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    db = make_db([activity(
+        "123",
+        details_fetch={"status": "running", "next_attempt_at": future},
+    )])
+    details = AsyncMock(return_value={"status": "queued"})
+    laps = AsyncMock(return_value={"status": "queued"})
+    monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
+    monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
+
+    result = run(service._enqueue_recent_activity_details(db, "user-1"))
+
+    assert result["activity_id"] == "123"
+    assert "details" not in result
+    details.assert_not_awaited()
+    laps.assert_awaited_once_with(db, "user-1", "123")
+
+
+def test_two_terminal_acquisitions_are_ignored(monkeypatch):
+    db = make_db([activity(
+        "123",
+        details={"schema_version": activity_details.SCHEMA_VERSION, "status": "no_data"},
+        laps={"schema_version": activity_laps.SCHEMA_VERSION, "status": "empty"},
+    )])
     details = AsyncMock()
     laps = AsyncMock()
     monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
@@ -188,15 +255,69 @@ def test_failed_activity_respects_cooldown(monkeypatch):
     laps.assert_not_awaited()
 
 
-def test_redis_errors_do_not_fail_the_sync_or_report_false_success(monkeypatch):
-    db = make_db([activity("123")])
-    details = AsyncMock(side_effect=RuntimeError("synthetic Redis outage"))
-    laps = AsyncMock(side_effect=RuntimeError("synthetic Redis outage"))
+def test_expired_running_lease_is_ready_for_existing_requester(monkeypatch):
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    db = make_db([activity(
+        "123",
+        details_fetch={"status": "running", "next_attempt_at": expired},
+        laps={"schema_version": activity_laps.SCHEMA_VERSION, "status": "empty"},
+    )])
+    details = AsyncMock(return_value={"status": "already_queued"})
+    laps = AsyncMock()
     monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
     monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
 
-    result = run(service._schedule_recent_activity_details(db, "user-1"))
+    result = run(service._enqueue_recent_activity_details(db, "user-1"))
 
+    assert result["activity_id"] == "123"
+    assert result["details"]["status"] == "already_queued"
+    details.assert_awaited_once_with(db, "user-1", "123")
+    laps.assert_not_awaited()
+
+
+def test_expired_laps_lease_is_ready_for_existing_requester(monkeypatch):
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    db = make_db([activity(
+        "123",
+        details={"schema_version": activity_details.SCHEMA_VERSION, "status": "complete"},
+        laps_fetch={"status": "queued", "next_attempt_at": expired},
+    )])
+    details = AsyncMock()
+    laps = AsyncMock(return_value={"status": "already_queued"})
+    monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
+    monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
+
+    result = run(service._enqueue_recent_activity_details(db, "user-1"))
+
+    assert result["activity_id"] == "123"
+    assert result["laps"]["status"] == "already_queued"
+    details.assert_not_awaited()
+    laps.assert_awaited_once_with(db, "user-1", "123")
+
+
+def test_redis_errors_do_not_fail_the_sync_or_report_false_success(monkeypatch):
+    db = make_db([])
+    details = AsyncMock(side_effect=RuntimeError("synthetic Redis outage"))
+    laps = AsyncMock(side_effect=RuntimeError("synthetic Redis outage"))
+    monkeypatch.setattr(service, "emit_activity_created", AsyncMock())
+    monkeypatch.setattr("garmin.activity_details.request_activity_details", details)
+    monkeypatch.setattr("garmin.activity_laps.request_activity_laps", laps)
+
+    async def import_and_schedule():
+        summary = {
+            "external_id": "123",
+            "source": "garmin",
+            "activity_type": "running",
+            "start_time": datetime.now(timezone.utc).isoformat(),
+        }
+        ingestion = await service._ingest_activities(db, "user-1", [summary])
+        result = await service._schedule_recent_activity_details(db, "user-1")
+        return ingestion, result
+
+    ingestion, result = run(import_and_schedule())
+
+    assert ingestion["new"] == 1
+    assert db.garmin_activities.docs[0]["external_id"] == "123"
     assert result["details"]["status"] == "queue_unavailable"
     assert result["laps"]["status"] == "queue_unavailable"
     details.assert_awaited_once()

@@ -647,16 +647,24 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
     activities = await cursor.to_list(length=AUTO_ACTIVITY_DETAILS_SCAN_LIMIT)
     now_iso = now.isoformat()
 
-    def needs_request(cache, fetch, schema_version, terminal_statuses):
+    def acquisition_state(cache, fetch, schema_version, terminal_statuses):
         if (cache or {}).get("schema_version") == schema_version and (
             cache or {}
         ).get("status") in terminal_statuses:
-            return False
+            return "complete"
         fetch = fetch or {}
         if fetch.get("status") in {"queued", "running"}:
-            return True
+            next_attempt_at = fetch.get("next_attempt_at")
+            if isinstance(next_attempt_at, str) and next_attempt_at > now_iso:
+                return "pending"
+            # Expired or missing leases are recoverable through the existing
+            # request function, which retains Redis deduplication and Mongo
+            # claim/fencing behavior.
+            return "ready"
         next_attempt_at = fetch.get("next_attempt_at")
-        return not isinstance(next_attempt_at, str) or next_attempt_at <= now_iso
+        if isinstance(next_attempt_at, str) and next_attempt_at > now_iso:
+            return "cooldown"
+        return "ready"
 
     for activity in activities:
         if not _is_running_activity(activity):
@@ -666,19 +674,23 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
         except (TypeError, ValueError):
             continue
 
-        details_needed = needs_request(
+        details_state = acquisition_state(
             activity.get("activity_details"),
             activity.get("activity_details_fetch"),
             DETAILS_SCHEMA_VERSION,
             {"complete", "no_data"},
         )
-        laps_needed = needs_request(
+        laps_state = acquisition_state(
             activity.get("activity_laps"),
             activity.get("activity_laps_fetch"),
             LAPS_SCHEMA_VERSION,
             {"complete", "empty"},
         )
-        if not details_needed and not laps_needed:
+        ready_types = {
+            "details": details_state == "ready",
+            "laps": laps_state == "ready",
+        }
+        if not any(ready_types.values()):
             continue
 
         outcomes = {}
@@ -686,6 +698,8 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
             ("details", request_activity_details),
             ("laps", request_activity_laps),
         ):
+            if not ready_types[key]:
+                continue
             try:
                 outcomes[key] = await request(db, user_id, activity_id)
             except Exception as exc:
