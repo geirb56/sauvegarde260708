@@ -625,6 +625,188 @@ def test_persistent_cursor_is_scoped_to_user_and_survives_scheduler_restart(requ
         ]
 
 
+@pytest.mark.parametrize("cursor_time", [
+    "2026-01-01T10:00:00Z", "2026-01-01T12:00:00+02:00",
+    "2026-01-01T10:00:00.000000+00:00",
+])
+def test_rotation_boundary_compares_instants_and_breaks_ties(cursor_time, requesters):
+    docs = []
+    for activity_id, start in [
+        ("4", "2026-01-01T11:00:00Z"),
+        ("3", "2026-01-01T10:00:00Z"),
+        ("2", "2026-01-01T10:00:00Z"),
+        ("1", "2026-01-01T09:00:00Z"),
+    ]:
+        docs.append({**activity(activity_id), "start_time": start})
+    db = make_db(docs)
+    db.garmin_connections.doc["activity_details_coverage_cursor"] = {
+        "start_time": cursor_time, "external_id": "3",
+    }
+
+    async def scenario():
+        return [
+            (await service._enqueue_recent_activity_details(db, "user-1"))["activity_id"]
+            for _ in range(5)
+        ]
+
+    assert run(scenario()) == ["2", "1", "4", "3", "2"]
+
+
+def test_circular_rotation_skips_complete_and_cooldown_without_revisiting(requesters):
+    docs = [activity(str(i), days_ago=i) for i in range(1, 11)]
+    future = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+    for doc in docs[5:]:
+        doc["activity_details"] = {
+            "schema_version": activity_details.SCHEMA_VERSION, "status": "complete",
+        }
+        doc["activity_laps"] = {
+            "schema_version": activity_laps.SCHEMA_VERSION, "status": "empty",
+        }
+    docs[0]["activity_details_fetch"] = {"status": "failed", "next_attempt_at": future}
+    docs[0]["activity_laps_fetch"] = {"status": "running", "next_attempt_at": future}
+    db = make_db(docs)
+    db.garmin_connections.doc["activity_details_coverage_cursor"] = {
+        "start_time": docs[4]["start_time"], "external_id": "5",
+    }
+
+    async def scenario():
+        return [
+            (await service._enqueue_recent_activity_details(db, "user-1"))["activity_id"]
+            for _ in range(5)
+        ]
+
+    assert run(scenario()) == ["2", "3", "4", "5", "2"]
+    assert requesters[0].await_count == requesters[1].await_count == 5
+
+
+def test_new_run_does_not_reset_rotation_to_newest(requesters):
+    db = make_db([activity(str(i), days_ago=i) for i in range(1, 11)])
+
+    async def scenario():
+        assert (await service._enqueue_recent_activity_details(db, "user-1"))["activity_id"] == "1"
+        db.garmin_activities.docs.append(activity("100"))
+        selected = [
+            (await service._enqueue_recent_activity_details(db, "user-1"))["activity_id"]
+            for _ in range(10)
+        ]
+        assert selected == ["2", "3", "4", "5", "6", "7", "8", "9", "100", "1"]
+        assert "10" not in [doc["external_id"] for doc in db.garmin_activities.cursor.docs]
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("details_status,laps_status", [
+    ("queued", "queued"),
+    ("already_queued", "already_queued"),
+    ("queued", "busy"),
+    ("cooldown", "queued"),
+    ("queued", "running"),
+    ("already_queued", "busy"),
+    ("cooldown", "cooldown"),
+    ("not_found", "cached"),
+    ("queue_unavailable", "queue_unavailable"),
+])
+def test_cursor_records_outcomes_only_after_both_requests(
+    details_status, laps_status, requesters, monkeypatch,
+):
+    db = make_db([activity("1"), activity("2", days_ago=1)])
+    original_cursor = {"start_time": "2000-01-01T00:00:00+00:00", "external_id": "99"}
+    db.garmin_connections.doc["activity_details_coverage_cursor"] = original_cursor.copy()
+    snapshots = []
+    events = []
+    persist = db.garmin_connections.update_one
+
+    async def save(query, update):
+        events.append("persist")
+        await persist(query, update)
+
+    monkeypatch.setattr(db.garmin_connections, "update_one", save)
+
+    def respond(kind, status):
+        async def request(_db, _user_id, _activity_id):
+            snapshots.append(copy.deepcopy(db.garmin_connections.doc["activity_details_coverage_cursor"]))
+            events.append(kind)
+            if status == "queue_unavailable":
+                raise RuntimeError("synthetic Redis outage")
+            return {"status": status}
+        return request
+
+    requesters[0].side_effect = respond("details", details_status)
+    requesters[1].side_effect = respond("laps", laps_status)
+    before = copy.deepcopy(db.garmin_activities.docs)
+    result = run(service._enqueue_recent_activity_details(db, "user-1"))
+    assert snapshots == [original_cursor, original_cursor]
+    assert events == ["details", "laps", "persist"]
+    assert result == {
+        "status": "requested", "activity_id": "1",
+        "details": {"status": details_status}, "laps": {"status": laps_status},
+    }
+    assert db.garmin_connections.doc["activity_details_coverage_cursor"] == {
+        "start_time": db.garmin_activities.docs[0]["start_time"], "external_id": "1",
+        "outcomes": {"details": details_status, "laps": laps_status},
+    }
+    assert db.garmin_activities.docs == before  # enqueue/attempt is not enrichment
+    for request in requesters:
+        request.assert_awaited_once_with(db, "user-1", "1")
+
+
+def test_two_failed_requests_rotate_and_recover_after_restart_without_starvation(requesters):
+    db = make_db([activity(str(i), days_ago=i) for i in range(1, 11)])
+    for request in requesters:
+        request.side_effect = RuntimeError("synthetic Redis outage")
+
+    async def scenario():
+        for expected in ["1", "2"]:
+            result = await service._enqueue_recent_activity_details(db, "user-1")
+            assert result["activity_id"] == expected
+            assert result["details"] == result["laps"] == {"status": "queue_unavailable"}
+        # Recover with only persisted state: failures must be revisited, not lost.
+        restarted = make_db(copy.deepcopy(db.garmin_activities.docs))
+        restarted.garmin_connections.doc = copy.deepcopy(db.garmin_connections.doc)
+        for request in requesters:
+            request.side_effect = None
+        selected = []
+        for _ in range(10):
+            counts = [request.await_count for request in requesters]
+            result = await service._enqueue_recent_activity_details(restarted, "user-1")
+            selected.append(result["activity_id"])
+            assert result["details"] == result["laps"] == {"status": "queued"}
+            for request, count in zip(requesters, counts):
+                assert request.await_count == count + 1
+        assert selected == ["3", "4", "5", "6", "7", "8", "9", "10", "1", "2"]
+        assert not any("activity_details" in doc or "activity_laps" in doc for doc in restarted.garmin_activities.docs)
+
+    run(scenario())
+    assert requesters[0].await_count == requesters[1].await_count == 12
+
+
+def test_permanently_failing_target_does_not_starve_other_nine(requesters):
+    db = make_db([activity(str(i), days_ago=i) for i in range(1, 11)])
+
+    async def request(_db, _user_id, activity_id):
+        if activity_id == "1":
+            raise RuntimeError("synthetic target-specific queue error")
+        return {"status": "queued"}
+
+    for requester in requesters:
+        requester.side_effect = request
+
+    async def scenario():
+        results = [
+            await service._enqueue_recent_activity_details(db, "user-1")
+            for _ in range(21)
+        ]
+        assert [result["activity_id"] for result in results] == [
+            str(i) for i in range(1, 11)
+        ] * 2 + ["1"]
+        for result in results:
+            status = "queue_unavailable" if result["activity_id"] == "1" else "queued"
+            assert result["details"] == result["laps"] == {"status": status}
+
+    run(scenario())
+    assert requesters[0].await_count == requesters[1].await_count == 21
+
+
 def dated_history():
     docs = []
     for activity_id, start in [

@@ -609,6 +609,8 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
 
     Cover the latest ten runs, without an age cutoff. A per-user cursor rotates
     through that set even when newer runs arrive or an acquisition keeps failing.
+    It records attempted requests and their outcomes, not accepted jobs or
+    completed enrichment, and is persisted only after the requests return.
     At most one activity (two targeted jobs) is selected per sync. Existing
     queues, worker concurrency, leases and fetch cooldowns remain authoritative.
     """
@@ -670,20 +672,30 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
     activities = await cursor.to_list(length=AUTO_ACTIVITY_DETAILS_RUN_LIMIT)
     now_iso = now.isoformat()
 
+    def coverage_time(value):
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     def coverage_key(activity):
-        return (
-            activity["_coverage_start"].replace(tzinfo=timezone.utc).isoformat(),
-            activity["_coverage_id"],
-        )
+        return coverage_time(activity["_coverage_start"]), activity["_coverage_id"]
 
     previous = conn.get("activity_details_coverage_cursor") or {}
     if isinstance(previous.get("start_time"), str) and isinstance(previous.get("external_id"), str):
-        last_key = (previous["start_time"], previous["external_id"])
-        # Retain the chronological boundary even if the previous target left the top ten.
-        activities = (
-            [activity for activity in activities if coverage_key(activity) < last_key]
-            + [activity for activity in activities if coverage_key(activity) >= last_key]
-        )
+        try:
+            last_key = (coverage_time(previous["start_time"]), previous["external_id"])
+        except ValueError:
+            last_key = None
+        if last_key is not None:
+            # Rotate once, after the boundary, retaining it even if the target left
+            # the top ten. The previous target is considered last on wraparound.
+            pivot = next((
+                index for index, activity in enumerate(activities)
+                if coverage_key(activity) < last_key
+            ), len(activities))
+            activities = activities[pivot:] + activities[:pivot]
 
     def acquisition_state(cache, fetch, schema_version, terminal_statuses):
         if (cache or {}).get("schema_version") == schema_version and (
@@ -729,13 +741,6 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
         if not any(ready_types.values()):
             continue
 
-        start_time, cursor_id = coverage_key(activity)
-        await db.garmin_connections.update_one(
-            {"user_id": user_id},
-            {"$set": {"activity_details_coverage_cursor": {
-                "start_time": start_time, "external_id": cursor_id,
-            }}},
-        )
         outcomes = {}
         for key, request in (
             ("details", request_activity_details),
@@ -751,6 +756,20 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
                     key, user_id, activity_id, exc,
                 )
                 outcomes[key] = {"status": "queue_unavailable"}
+        # Advance after observing both outcomes, including refusals/errors, so a
+        # broken target cannot starve the other nine. This is an attempt cursor:
+        # already_queued for details may belong to another target, and queued for
+        # laps may only describe an existing Mongo lease. Neither proves a fetch.
+        # No cache is changed; failed targets return on the next circular pass,
+        # subject to the existing requester cooldowns and Redis deduplication.
+        start_time, cursor_id = coverage_key(activity)
+        await db.garmin_connections.update_one(
+            {"user_id": user_id},
+            {"$set": {"activity_details_coverage_cursor": {
+                "start_time": start_time.isoformat(), "external_id": cursor_id,
+                "outcomes": {key: outcome["status"] for key, outcome in outcomes.items()},
+            }}},
+        )
         return {"status": "requested", "activity_id": activity_id, **outcomes}
 
     return {"status": "no_candidate"}
