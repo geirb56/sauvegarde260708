@@ -19,6 +19,10 @@ LIMITATION = {
     "en": "comparability remains limited",
     "es": "comparabilidad sigue siendo limitada",
 }
+KNOWN_DIFFERENCE = {
+    "pace": {"fr": "60 s/km plus rapide", "en": "60 s/km faster", "es": "60 s/km más rápido"},
+    "hr": {"fr": "5 bpm plus élevée", "en": "5 bpm higher", "es": "5 lpm más alta"},
+}
 
 
 def current(**updates):
@@ -65,12 +69,15 @@ def test_sufficient_metric_is_not_blocked_by_other_population(language, metric):
     assert getattr(reference, f"{metric}_sample_count") == 3
     assert getattr(reference, f"{other}_sample_count") == 1
     assert items[0].kind == "conclusion"
+    assert KNOWN_DIFFERENCE[metric][language] in items[0].text
+    assert "3" in items[0].text
+    assert LIMITATION[language] not in items[0].text
     assert items[0].metadata["population"] == f"{metric}_only"
     assert f"fact.similar_{metric}" in items[0].replaces_factual_codes
     if metric == "pace":
         assert items[0].evidence["baseline_pace_min_km"] == 6
         assert items[0].evidence["pace_difference_sec_per_km"] == -60
-        assert reference.pace_avg_distance_km == pytest.approx(31 / 3, abs=0.001)
+        assert reference.pace_avg_distance_km == 10.33
         assert not any("heart_rate" in key for key in items[0].evidence)
     else:
         assert items[0].evidence["baseline_heart_rate_bpm"] == 145
@@ -131,6 +138,33 @@ def test_no_or_single_reference_never_creates_comparative_conclusion(prior):
     if not prior:
         assert analysis.comparison.similar.avg_pace_min_km is None
         assert analysis.comparison.similar.avg_heart_rate is None
+
+
+def test_three_matches_with_only_one_valid_measurement_per_metric_abstain():
+    prior = history()
+    for row in prior[1:]:
+        row["avg_pace_min_km"] = None
+        row["avg_heart_rate"] = None
+    analysis = build_workout_analysis_v2(current(), prior)
+    assert analysis.comparison.similar.sample_count == 3
+    assert analysis.comparison.similar.pace_sample_count == 1
+    assert analysis.comparison.similar.hr_sample_count == 1
+    assert analysis.coach_language.conclusions == []
+    assert historical_facts(analysis) == {}
+    assert analysis.comparison.similar.pace_comparison_status == "unavailable"
+    assert analysis.comparison.similar.hr_comparison_status == "unavailable"
+
+
+def test_known_race_does_not_contaminate_training_population():
+    prior = history()
+    prior[2].update(is_race=True, avg_pace_min_km=3, avg_heart_rate=200)
+    analysis = build_workout_analysis_v2(current(), prior)
+    reference = analysis.comparison.similar
+    assert reference.sample_count == reference.pace_sample_count == reference.hr_sample_count == 2
+    assert "prior-3" not in reference.workout_ids
+    assert reference.avg_pace_min_km == 5.75
+    assert reference.avg_heart_rate == 142.5
+    assert reference.comparable is True
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

@@ -404,7 +404,7 @@ def test_comparable_history_facts_do_not_require_generic_fourteen_day_baseline()
 
 @pytest.mark.parametrize("scenario", ["absent", "single", "unknown_nature", "missing_hr",
                                      "invalid_pace", "distance_mismatch", "race_mismatch"])
-def test_unavailable_or_noncomparable_history_does_not_become_facts(scenario):
+def test_history_facts_follow_metric_coverage_and_nature(scenario):
     current = workout(avg_heart_rate=150, is_race=False)
     prior = history()
     if scenario == "absent":
@@ -425,7 +425,16 @@ def test_unavailable_or_noncomparable_history_does_not_become_facts(scenario):
             row["is_race"] = True
     analysis = build_workout_analysis_v2(current, prior)
     assert analysis.comparison.similar.comparable is False
-    assert facts(analysis) == {}
+    observed = facts(analysis)
+    if scenario == "unknown_nature":
+        assert set(observed) == HISTORY_CODES
+        assert all("comparability remains limited" in item.text for item in observed.values())
+    elif scenario == "missing_hr":
+        assert set(observed) == {"fact.similar_pace"}
+    elif scenario == "invalid_pace":
+        assert set(observed) == {"fact.similar_hr"}
+    else:
+        assert observed == {}
 
 
 @pytest.mark.parametrize("invalid", [None, True, "bad", float("nan"), float("inf"),
@@ -442,7 +451,8 @@ def test_invalid_current_or_historical_metrics_do_not_break_factual_history(inva
     current[metric] = 5 if metric == "avg_pace_min_km" else 150
     analysis = build_workout_analysis_v2(current, prior)
     assert analysis.comparison.similar.comparable is False
-    assert facts(analysis) == {}
+    assert forbidden not in facts(analysis)
+    assert set(facts(analysis)) == HISTORY_CODES - {forbidden}
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

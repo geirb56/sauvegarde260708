@@ -1298,7 +1298,18 @@ async def test_similar_reference_is_exposed_without_breaking_the_v2_contract(cli
         "coach_language",
     }
     assert payload["comparison"]["baseline_period_days"] == 14
-    assert isinstance(payload["comparison"]["similar"], dict)
+    similar = payload["comparison"]["similar"]
+    assert isinstance(similar, dict)
+    assert similar["comparable"] is False
+    assert similar["session_nature_known"] is False
+    assert similar["pace_comparison_status"] == "descriptive"
+    assert similar["hr_comparison_status"] == "descriptive"
+    assert "session_nature_unknown" in similar["limitations"]
+    conclusions = payload["coach_language"]["conclusions"]
+    history = [item for item in conclusions if item["category"] == "history"]
+    assert len(history) == 1
+    assert history[0]["kind"] == "descriptive"
+    assert "comparability remains limited" in history[0]["text"]
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from activity_phases import ActivityPhase
-from coach_language import CoachLanguageV1, build_coach_language
+from coach_language import CoachLanguageV1, build_coach_language, historical_comparison_caveat
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
@@ -113,9 +113,23 @@ class WorkoutAnalysisComparisonMetric(BaseModel):
     percent_change: Optional[float] = None
 
 
+HistoricalComparisonStatus = Literal["unavailable", "descriptive", "comparable"]
+
+
 class WorkoutAnalysisSimilarReference(BaseModel):
     available: bool
     comparable: bool = False
+    pace_comparison_status: HistoricalComparisonStatus = Field(
+        default="unavailable",
+        description="Pace population: unavailable below minimum evidence, descriptive if nature is unknown, comparable otherwise.",
+    )
+    hr_comparison_status: HistoricalComparisonStatus = Field(
+        default="unavailable",
+        description="HR population: unavailable below minimum evidence, descriptive if nature is unknown, comparable otherwise.",
+    )
+    session_nature_known: bool = Field(
+        default=False, description="Training/race nature is explicit for the current session and all selected matches.",
+    )
     sample_count: int = 0
     period_days: int = SIMILAR_HISTORY_WINDOW_DAYS
     distance_tolerance_pct: float = SIMILAR_DISTANCE_TOLERANCE_PCT
@@ -309,7 +323,7 @@ def _template(language: str, key: str, **params) -> str:
             "limitations.splits": "No kilometre splits or split analysis are available; pace distribution cannot be described.",
             "limitations.baseline": "No recent same-type baseline is available.",
             "limitations.baseline_descriptive": "The recent baseline is descriptive only; session distances or natures may differ.",
-            "limitations.comparability": "Historical comparability is not established; differences are not evidence of progress.",
+            "limitations.comparability": "Historical comparability is limited and depends on each metric; differences are not evidence of progress.",
             "limitations.no_comparable_reference": "No earlier session of comparable distance is available.",
             "limitations.sample_too_small": "Too few similar sessions are available for a reliable comparison.",
             "limitations.pace_sample_too_small": "Too few similar sessions have usable pacing data.",
@@ -395,7 +409,7 @@ def _template(language: str, key: str, **params) -> str:
             "limitations.splits": "Aucune fraction kilométrique ni analyse des fractions n'est disponible ; la répartition de l'allure ne peut pas être décrite.",
             "limitations.baseline": "Aucune référence récente de même type n'est disponible.",
             "limitations.baseline_descriptive": "La référence récente est seulement descriptive ; les distances ou la nature des séances peuvent différer.",
-            "limitations.comparability": "La comparabilité historique n'est pas établie ; les écarts ne démontrent pas une progression.",
+            "limitations.comparability": "La comparabilité historique est limitée et dépend de chaque métrique ; les écarts ne démontrent pas une progression.",
             "limitations.no_comparable_reference": "Aucune séance antérieure de distance comparable n'est disponible.",
             "limitations.sample_too_small": "Trop peu de séances similaires sont disponibles pour une comparaison fiable.",
             "limitations.pace_sample_too_small": "Trop peu de séances similaires disposent de données d'allure exploitables.",
@@ -481,7 +495,7 @@ def _template(language: str, key: str, **params) -> str:
             "limitations.splits": "No hay parciales kilométricos ni análisis de parciales disponibles; no puede describirse la distribución del ritmo.",
             "limitations.baseline": "No hay una referencia reciente del mismo tipo disponible.",
             "limitations.baseline_descriptive": "La referencia reciente es solo descriptiva; las distancias o la naturaleza de las sesiones pueden diferir.",
-            "limitations.comparability": "La comparabilidad histórica no está establecida; las diferencias no demuestran progreso.",
+            "limitations.comparability": "La comparabilidad histórica es limitada y depende de cada métrica; las diferencias no demuestran progreso.",
             "limitations.no_comparable_reference": "No hay una sesión anterior de distancia comparable disponible.",
             "limitations.sample_too_small": "Hay muy pocas sesiones similares para una comparación fiable.",
             "limitations.pace_sample_too_small": "Muy pocas sesiones similares tienen datos de ritmo utilizables.",
@@ -654,6 +668,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.faster_second_half": "Your second half was faster than your first.",
             "fact.history_pace": "Over the last {days} days, your {count} comparable sessions averaged {baseline}. Your pace difference on this session: {delta}.",
             "fact.history_hr": "Your {count} comparable sessions averaged {baseline} bpm. Your heart-rate difference on this session: {delta} bpm.",
+            "fact.history_pace_descriptive": "Your {count} sessions of similar distance averaged {baseline}. Your average pace difference: {delta}.",
+            "fact.history_hr_descriptive": "Your {count} sessions of similar distance averaged {baseline} bpm. Your average heart-rate difference: {delta} bpm.",
             "fact.effort_hr_evolution": "Your average heart rate went from {first} to {last} bpm between comparable repetitions {first_number} and {last_number}.",
             "fact.comparable_effort_extremes": "Among the {count} measured comparable efforts, effort {fastest} was fastest ({fast_pace}); effort {slowest} was slowest ({slow_pace}).",
         },
@@ -663,6 +679,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.faster_second_half": "Ta seconde moitié a été plus rapide que la première.",
             "fact.history_pace": "Sur les {days} derniers jours, tes {count} séances comparables étaient courues en moyenne à {baseline}. Ton écart d'allure sur cette séance : {delta}.",
             "fact.history_hr": "Tes {count} séances comparables avaient une fréquence cardiaque moyenne de {baseline} bpm. Ton écart sur cette séance : {delta} bpm.",
+            "fact.history_pace_descriptive": "Tes {count} séances de distance similaire avaient une allure moyenne de {baseline}. Ton écart d'allure moyenne : {delta}.",
+            "fact.history_hr_descriptive": "Tes {count} séances de distance similaire avaient une FC moyenne de {baseline} bpm. Ton écart de FC moyenne : {delta} bpm.",
             "fact.effort_hr_evolution": "Ta fréquence cardiaque moyenne est passée de {first} à {last} bpm entre les répétitions comparables {first_number} et {last_number}.",
             "fact.comparable_effort_extremes": "Parmi les {count} efforts comparables mesurés, l'effort {fastest} est le plus rapide ({fast_pace}) ; l'effort {slowest} est le plus lent ({slow_pace}).",
         },
@@ -672,6 +690,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.faster_second_half": "Tu segunda mitad fue más rápida que la primera.",
             "fact.history_pace": "En los últimos {days} días, tus {count} sesiones comparables tuvieron un ritmo medio de {baseline}. Tu diferencia de ritmo en esta sesión: {delta}.",
             "fact.history_hr": "Tus {count} sesiones comparables tuvieron una frecuencia cardíaca media de {baseline} bpm. Tu diferencia en esta sesión: {delta} bpm.",
+            "fact.history_pace_descriptive": "Tus {count} sesiones de distancia similar tuvieron un ritmo medio de {baseline}. Tu diferencia de ritmo medio: {delta}.",
+            "fact.history_hr_descriptive": "Tus {count} sesiones de distancia similar tuvieron una FC media de {baseline} lpm. Tu diferencia de FC media: {delta} lpm.",
             "fact.effort_hr_evolution": "Tu frecuencia cardíaca media pasó de {first} a {last} bpm entre las repeticiones comparables {first_number} y {last_number}.",
             "fact.comparable_effort_extremes": "Entre los {count} esfuerzos comparables medidos, el esfuerzo {fastest} fue el más rápido ({fast_pace}); el esfuerzo {slowest} fue el más lento ({slow_pace}).",
         },
@@ -968,16 +988,32 @@ def _build_similar_reference(
         limitations.append("pace_sample_too_small")
     if len(hr_values) < SIMILAR_MIN_COMPARABLE_SAMPLE:
         limitations.append("hr_sample_too_small")
-    if _competition_flag(workout) is None or any(_competition_flag(match) is None for match in matches):
+    session_nature_known = (
+        _competition_flag(workout) is not None
+        and all(_competition_flag(match) is not None for match in matches)
+    )
+    if not session_nature_known:
         limitations.append("session_nature_unknown")
     # P2: comparable stays False as soon as any limitation is recorded. An unknown
     # training/race nature is not enough to assert strong comparability; the factual
     # distance/pace gap is still exposed alongside the explicit limitation.
     comparable = not limitations
 
+    def metric_status(population, difference) -> HistoricalComparisonStatus:
+        if len(population) < SIMILAR_MIN_COMPARABLE_SAMPLE or not _valid_finite_number(difference):
+            return "unavailable"
+        nature_known = (
+            _competition_flag(workout) is not None
+            and all(_competition_flag(match) is not None for match in population)
+        )
+        return "comparable" if nature_known else "descriptive"
+
     return WorkoutAnalysisSimilarReference(
         available=True,
         comparable=comparable,
+        pace_comparison_status=metric_status(pace_matches, pace_difference),
+        hr_comparison_status=metric_status(hr_matches, hr_difference),
+        session_nature_known=session_nature_known,
         sample_count=len(matches),
         workout_ids=[str(match.get("id", "")) for match in matches],
         avg_distance_km=avg_distance,
@@ -1981,9 +2017,10 @@ def _build_factual_observations(
             first_number=first.effort_number, last_number=last.effort_number)
 
     similar = comparison.similar
-    if similar and similar.available and similar.comparable:
+    if similar and similar.available:
         if (
-            _valid_positive_number(similar.avg_pace_min_km)
+            similar.pace_comparison_status != "unavailable"
+            and _valid_positive_number(similar.avg_pace_min_km)
             and _valid_finite_number(similar.pace_difference_min_km)
             and _valid_positive_number(similar.pace_avg_distance_km)
         ):
@@ -1994,21 +2031,33 @@ def _build_factual_observations(
                 "pace_avg_distance_km": similar.pace_avg_distance_km,
                 "period_days": similar.period_days,
                 "distance_tolerance_pct": similar.distance_tolerance_pct,
-            }, template_key="fact.history_pace", count=similar.pace_sample_count, days=similar.period_days,
+            }, template_key=("fact.history_pace_descriptive"
+                             if similar.pace_comparison_status == "descriptive" else "fact.history_pace"),
+                count=similar.pace_sample_count, days=similar.period_days,
                 tolerance=_fmt_number(similar.distance_tolerance_pct, 0),
                 avg_distance=_fmt_number(similar.pace_avg_distance_km, 2),
                 baseline=_fmt_pace(similar.avg_pace_min_km),
                 delta=_fmt_pace_delta(similar.pace_difference_min_km))
         if (
-            _valid_positive_number(similar.avg_heart_rate)
+            similar.hr_comparison_status != "unavailable"
+            and _valid_positive_number(similar.avg_heart_rate)
             and _valid_finite_number(similar.heart_rate_difference_bpm)
         ):
             add("fact.similar_hr", {
                 "hr_sample_count": similar.hr_sample_count,
                 "baseline_heart_rate_bpm": similar.avg_heart_rate,
                 "heart_rate_difference_bpm": similar.heart_rate_difference_bpm,
-            }, template_key="fact.history_hr", count=similar.hr_sample_count, baseline=_fmt_number(similar.avg_heart_rate, 1),
+            }, template_key=("fact.history_hr_descriptive"
+                             if similar.hr_comparison_status == "descriptive" else "fact.history_hr"),
+                count=similar.hr_sample_count, baseline=_fmt_number(similar.avg_heart_rate, 1),
                 delta=_fmt_signed(similar.heart_rate_difference_bpm, 1))
+        for fact in facts:
+            status = {
+                "fact.similar_pace": similar.pace_comparison_status,
+                "fact.similar_hr": similar.hr_comparison_status,
+            }.get(fact.code)
+            if status == "descriptive":
+                fact.text += " " + historical_comparison_caveat(language)
     return facts
 
 
