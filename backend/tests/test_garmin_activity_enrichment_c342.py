@@ -513,6 +513,21 @@ def test_three_runs_progress_to_completion_then_stop(requesters):
     assert requesters[0].await_count == requesters[1].await_count == 3
 
 
+def test_completed_top_ten_do_not_expand_coverage_to_eleventh_run(requesters):
+    docs = [activity(str(i), days_ago=i) for i in range(1, 12)]
+    for doc in docs[:10]:
+        doc["activity_details"] = {
+            "schema_version": activity_details.SCHEMA_VERSION, "status": "complete",
+        }
+        doc["activity_laps"] = {
+            "schema_version": activity_laps.SCHEMA_VERSION, "status": "complete",
+        }
+    db = make_db(docs)
+    assert run(service._enqueue_recent_activity_details(db, "user-1")) == {"status": "no_candidate"}
+    for request in requesters:
+        request.assert_not_awaited()
+
+
 @pytest.mark.parametrize("details_status,laps_status", [
     ("complete", "complete"), ("complete", "empty"),
     ("no_data", "complete"), ("no_data", "empty"),
@@ -622,17 +637,20 @@ def dated_history():
         ("7", "not-a-date"),
         ("8", None),
         ("9", 123456),
+        ("10", "2026-01-01"),  # legacy date-only string
+        ("11", "2026-01-01T05:00:00Z"),
     ]:
         doc = activity(activity_id)
         doc["start_time"] = start
         docs.append(doc)
     docs[5]["garmin_activity"] = {"start_time": "2026-01-01T06:00:00Z"}
+    docs[10]["garmin_activity"] = {"start_time": "invalid"}
     return docs
 
 
 def test_actual_dates_and_deterministic_ties_not_lexical_or_bson_type_order(requesters):
     db = make_db(list(reversed(dated_history())))
-    expected = ["2", "1", "3", "4", "5", "6"]
+    expected = ["2", "1", "3", "4", "5", "6", "11", "10"]
 
     async def scenario():
         selected = [
@@ -725,7 +743,7 @@ def test_initial_import_preserves_persisted_details_and_does_not_burst(requester
 
 @pytest.mark.parametrize("history,expected", [
     (large_history, [str(index + 1) for index in range(60, 90, 3)]),
-    (dated_history, ["2", "1", "3", "4", "5", "6"]),
+    (dated_history, ["2", "1", "3", "4", "5", "6", "11", "10"]),
 ])
 def test_selector_on_local_mongodb_with_synthetic_history(history, expected, requesters):
     """Opt-in real Mongo date conversion/projection/sort, never production or Garmin."""
@@ -740,9 +758,13 @@ def test_selector_on_local_mongodb_with_synthetic_history(history, expected, req
         db = client["c345_synthetic_" + uuid.uuid4().hex]
         try:
             await db.garmin_activities.insert_many(history())
-            await db.garmin_activities.insert_one({
-                **activity("999"), "user_id": "user-2",
-            })
+            await db.garmin_activities.insert_many([
+                {**activity("999"), "user_id": "user-2"},
+                activity("998", activity_type=["running"]),
+                activity("997", activity_type="cycling"),
+                {**activity("996"), "source": "training_v2"},
+            ])
+            original = await db.garmin_activities.find({}).to_list(length=None)
             await db.garmin_connections.insert_one({
                 "user_id": "user-1", "connected": True,
                 "garmin_username": "synthetic-account",
@@ -754,6 +776,36 @@ def test_selector_on_local_mongodb_with_synthetic_history(history, expected, req
             assert selected == expected + expected[:1]
             for request in requesters:
                 assert request.await_count == len(expected) + 1
+            assert await db.garmin_activities.find({}).to_list(length=None) == original
+
+            # Verify that projecting only cache metadata retains independent states.
+            for activity_id in expected:
+                await db.garmin_activities.update_one(
+                    {"user_id": "user-1", "external_id": activity_id},
+                    {"$set": {
+                        "activity_details": {
+                            "schema_version": activity_details.SCHEMA_VERSION,
+                            "status": "no_data", "phases": [],
+                        },
+                        "activity_laps": {
+                            "schema_version": activity_laps.SCHEMA_VERSION,
+                            "status": "empty", "laps": [],
+                        },
+                    }},
+                )
+            for request in requesters:
+                request.reset_mock()
+            assert await service._enqueue_recent_activity_details(db, "user-1") == {"status": "no_candidate"}
+            for request in requesters:
+                request.assert_not_awaited()
+            await db.garmin_activities.update_one(
+                {"user_id": "user-1", "external_id": expected[-1]},
+                {"$unset": {"activity_laps": ""}},
+            )
+            result = await service._enqueue_recent_activity_details(db, "user-1")
+            assert result["activity_id"] == expected[-1]
+            requesters[0].assert_not_awaited()
+            requesters[1].assert_awaited_once_with(db, "user-1", expected[-1])
         finally:
             await client.drop_database(db.name)
             client.close()

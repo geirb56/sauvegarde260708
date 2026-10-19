@@ -626,6 +626,7 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
     from .activity_laps import validate_activity_id
 
     now = datetime.now(timezone.utc)
+
     def start_date(field):
         # Reject missing/invalid dates, including numbers interpreted as epoch ms.
         return {"$convert": {
@@ -643,6 +644,7 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
                 "$regex": r"^\s*(" + "|".join(sorted(_RUNNING_ACTIVITY_TYPES)) + r")\s*$",
                 "$options": "i",
             },
+            "$expr": {"$eq": [{"$type": "$activity_type"}, "string"]},
         }},
         {"$project": {
             "_id": 0,
