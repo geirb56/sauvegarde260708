@@ -34,8 +34,7 @@ INITIAL_DAILY_METRICS_DAYS = 7
 ENRICHMENT_DAILY_METRICS_START_DAYS_AGO = 8
 ENRICHMENT_DAILY_METRICS_DAYS = 23
 INITIAL_VO2MAX_BACKFILL_MONTHS = 12
-AUTO_ACTIVITY_DETAILS_LOOKBACK_DAYS = 14
-AUTO_ACTIVITY_DETAILS_SCAN_LIMIT = 50
+AUTO_ACTIVITY_DETAILS_RUN_LIMIT = 10
 _RUNNING_ACTIVITY_TYPES = frozenset(
     {"running", "run", "trail_running", "trail_run", "treadmill_running"}
 )
@@ -608,13 +607,14 @@ async def _ingest_activities(db, user_id: str, activities: list) -> dict:
 async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
     """Queue details for at most one recent run per sync; never fetch inline.
 
-    The scan is limited to the latest 50 Garmin summaries from the previous
-    14 days. At most one activity, and therefore at most two targeted jobs, is
-    selected per user per sync. Existing targeted queues provide per-user
-    deduplication; workers enforce user/global concurrency and fetch cooldowns.
+    Cover the latest ten runs, without an age cutoff. A per-user cursor rotates
+    through that set even when newer runs arrive or an acquisition keeps failing.
+    At most one activity (two targeted jobs) is selected per sync. Existing
+    queues, worker concurrency, leases and fetch cooldowns remain authoritative.
     """
     conn = await db.garmin_connections.find_one(
-        {"user_id": user_id}, {"_id": 0, "connected": 1, "garmin_username": 1},
+        {"user_id": user_id},
+        {"_id": 0, "connected": 1, "garmin_username": 1, "activity_details_coverage_cursor": 1},
     )
     if not conn or not conn.get("connected") or not conn.get("garmin_username"):
         return {"status": "disconnected"}
@@ -626,26 +626,62 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
     from .activity_laps import validate_activity_id
 
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=AUTO_ACTIVITY_DETAILS_LOOKBACK_DAYS)).isoformat()
-    cursor = db.garmin_activities.find(
-        {
+    def start_date(field):
+        # Reject missing/invalid dates, including numbers interpreted as epoch ms.
+        return {"$convert": {
+            "input": {"$cond": [
+                {"$in": [{"$type": field}, ["string", "date"]]}, field, None,
+            ]},
+            "to": "date", "onError": None, "onNull": None,
+        }}
+
+    cursor = db.garmin_activities.aggregate([
+        {"$match": {
             "user_id": user_id,
             "source": "garmin",
-            "start_time": {"$gte": cutoff},
-        },
-        {
+            "activity_type": {
+                "$regex": r"^\s*(" + "|".join(sorted(_RUNNING_ACTIVITY_TYPES)) + r")\s*$",
+                "$options": "i",
+            },
+        }},
+        {"$project": {
             "_id": 0,
             "external_id": 1,
-            "activity_type": 1,
-            "start_time": 1,
-            "activity_details": 1,
+            # PR02 preserves GMT first here; legacy top-level start_time is local first.
+            "_coverage_start": {"$ifNull": [
+                start_date("$garmin_activity.start_time"), start_date("$start_time"),
+            ]},
+            "_coverage_id": {"$convert": {
+                "input": "$external_id", "to": "string", "onError": "", "onNull": "",
+            }},
+            "activity_details.schema_version": 1,
+            "activity_details.status": 1,
             "activity_details_fetch": 1,
-            "activity_laps": 1,
+            "activity_laps.schema_version": 1,
+            "activity_laps.status": 1,
             "activity_laps_fetch": 1,
-        },
-    ).sort("start_time", -1).limit(AUTO_ACTIVITY_DETAILS_SCAN_LIMIT)
-    activities = await cursor.to_list(length=AUTO_ACTIVITY_DETAILS_SCAN_LIMIT)
+        }},
+        {"$match": {"_coverage_start": {"$ne": None}}},
+        {"$sort": {"_coverage_start": -1, "_coverage_id": -1}},
+        {"$limit": AUTO_ACTIVITY_DETAILS_RUN_LIMIT},
+    ])
+    activities = await cursor.to_list(length=AUTO_ACTIVITY_DETAILS_RUN_LIMIT)
     now_iso = now.isoformat()
+
+    def coverage_key(activity):
+        return (
+            activity["_coverage_start"].replace(tzinfo=timezone.utc).isoformat(),
+            activity["_coverage_id"],
+        )
+
+    previous = conn.get("activity_details_coverage_cursor") or {}
+    if isinstance(previous.get("start_time"), str) and isinstance(previous.get("external_id"), str):
+        last_key = (previous["start_time"], previous["external_id"])
+        # Retain the chronological boundary even if the previous target left the top ten.
+        activities = (
+            [activity for activity in activities if coverage_key(activity) < last_key]
+            + [activity for activity in activities if coverage_key(activity) >= last_key]
+        )
 
     def acquisition_state(cache, fetch, schema_version, terminal_statuses):
         if (cache or {}).get("schema_version") == schema_version and (
@@ -667,8 +703,6 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
         return "ready"
 
     for activity in activities:
-        if not _is_running_activity(activity):
-            continue
         try:
             activity_id = validate_activity_id(activity.get("external_id"))
         except (TypeError, ValueError):
@@ -693,6 +727,13 @@ async def _enqueue_recent_activity_details(db, user_id: str) -> dict:
         if not any(ready_types.values()):
             continue
 
+        start_time, cursor_id = coverage_key(activity)
+        await db.garmin_connections.update_one(
+            {"user_id": user_id},
+            {"$set": {"activity_details_coverage_cursor": {
+                "start_time": start_time, "external_id": cursor_id,
+            }}},
+        )
         outcomes = {}
         for key, request in (
             ("details", request_activity_details),
