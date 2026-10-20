@@ -13,7 +13,8 @@ Le livrable contient :
 
 1. un diagnostic déterministe des laps, qui documente le blocage ;
 2. l’application des critères actuels aux références historiques, en lecture seule ;
-3. les tests demandés.
+3. les tests demandés ;
+4. **la correction C350-B (§ 7)** : une observation historique descriptive `distance_only` est autorisée sans structure prouvée, mais jamais une conclusion forte. Le 12/10 obtient ainsi une observation si le type Garmin précis est fiable pour la séance et ses références.
 
 ## 1. Audit
 
@@ -88,7 +89,7 @@ Distinguer les deux cas par l’allure exigerait un seuil, c’est-à-dire un ju
 | Séance enregistrée `continuous`, avec une référence en fractionné, en phase partielle ou en phase `unknown` | `continuous` | La référence fait passer le statut à `unknown` |
 | Fractionné typed-splits (effort/récupération), même avec des références continues | `intervals` | Aucune |
 | Effort unique ne couvrant pas la séance | `other` | Aucune |
-| **12/10** synthétique : 9,33 km, 10 laps `ACTIVE` cohérents, sans pause, 5 références | `unknown` (`intra_lap_alternation_unobservable`) | **Aucune**, y compris lorsque les 5 références sont prouvées continues |
+| **12/10** synthétique : 9,33 km, 10 laps `ACTIVE` cohérents, sans pause, 5 références | `unknown` (`intra_lap_alternation_unobservable`) | Jamais `strong`. Depuis § 7 : une observation `descriptive` / `distance_only` si le type Garmin précis est fiable et identique ; sinon aucune |
 | **19/10** tapis : aucune phase, aucune référence | `unknown` | **Aucune** conclusion Coach |
 | Laps incomplets, pauses, temps immobile, chronologie incohérente (1,058 s / 2 s / −2 s), horodatages partiels, intensité absente ou variée | `unknown` (raisons dédiées) | Aucune |
 | Nom « Footing continu », allure ou FC | Jamais promus | — |
@@ -109,3 +110,60 @@ Pour reconnaître une course libre comme continue, il faut au moins une **preuve
 4. **Série temporelle infra-lap** (endpoint Garmin activity details, vitesse par échantillon) ou **`lapTrigger` FIT**. Même avec ces données, une définition non physiologique et validée de l’« absence de récupération » resterait à établir avant tout usage.
 
 Les payloads réels du 12/10 et du 19/10 n’étant pas dans le dépôt, la vérification porte sur des fixtures synthétiques de même forme. Aucune donnée réelle n’a été lue ni écrite.
+
+## 7. Correction C350-B — observations factuelles sans structure connue
+
+### Changements
+
+| Fichier | Changement |
+|---|---|
+| `backend/coach_language.py` | `_history_choice(workout, similar, session_structure, environment)`. Sans structure `continuous` prouvée, seule la portée `distance_only` (`kind=descriptive`) reste possible. Elle est refusée si la structure est connue comme non continue : signal V2 `intervals`/`other`, ou `workouts.session_structure` ∈ {`intervals`, `other`}. Une métrique n’est admise que si `environment[metric] == "same_known"`. La portée `strong` exige toujours `continuous` + nature identique connue + références `continuous_recorded`. Ajout d’une métadonnée `session_structure` (`continuous`/`unknown`) sur les observations historiques. |
+| `backend/workout_analysis_v2.py` | Ajout de `_metric_populations()`, qui factorise les populations allure/FC de C349-B, et de `_environment_status()` / `_history_environment()`, calculés par métrique sur sa propre population. Ajout du paramètre keyword-only `activity_types` de `build_workout_analysis_v2`. Ces informations sont transmises en interne à `build_coach_language` ; **le contrat API est inchangé**. |
+| `backend/workout_analysis_v2_service.py` | Ajout de `_reliable_activity_type()`, qui lit le type Garmin précis (`activity_type` du document `garmin_activities`, cohérent avec `garmin_activity.activity_type`), sans jamais utiliser le nom. `_historical_garmin_sources()` remplace `_historical_activity_phases()` : même requête unique en lecture, avec la projection étendue au type. |
+| `backend/tests/test_descriptive_history_c350.py` | 46 tests. |
+| `backend/tests/test_continuous_structure_c350.py` | Adaptation au nouveau helper de service. |
+
+### Critères de l’observation descriptive sans structure prouvée
+
+1. La structure courante est inconnue. Elle n’est ni `intervals` ni `other`, que ce soit d’après les phases ou d’après l’enregistrement.
+2. La métrique est fiable : valeur courante positive, écart fini, au moins **2** références dans sa propre population (C349-B).
+3. Les distances sont comparables : ±30 %, même type de séance, 180 jours, références strictement antérieures (règles inchangées).
+4. La comparabilité de nature vaut `strong` ou `distance_only`, puis est **plafonnée** à `distance_only`. Une course avec nature inconnue reste exclue.
+5. **Environnement** : le type Garmin précis est connu pour la séance **et** pour chaque référence de la population de la métrique, et il est **identique**. Par exemple, `treadmill_running` ≠ `running`. Un type manquant, ambigu ou différent entraîne l’abstention pour cette métrique.
+6. Le texte est celui de la portée limitée de C349-B, en FR, EN et ES. Il mentionne explicitement l’absence de garantie : « sans garantie de même nature ni de même structure ». Il ne parle ni de progrès, ni de fatigue, ni de dérive, ni de qualité d’exécution ; un test vérifie l’absence de ces termes.
+7. Les priorités sont inchangées : 50, ou 70 si l’écart est nul. Elles passent toujours après `strong` (40). Le maximum de conclusions C348-A et la règle d’une seule observation historique sont inchangés.
+
+Ce qui reste conditionné à une structure prouvée, sans changement :
+
+- la conclusion historique `strong` ;
+- les conclusions allure/FC par kilomètre (`_continuous_structure`) ;
+- les jugements de répétitions.
+
+### Cas couverts
+
+| Cas | Résultat |
+|---|---|
+| 12/10 : 5 références `running`, séance `running` | 1 observation `coach.history.pace`, `descriptive`, `distance_only`, 21 s/km, 5 références |
+| 12/10 : type absent pour la séance ou une référence | Aucune observation |
+| 19/10 tapis comparé à des sorties extérieures, ou l’inverse | Aucune observation |
+| 19/10 sans référence | Aucune conclusion |
+| Nom « Tapis de course » sans type Garmin | Aucune observation (le nom n’est jamais lu) |
+| Fractionné sans phases avec `km_splits` alternés | Ni `pacing`, ni `execution`, ni `repetitions`. L’historique reste au plus descriptif. |
+| `session_structure="intervals"` enregistré, ou phases `intervals`/`other` | Aucune observation |
+| Une seule référence, métriques absentes, distance incomparable, autre sport, course de nature inconnue | Abstention |
+| Population allure bloquée par le type, population FC valide (et l’inverse) | Seule la métrique valide est décrite |
+| Séance continue prouvée sans types (C349-B) | Comportement identique (`strong`) |
+
+### Tests
+
+- `tests/test_descriptive_history_c350.py` : **46 passed**. `tests/test_continuous_structure_c350.py` : **49 passed**.
+- Suites ciblées : C350, C349-B, coach language, C343, C342, workout_analysis_v2*, PR328, PR234, coach context v2. Résultat : **1472 passed, 2 skipped, 3 failed**. Les 3 échecs préexistants sont inchangés : `test_comparable_history_stays_separate_and_metrics_are_unchanged[fr|en|es]`.
+- Suite backend complète : aucun nouvel échec par rapport au commit précédent de la PR. Les échecs restants relèvent de l’environnement (Redis/Mongo/serveur) ou de l’ordre xdist.
+
+### Limites
+
+- Le type précis est conservé dans `garmin_activities.activity_type`, mais **pas** dans `workouts`, où `treadmill_running` devient `run`. Les séances non Garmin, ou dont le document source est absent ou ambigu, restent donc sans observation descriptive lorsque la structure n’est pas prouvée.
+- La garde d’environnement ne s’applique qu’au nouveau chemin sans structure prouvée. Le chemin `continuous` de C349-B n’a pas été modifié, afin de préserver sa non-régression.
+- L’égalité stricte des types est conservatrice : `trail_running` n’est pas comparé à `running`.
+- Le fonctionnement réel dépend de la présence de `activity_type` dans les documents `garmin_activities` des références. Cela n’a pas été vérifié sur les données réelles, qui ne sont pas dans le dépôt.
+- Aucune modification de la tolérance chronologique des laps, des règles de prescription ni de la politique Garmin des 10 dernières activités.

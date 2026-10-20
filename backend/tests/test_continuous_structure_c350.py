@@ -22,7 +22,8 @@ from garmin_laps_analysis import (
 )
 from workout_analysis_v2 import _build_similar_reference, build_workout_analysis_v2
 from workout_analysis_v2_service import (
-    _historical_activity_phases,
+    _historical_garmin_sources,
+    _reliable_activity_type,
     load_scoped_workout_analysis_v2,
 )
 
@@ -421,12 +422,13 @@ def test_service_reads_reference_phases_once_and_never_writes():
     query, projection = calls[0]
     assert query["user_id"] == "synthetic"
     assert set(query["external_id"]["$in"]) >= {ref["external_id"] for ref in history}
-    assert projection == {"_id": 0, "external_id": 1, "activity_details": 1}
+    assert projection == {"_id": 0, "external_id": 1, "activity_details": 1,
+                          "activity_type": 1, "garmin_activity.activity_type": 1}
     assert not any(hasattr(collection, name) for collection in (db.workouts, db.garmin_activities)
                    for name in ("update_one", "update_many", "insert_one", "replace_one"))
 
 
-def test_service_12_10_without_phases_stays_unknown_with_five_references():
+def test_service_12_10_without_reliable_types_stays_silent():
     workout, activity = laps_fixture()
     history = refs()
     docs = history_docs(history, lambda ref: single_effort(
@@ -460,8 +462,9 @@ def test_ambiguous_or_invalid_reference_documents_are_ignored():
         {"external_id": history[2]["external_id"], "activity_details": good},
     ]
     db, _ = fake_db(None, None, history, docs)
-    result = asyncio.run(_historical_activity_phases(db, "synthetic", history))
-    assert set(result) == {history[2]["id"]}
+    phases, types = asyncio.run(_historical_garmin_sources(db, "synthetic", history))
+    assert set(phases) == {history[2]["id"]}
+    assert types == {}
 
 
 def test_non_garmin_references_trigger_no_lookup():
@@ -469,5 +472,5 @@ def test_non_garmin_references_trigger_no_lookup():
     for ref in history:
         ref.update(id=f"manual-{ref['id']}", external_id=None)
     db, calls = fake_db(None, None, history, [])
-    assert asyncio.run(_historical_activity_phases(db, "synthetic", history)) == {}
+    assert asyncio.run(_historical_garmin_sources(db, "synthetic", history)) == ({}, {})
     assert calls == []

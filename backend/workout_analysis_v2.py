@@ -950,8 +950,7 @@ def _build_similar_reference(
     # metric — its average, its sample count and, for pace, the average distance of
     # the sessions it rests on — comes from that same subset, so a sentence can never
     # mix two different populations.
-    pace_matches = [match for match in matches if _valid_positive_number(match.get("avg_pace_min_km"))]
-    hr_matches = [match for match in matches if _valid_positive_number(match.get("avg_heart_rate"))]
+    pace_matches, hr_matches = _metric_populations(matches)
     distance_matches = [match for match in matches if _valid_positive_number(match.get("distance_km"))]
 
     pace_values = [float(match["avg_pace_min_km"]) for match in pace_matches]
@@ -1026,6 +1025,47 @@ def _build_similar_reference(
         pace_structure_status=_recorded_structure_status(pace_matches, historical_phases),
         hr_structure_status=_recorded_structure_status(hr_matches, historical_phases),
     )
+
+
+def _metric_populations(matches: List[dict]) -> Tuple[List[dict], List[dict]]:
+    """Pace and HR populations of the similar matches, each judged on its own metric."""
+    return (
+        [match for match in matches if _valid_positive_number(match.get("avg_pace_min_km"))],
+        [match for match in matches if _valid_positive_number(match.get("avg_heart_rate"))],
+    )
+
+
+def _environment_status(
+    workout: dict,
+    metric_matches: List[dict],
+    activity_types: Optional[Dict[str, str]],
+) -> Optional[Literal["same_known", "unknown"]]:
+    """Same precise Garmin activity type (e.g. treadmill vs outdoor) for every session.
+
+    Read only from the source-provided type map; never inferred from a name. A
+    missing type on the current session or on any reference keeps "unknown".
+    """
+    if not metric_matches:
+        return None
+    types = activity_types or {}
+    current = types.get(str(workout.get("id", "")))
+    if not current or any(
+        types.get(str(match.get("id", ""))) != current for match in metric_matches
+    ):
+        return "unknown"
+    return "same_known"
+
+
+def _history_environment(
+    workout: dict, historical_workouts: List[dict], activity_types: Optional[Dict[str, str]],
+) -> Dict[str, Optional[str]]:
+    pace_matches, hr_matches = _metric_populations(
+        retrieve_similar_workouts(workout, historical_workouts),
+    )
+    return {
+        "pace": _environment_status(workout, pace_matches, activity_types),
+        "hr": _environment_status(workout, hr_matches, activity_types),
+    }
 
 
 def _reference_is_continuous(
@@ -2120,9 +2160,12 @@ def build_workout_analysis_v2(
     phases: Optional[List[ActivityPhase]] = None,
     *,
     historical_phases: Optional[Dict[str, List[ActivityPhase]]] = None,
+    activity_types: Optional[Dict[str, str]] = None,
 ) -> WorkoutAnalysisV2Response:
     """``historical_phases`` maps reference ids to their validated cached phases, so
-    references are judged by the same _session_structure() criteria as the session."""
+    references are judged by the same _session_structure() criteria as the session.
+    ``activity_types`` maps workout ids (current and references) to their precise
+    Garmin activity type; it only gates history without proven structure."""
     comparison = _localized_comparison(workout, historical_workouts, language, historical_phases)
     physiology = _build_physiology(workout, language)
     pacing = _build_pacing(workout, language)
@@ -2174,5 +2217,6 @@ def build_workout_analysis_v2(
             workout, phase_analysis, comparison, *_effort_comparison_cohort(phase_analysis.efforts),
             _efforts_comparable, _lang(language),
             session_structure=signals.session_structure,
+            history_environment=_history_environment(workout, historical_workouts, activity_types),
         ),
     )
