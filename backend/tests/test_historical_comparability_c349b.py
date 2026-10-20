@@ -27,20 +27,23 @@ LEGACY_SIMILAR_KEYS = {
 }
 NEW_SIMILAR_KEYS = {
     "pace_comparability", "hr_comparability", "pace_nature_status", "hr_nature_status",
-    "pace_limitations", "hr_limitations",
+    "pace_limitations", "hr_limitations", "pace_structure_status", "hr_structure_status",
 }
 
 
 def current(**changes):
+    # Explicit synthetic structure metadata, read by V2's existing session_structure signal.
     base = dict(id="current", name="Run", date="2026-10-12", type="run", distance_km=9.33,
-                duration_minutes=68.6, avg_pace_min_km=7.35, avg_heart_rate=127)
+                duration_minutes=68.6, avg_pace_min_km=7.35, avg_heart_rate=127,
+                session_structure="continuous")
     base.update(changes)
     return base
 
 
 def reference(index, **changes):
     base = dict(id=f"ref-{index}", name="Run", date=f"2026-10-0{index}", type="run",
-                distance_km=9.0, duration_minutes=63.0, avg_pace_min_km=7.0, avg_heart_rate=130)
+                distance_km=9.0, duration_minutes=63.0, avg_pace_min_km=7.0, avg_heart_rate=130,
+                session_structure="continuous")
     base.update(changes)
     return base
 
@@ -169,9 +172,9 @@ def test_explicitly_different_nature_is_excluded():
 
 # 8. Unknown nature: explicit limitation, at most a limited descriptive scope.
 @pytest.mark.parametrize("language,scope_words", [
-    ("fr", "sans garantie de même nature"),
-    ("en", "without any guarantee of the same nature"),
-    ("es", "sin garantía de que sean de la misma naturaleza"),
+    ("fr", "sans garantie de même nature ni de même structure"),
+    ("en", "without any guarantee of the same nature or structure"),
+    ("es", "sin garantía de que sean de la misma naturaleza ni de la misma estructura"),
 ])
 def test_unknown_nature_is_limited_and_announced(language, scope_words):
     workout = current()
@@ -364,3 +367,182 @@ def test_runtime_like_footings_without_metadata_have_explicit_scope():
     assert ref.pace_comparability == ref.hr_comparability == "insufficient"
     assert history_items(workout, history) == []
     assert math.isfinite(ref.pace_difference_min_km)
+
+
+# ============================================================
+# C349-B correction — structure is a distinct guarantee from nature and distance
+# ============================================================
+
+def no_structure(rows):
+    for row in rows:
+        row.pop("session_structure", None)
+    return rows
+
+
+def structure_code(workout, history, phases=None):
+    return build_workout_analysis_v2(workout, history, "en", phases).signals.session_structure
+
+
+def other_phases():
+    return [ActivityPhase(order=0, phase_type="warmup", duration_s=600, distance_m=1500,
+                          average_hr=110, source="synthetic"),
+            ActivityPhase(order=1, phase_type="effort", duration_s=3000, distance_m=7800,
+                          average_hr=135, source="synthetic")]
+
+
+# C1. Intervals + same distance + known identical training nature + recorded continuous refs.
+def test_intervals_never_receive_strong_history_even_with_known_training_nature():
+    workout = current(is_race=False, duration_minutes=40.0, distance_km=6.0)
+    history = refs(distance_km=6.0, is_race=False)
+    analysis = build_workout_analysis_v2(workout, history, "en", intervals())
+    assert analysis.signals.session_structure.code == "intervals"
+    ref = analysis.comparison.similar
+    # The public field keeps its nature-only meaning; the Coach no longer reads it as structure.
+    assert ref.pace_comparability == "strong" and ref.pace_structure_status == "continuous_recorded"
+    assert [item for item in analysis.coach_language.conclusions if item.category == "history"] == []
+
+
+# C2. Intervals + references of unknown structure.
+def test_intervals_with_unknown_reference_structure_abstain():
+    workout = current(is_race=False, duration_minutes=40.0, distance_km=6.0)
+    history = no_structure(refs(distance_km=6.0, is_race=False))
+    analysis = build_workout_analysis_v2(workout, history, "en", intervals())
+    assert analysis.comparison.similar.pace_structure_status == "unknown"
+    assert [item for item in analysis.coach_language.conclusions if item.category == "history"] == []
+
+
+# C3. Unknown current structure: no history conclusion, neither strong nor limited.
+@pytest.mark.parametrize("structure", [None, "unknown", "intervals", "easy", "", 1])
+@pytest.mark.parametrize("nature", [None, False])
+def test_unknown_current_structure_abstains(structure, nature):
+    workout = current(is_race=nature, session_structure=structure)
+    history = refs(is_race=nature)
+    assert structure_code(workout, history).available is False
+    assert history_items(workout, history) == []
+    # Title, pace or heart rate never promote a session to continuous.
+    named = current(is_race=nature, session_structure=structure, name="Footing easy continuous")
+    assert history_items(named, history) == []
+
+
+def test_unknown_phase_structure_abstains():
+    workout = current(is_race=False, session_structure=None)
+    phases = [ActivityPhase(order=0, phase_type="unknown", duration_s=4116, distance_m=9330,
+                            average_hr=127, source="synthetic")]
+    assert structure_code(workout, refs(is_race=False), phases).available is False
+    assert history_items(workout, refs(is_race=False), phases=phases) == []
+
+
+# C4. Current "other" structure.
+def test_other_structure_never_receives_history():
+    workout = current(is_race=False)
+    history = refs(is_race=False)
+    assert structure_code(workout, history, other_phases()).code == "other"
+    assert history_items(workout, history, phases=other_phases()) == []
+
+
+# C5. Continuous + ≥2 admissible refs with unrecorded structure: limited descriptive only.
+@pytest.mark.parametrize("nature", [None, False])
+def test_continuous_with_unrecorded_reference_structure_is_limited(nature):
+    workout = current(is_race=nature)
+    history = no_structure(refs(count=2, is_race=nature))
+    ref = similar(workout, history)
+    assert ref.pace_structure_status == ref.hr_structure_status == "unknown"
+    items = history_items(workout, history)
+    assert [item.code for item in items] == ["coach.history.pace"]
+    assert items[0].kind == "descriptive"
+    assert items[0].metadata["comparability"] == "distance_only"
+    assert items[0].priority == 50
+    assert "without any guarantee of the same nature or structure" in items[0].text
+
+
+def test_continuous_limited_requires_metric_minimum():
+    workout = current()
+    history = no_structure(refs(count=1))
+    assert history_items(workout, history) == []
+
+
+# C6. Continuous + known identical nature: strong needs every reference recorded continuous.
+def test_strong_requires_recorded_continuous_structure_on_every_reference():
+    workout = current(is_race=False)
+    strong = history_items(workout, refs(is_race=False))
+    assert strong[0].metadata["comparability"] == "strong"
+    assert strong[0].kind == "conclusion" and strong[0].priority == 40
+    mixed = refs(is_race=False)
+    mixed[1]["session_structure"] = "intervals"
+    ref = similar(workout, mixed)
+    assert ref.pace_comparability == "strong" and ref.pace_structure_status == "unknown"
+    limited = history_items(workout, mixed)
+    assert limited[0].metadata["comparability"] == "distance_only"
+    assert limited[0].kind == "descriptive"
+
+
+def test_known_different_nature_stays_excluded_even_when_structure_recorded():
+    workout = current(is_race=False)
+    assert history_items(workout, refs(is_race=True)) == []
+
+
+def test_race_current_with_unknown_nature_never_limited():
+    workout = current(is_race=True)
+    assert history_items(workout, refs()) == []
+
+
+# C7/C8. Missing metric still never blocks the other, with realistic unrecorded structure.
+def test_missing_hr_does_not_block_limited_pace():
+    workout = current(avg_heart_rate=None)
+    items = history_items(workout, no_structure(refs(avg_heart_rate=None)))
+    assert [item.code for item in items] == ["coach.history.pace"]
+    assert not any("heart" in key for key in items[0].evidence)
+
+
+def test_missing_pace_does_not_block_limited_hr():
+    workout = current(avg_pace_min_km=None)
+    items = history_items(workout, no_structure(refs(avg_pace_min_km=None)))
+    assert [item.code for item in items] == ["coach.history.hr"]
+    assert not any("pace" in key for key in items[0].evidence)
+
+
+def test_structure_status_is_per_metric_population():
+    workout = current(is_race=False)
+    history = [reference(1, avg_heart_rate=None, is_race=False),
+               reference(2, avg_heart_rate=None, is_race=False),
+               reference(3, avg_pace_min_km=None, is_race=False, session_structure=None),
+               reference(4, avg_pace_min_km=None, is_race=False, session_structure=None)]
+    ref = similar(workout, history)
+    assert (ref.pace_structure_status, ref.hr_structure_status) == ("continuous_recorded", "unknown")
+    items = history_items(workout, history)
+    assert [(item.code, item.metadata["comparability"]) for item in items] == [
+        ("coach.history.pace", "strong"),
+    ]
+    assert similar(workout, []).pace_structure_status is None
+
+
+# C9. Repetitions unchanged with or without (even strong) history.
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_repetitions_identical_with_and_without_history(language):
+    workout = current(is_race=False, duration_minutes=40.0, distance_km=6.0)
+    without = build_workout_analysis_v2(workout, [], language, intervals()).coach_language
+    with_history = build_workout_analysis_v2(
+        workout, refs(distance_km=6.0, is_race=False), language, intervals(),
+    ).coach_language
+    assert with_history == without
+
+
+# C10. FR / EN / ES, at most three conclusions, no physiological inference.
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("recorded", [True, False])
+def test_localized_history_bounded_and_non_physiological(language, recorded):
+    rows = [{"km": i, "pace_min_km": pace, "avg_hr": hr}
+            for i, (pace, hr) in enumerate(((7.0, 125), (7.1, 127), (7.4, 128), (7.6, 130)), 1)]
+    workout = current(is_race=False, distance_km=4, duration_minutes=29.1, km_splits=rows)
+    history = refs(distance_km=4.0, is_race=False)
+    if not recorded:
+        no_structure(history)
+    items = build_workout_analysis_v2(workout, history, language).coach_language.conclusions
+    assert 1 <= len(items) <= 3
+    assert len({item.category for item in items}) == len(items)
+    assert [item.category for item in items].count("history") == 1
+    for item in items:
+        lowered = item.text.lower()
+        for forbidden in ("drift", "dérive", "deriva", "fatigue", "fatiga", "vo2", "lt1", "lt2",
+                          "seuil", "threshold", "umbral", "progress", "progrès", "progreso"):
+            assert forbidden not in lowered

@@ -502,24 +502,30 @@ def _history_metric_admissible(workout, similar, metric):
 def _history_choice(workout, similar, session_structure):
     """Return (metric, scope) for at most one admissible history phenomenon.
 
-    Strong scope needs a known, identical training/race nature on the metric's
-    own population. A distance-only scope is never offered for an observed
-    interval or other non-continuous structure, since the earlier sessions'
-    structure is not recorded.
+    Nature (training/race), structure (continuous/intervals) and distance are
+    distinct guarantees. Any history conclusion requires the current session to be
+    validated as continuous by V2; an unknown, interval or other structure abstains.
+    Strong scope additionally needs a known identical nature *and* every reference
+    of the metric's own population recorded as continuous. Otherwise, a metric with
+    an admissible population is at most described with an explicitly limited scope.
     """
     if similar is None or not similar.available:
         return None
-    observed_structure = (
-        getattr(session_structure, "code", None)
-        if getattr(session_structure, "available", None) is True else None
-    )
-    limited_allowed = observed_structure not in {"intervals", "other"}
-    scopes = {"pace": similar.pace_comparability, "hr": similar.hr_comparability}
+    if (getattr(session_structure, "available", None) is not True
+            or getattr(session_structure, "code", None) != "continuous"):
+        return None
+    scopes = {}
+    for metric, comparability, structure in (
+        ("pace", similar.pace_comparability, similar.pace_structure_status),
+        ("hr", similar.hr_comparability, similar.hr_structure_status),
+    ):
+        if comparability == "strong" and structure == "continuous_recorded":
+            scopes[metric] = "strong"
+        elif comparability in {"strong", "distance_only"}:
+            scopes[metric] = "distance_only"
     for scope in ("strong", "distance_only"):
-        if scope == "distance_only" and not limited_allowed:
-            continue
         for metric in ("pace", "hr"):
-            if scopes[metric] == scope and _history_metric_admissible(workout, similar, metric):
+            if scopes.get(metric) == scope and _history_metric_admissible(workout, similar, metric):
                 return metric, scope
     return None
 
@@ -676,7 +682,8 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
 
     similar = comparison.similar
     # Separate populations are never crossed. At most one historical phenomenon is selected,
-    # deterministically: strong (same known nature) before distance-only, pace before HR.
+    # deterministically: strong (same known nature and recorded continuous structure) before
+    # distance-only, pace before HR.
     # Each metric is admitted on its own population; a gap in one never blocks the other.
     history = _history_choice(workout, similar, session_structure)
     if history is not None:
@@ -698,15 +705,15 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                     "más lento" if delta > 0 else "más rápido",
                 )
                 text = _localized(
-                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec allure mesurée, sans garantie de même nature, ton allure moyenne est {_n(abs(seconds))} s/km {adjective}.",
-                    f"Compared with your {count} earlier sessions of comparable distance with recorded pace, without any guarantee of the same nature, your average pace is {_n(abs(seconds))} s/km {adjective}.",
-                    f"Frente a tus {count} sesiones anteriores de distancia comparable con ritmo registrado, sin garantía de que sean de la misma naturaleza, tu ritmo medio es {_n(abs(seconds))} s/km {adjective}.",
+                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec allure mesurée, sans garantie de même nature ni de même structure, ton allure moyenne est {_n(abs(seconds))} s/km {adjective}.",
+                    f"Compared with your {count} earlier sessions of comparable distance with recorded pace, without any guarantee of the same nature or structure, your average pace is {_n(abs(seconds))} s/km {adjective}.",
+                    f"Frente a tus {count} sesiones anteriores de distancia comparable con ritmo registrado, sin garantía de que sean de la misma naturaleza ni de la misma estructura, tu ritmo medio es {_n(abs(seconds))} s/km {adjective}.",
                 )
                 if delta == 0:
                     text = _localized(
-                        language, f"Ton allure moyenne est identique à celle de tes {count} sorties antérieures de distance comparable avec allure mesurée, sans garantie de même nature.",
-                        f"Your average pace equals that of your {count} earlier sessions of comparable distance with recorded pace, without any guarantee of the same nature.",
-                        f"Tu ritmo medio es igual al de tus {count} sesiones anteriores de distancia comparable con ritmo registrado, sin garantía de que sean de la misma naturaleza.",
+                        language, f"Ton allure moyenne est identique à celle de tes {count} sorties antérieures de distance comparable avec allure mesurée, sans garantie de même nature ni de même structure.",
+                        f"Your average pace equals that of your {count} earlier sessions of comparable distance with recorded pace, without any guarantee of the same nature or structure.",
+                        f"Tu ritmo medio es igual al de tus {count} sesiones anteriores de distancia comparable con ritmo registrado, sin garantía de que sean de la misma naturaleza ni de la misma estructura.",
                     )
             else:
                 text = _localized(
@@ -738,15 +745,15 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
             )
             if limited:
                 text = _localized(
-                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature, ta FC moyenne est {direction} ({_n(current_hr)} contre {_n(baseline_hr)} bpm).",
-                    f"Compared with your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature, your average heart rate is {direction} ({_n(current_hr)} versus {_n(baseline_hr)} bpm).",
-                    f"Frente a tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza, tu FC media es {direction} ({_n(current_hr)} frente a {_n(baseline_hr)} lpm).",
+                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ni de même structure, ta FC moyenne est {direction} ({_n(current_hr)} contre {_n(baseline_hr)} bpm).",
+                    f"Compared with your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature or structure, your average heart rate is {direction} ({_n(current_hr)} versus {_n(baseline_hr)} bpm).",
+                    f"Frente a tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ni de la misma estructura, tu FC media es {direction} ({_n(current_hr)} frente a {_n(baseline_hr)} lpm).",
                 )
                 if delta == 0:
                     text = _localized(
-                        language, f"Ta FC moyenne est identique à celle de tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ({_n(baseline_hr)} bpm).",
-                        f"Your average heart rate equals that of your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature ({_n(baseline_hr)} bpm).",
-                        f"Tu FC media es igual a la de tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ({_n(baseline_hr)} lpm).",
+                        language, f"Ta FC moyenne est identique à celle de tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ni de même structure ({_n(baseline_hr)} bpm).",
+                        f"Your average heart rate equals that of your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature or structure ({_n(baseline_hr)} bpm).",
+                        f"Tu FC media es igual a la de tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ni de la misma estructura ({_n(baseline_hr)} lpm).",
                     )
             else:
                 text = _localized(

@@ -66,7 +66,8 @@ def conclusions(workout=None, phases=None, history=None, language="en"):
 
 
 def prior(**changes):
-    changes = {"avg_heart_rate": 150, **changes}
+    # References explicitly record a continuous structure: strong history needs it.
+    changes = {"avg_heart_rate": 150, "session_structure": "continuous", **changes}
     return [session(id=f"prior-{index}", date=f"2026-10-0{index}", **changes) for index in (1, 2)]
 
 
@@ -204,14 +205,15 @@ def test_history_wrong_sport_distance_or_date_abstains(changes):
     history = prior(avg_heart_rate=150)
     for row in history:
         row.update(changes)
-    assert conclusions(session(avg_heart_rate=155), history=history) == []
+    assert conclusions(session(avg_heart_rate=155, session_structure="continuous"),
+                       history=history) == []
 
 
 def test_history_separate_populations_never_cross():
     history = prior(avg_pace_min_km=None, avg_heart_rate=150)
     history += [session(id=f"pace-{i}", date=f"2026-10-0{i}", avg_heart_rate=None,
-                        avg_pace_min_km=5.5) for i in (3, 4)]
-    items = conclusions(session(avg_heart_rate=155), history=history)
+                        avg_pace_min_km=5.5, session_structure="continuous") for i in (3, 4)]
+    items = conclusions(session(avg_heart_rate=155, session_structure="continuous"), history=history)
     assert len(items) == 1
     assert items[0].code == "coach.history.pace"
     assert items[0].metadata["population"] == "pace_only"
@@ -219,7 +221,8 @@ def test_history_separate_populations_never_cross():
 
 
 def test_history_hr_only_without_pace_population():
-    items = conclusions(session(avg_pace_min_km=None, avg_heart_rate=155),
+    items = conclusions(session(avg_pace_min_km=None, avg_heart_rate=155,
+                                session_structure="continuous"),
                         history=prior(avg_heart_rate=150))
     assert items[0].code == "coach.history.hr"
     assert items[0].evidence["heart_rate_difference_bpm"] == 5
@@ -228,9 +231,9 @@ def test_history_hr_only_without_pace_population():
 def test_priorities_dedup_and_max_three_without_padding():
     items = conclusions(continuous_session(km_splits=splits(hrs=(140, 145, 150, 155))),
                         phases=efforts(), history=prior())
-    assert [item.code for item in items] == [
-        "coach.repetitions.pace_hr", "coach.history.pace",
-    ]
+    # C349-B: an interval session never receives a history conclusion, since the
+    # earlier sessions' structure is not demonstrated comparable.
+    assert [item.code for item in items] == ["coach.repetitions.pace_hr"]
     assert [item.priority for item in items] == sorted(item.priority for item in items)
     assert len(conclusions()) == 0
     assert len(conclusions(phases=efforts())) == 1
@@ -279,7 +282,8 @@ def test_stable_pace_cross_is_relationship_not_unrelated_facts(language, relatio
 
 @pytest.mark.parametrize("pace,direction", [(4.5, "faster"), (5.5, "slower"), (5, "matches")])
 def test_history_direction_baseline_and_current_are_explicit(pace, direction):
-    item = conclusions(session(avg_pace_min_km=pace), history=prior())[0]
+    item = conclusions(session(avg_pace_min_km=pace, session_structure="continuous"),
+                       history=prior())[0]
     assert direction in item.text
     assert item.evidence["baseline_pace_min_km"] == 5
     assert item.evidence["current_pace_min_km"] == pace
@@ -288,7 +292,8 @@ def test_history_direction_baseline_and_current_are_explicit(pace, direction):
 
 @pytest.mark.parametrize("hr,direction", [(140, "lower"), (160, "higher"), (150, "matches")])
 def test_hr_history_direction_baseline_and_current_are_explicit(hr, direction):
-    item = conclusions(session(avg_pace_min_km=None, avg_heart_rate=hr), history=prior())[0]
+    item = conclusions(session(avg_pace_min_km=None, avg_heart_rate=hr,
+                               session_structure="continuous"), history=prior())[0]
     assert direction in item.text
     assert item.evidence["baseline_heart_rate_bpm"] == 150
     assert item.evidence["current_heart_rate_bpm"] == hr
@@ -344,7 +349,11 @@ def test_informative_variability_precedes_relevant_history():
 def test_repetition_and_history_localizations(language, rep_word, history_word):
     items = conclusions(phases=efforts(), history=prior(), language=language)
     assert rep_word in items[0].text
-    assert history_word in items[1].text
+    # Intervals: repetitions unchanged, history abstains (structure not demonstrated).
+    assert [item.category for item in items] == ["repetitions"]
+    history = conclusions(session(session_structure="continuous"), history=prior(avg_pace_min_km=5.5),
+                          language=language)
+    assert history_word in history[0].text
 
 
 @pytest.mark.parametrize("pace", [4.5, 5, 5.5])
@@ -375,7 +384,7 @@ def test_history_insufficient_hr_coverage_does_not_block_admissible_pace():
     # two pace references of known, identical nature.
     history = prior()
     history[1]["avg_heart_rate"] = None
-    items = conclusions(history=history)
+    items = conclusions(session(session_structure="continuous"), history=history)
     assert [item.code for item in items] == ["coach.history.pace"]
     assert items[0].evidence["pace_sample_count"] == 2
     assert items[0].metadata["comparability"] == "strong"

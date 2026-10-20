@@ -143,6 +143,12 @@ class WorkoutAnalysisSimilarReference(BaseModel):
     hr_nature_status: Optional[Literal["same_known", "unknown"]] = None
     pace_limitations: List[str] = []
     hr_limitations: List[str] = []
+    # Training structure is independent from training/race nature: "strong" above never
+    # implies an identical structure. "continuous_recorded" only when every reference of
+    # the metric population carries an explicit session_structure == "continuous";
+    # nothing is inferred from name, pace or heart rate.
+    pace_structure_status: Optional[Literal["continuous_recorded", "unknown"]] = None
+    hr_structure_status: Optional[Literal["continuous_recorded", "unknown"]] = None
 
 
 class WorkoutAnalysisComparison(BaseModel):
@@ -1016,7 +1022,19 @@ def _build_similar_reference(
         hr_nature_status=hr_nature,
         pace_limitations=pace_limitations,
         hr_limitations=hr_limitations,
+        pace_structure_status=_recorded_structure_status(pace_matches),
+        hr_structure_status=_recorded_structure_status(hr_matches),
     )
+
+
+def _recorded_structure_status(
+    metric_matches: List[dict],
+) -> Optional[Literal["continuous_recorded", "unknown"]]:
+    if not metric_matches:
+        return None
+    if all(match.get("session_structure") == "continuous" for match in metric_matches):
+        return "continuous_recorded"
+    return "unknown"
 
 
 def _metric_comparability(
