@@ -280,6 +280,15 @@ def _n(value):
     return f"{value:.1f}".rstrip("0").rstrip(".")
 
 
+def historical_comparison_caveat(language):
+    return _localized(
+        language,
+        "La nature entraînement ou compétition est inconnue ; la comparabilité reste limitée. Cet écart est uniquement descriptif.",
+        "Training-versus-race nature is unknown; comparability remains limited. This difference is descriptive only.",
+        "Se desconoce la naturaleza de entrenamiento o competición; la comparabilidad sigue siendo limitada. Esta diferencia es solo descriptiva.",
+    )
+
+
 def _pace_description(paces, language):
     spread = max(paces) - min(paces)
     delta = paces[-1] - paces[0]
@@ -629,21 +638,22 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
 
     similar = comparison.similar
     # Separate populations are never crossed. At most one historical phenomenon is selected.
-    if similar and similar.available and similar.comparable and not similar.limitations:
+    if similar and similar.available:
         delta = similar.pace_difference_min_km
-        if (_finite(delta) and _positive(similar.avg_pace_min_km)
+        if (similar.pace_comparison_status != "unavailable"
+                and _finite(delta) and _positive(similar.avg_pace_min_km)
                 and _positive(workout.get("avg_pace_min_km"))
                 and similar.pace_sample_count >= similar.min_comparable_sample):
             seconds = delta * 60
             direction = _localized(
-                language, "plus lentement" if delta > 0 else "plus vite",
+                language, "plus lente" if delta > 0 else "plus rapide",
                 "slower" if delta > 0 else "faster",
                 "más lento" if delta > 0 else "más rápido",
             )
             text = _localized(
-                language, f"Tu cours {_n(abs(seconds))} s/km {direction} que sur tes {similar.pace_sample_count} séances comparables avec allure mesurée.",
-                f"You run {_n(abs(seconds))} s/km {direction} than in your {similar.pace_sample_count} comparable sessions with recorded pace.",
-                f"Corres {_n(abs(seconds))} s/km {direction} que en tus {similar.pace_sample_count} sesiones comparables con ritmo registrado.",
+                language, f"Ton allure moyenne est de {_n(abs(seconds))} s/km {direction} que celle de tes {similar.pace_sample_count} séances comparables avec allure mesurée.",
+                f"Your average pace is {_n(abs(seconds))} s/km {direction} than in your {similar.pace_sample_count} comparable sessions with recorded pace.",
+                f"Tu ritmo medio es {_n(abs(seconds))} s/km {direction} que en tus {similar.pace_sample_count} sesiones comparables con ritmo registrado.",
             )
             if delta == 0:
                 text = _localized(
@@ -651,12 +661,22 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                     f"Your average pace matches your {similar.pace_sample_count} comparable sessions with recorded pace.",
                     f"Tu ritmo medio coincide con el de tus {similar.pace_sample_count} sesiones comparables con ritmo registrado.",
                 )
+            descriptive = similar.pace_comparison_status == "descriptive"
+            if descriptive:
+                text = _localized(
+                    language,
+                    f"Ton écart d'allure moyenne par rapport à tes {similar.pace_sample_count} séances de distance similaire est de {_n(seconds)} s/km.",
+                    f"Your average pace difference from your {similar.pace_sample_count} sessions of similar distance is {_n(seconds)} s/km.",
+                    f"Tu diferencia de ritmo medio respecto a tus {similar.pace_sample_count} sesiones de distancia similar es de {_n(seconds)} s/km.",
+                ) + " " + historical_comparison_caveat(language)
             add("coach.history.pace", text,
                 {"pace_sample_count": similar.pace_sample_count, "pace_difference_sec_per_km": seconds,
                  "baseline_pace_min_km": similar.avg_pace_min_km,
                  "current_pace_min_km": workout["avg_pace_min_km"],
-                 "population": "pace_only"}, "history", 60 if delta == 0 else 40, ["fact.similar_pace"])
-        elif (_finite(similar.heart_rate_difference_bpm)
+                 "population": "pace_only"}, "history", 60 if delta == 0 else 40, ["fact.similar_pace"],
+                "descriptive" if descriptive else "conclusion")
+        elif (similar.hr_comparison_status != "unavailable"
+              and _finite(similar.heart_rate_difference_bpm)
               and _positive(similar.avg_heart_rate) and _positive(workout.get("avg_heart_rate"))
               and similar.hr_sample_count >= similar.min_comparable_sample):
             delta = similar.heart_rate_difference_bpm
@@ -666,9 +686,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                 "más alta" if delta > 0 else "más baja" if delta < 0 else "igual",
             )
             text = _localized(
-                language, f"Ta FC moyenne est {direction} que sur tes {similar.hr_sample_count} séances comparables avec FC mesurée ({_n(workout['avg_heart_rate'])} contre {_n(similar.avg_heart_rate)} bpm).",
-                f"Your average heart rate is {direction} than in your {similar.hr_sample_count} comparable sessions with recorded heart rate ({_n(workout['avg_heart_rate'])} versus {_n(similar.avg_heart_rate)} bpm).",
-                f"Tu FC media es {direction} que en tus {similar.hr_sample_count} sesiones comparables con FC registrada ({_n(workout['avg_heart_rate'])} frente a {_n(similar.avg_heart_rate)} lpm).",
+                language, f"Ta FC moyenne est de {_n(abs(delta))} bpm {direction} que celle de tes {similar.hr_sample_count} séances comparables avec FC mesurée ({_n(workout['avg_heart_rate'])} contre {_n(similar.avg_heart_rate)} bpm).",
+                f"Your average heart rate is {_n(abs(delta))} bpm {direction} than in your {similar.hr_sample_count} comparable sessions with recorded heart rate ({_n(workout['avg_heart_rate'])} versus {_n(similar.avg_heart_rate)} bpm).",
+                f"Tu FC media es {_n(abs(delta))} lpm {direction} que en tus {similar.hr_sample_count} sesiones comparables con FC registrada ({_n(workout['avg_heart_rate'])} frente a {_n(similar.avg_heart_rate)} lpm).",
             )
             if delta == 0:
                 text = _localized(
@@ -676,11 +696,20 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                     f"Your average heart rate matches your {similar.hr_sample_count} comparable sessions with recorded heart rate ({_n(similar.avg_heart_rate)} bpm).",
                     f"Tu FC media coincide con la de tus {similar.hr_sample_count} sesiones comparables con FC registrada ({_n(similar.avg_heart_rate)} lpm).",
                 )
+            descriptive = similar.hr_comparison_status == "descriptive"
+            if descriptive:
+                text = _localized(
+                    language,
+                    f"Ton écart de FC moyenne par rapport à tes {similar.hr_sample_count} séances de distance similaire est de {_n(delta)} bpm.",
+                    f"Your average heart-rate difference from your {similar.hr_sample_count} sessions of similar distance is {_n(delta)} bpm.",
+                    f"Tu diferencia de FC media respecto a tus {similar.hr_sample_count} sesiones de distancia similar es de {_n(delta)} lpm.",
+                ) + " " + historical_comparison_caveat(language)
             add("coach.history.hr", text,
                 {"hr_sample_count": similar.hr_sample_count, "heart_rate_difference_bpm": delta,
                  "baseline_heart_rate_bpm": similar.avg_heart_rate,
                  "current_heart_rate_bpm": workout["avg_heart_rate"],
-                 "population": "hr_only"}, "history", 60 if delta == 0 else 40, ["fact.similar_hr"])
+                 "population": "hr_only"}, "history", 60 if delta == 0 else 40, ["fact.similar_hr"],
+                "descriptive" if descriptive else "conclusion")
 
     candidates.sort(key=lambda item: (item.priority, item.code))
     selected = []

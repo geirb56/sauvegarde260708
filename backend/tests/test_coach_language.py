@@ -200,11 +200,17 @@ def test_excluded_middle_effort_keeps_exact_number_sequence():
 
 @pytest.mark.parametrize("changes", [{"is_race": None}, {"type": "ride"},
                                     {"distance_km": 10}, {"date": "2025-01-01"}])
-def test_history_unknown_nature_wrong_sport_distance_or_date_abstains(changes):
+def test_history_unknown_nature_describes_but_wrong_sport_distance_or_date_abstains(changes):
     history = prior(avg_heart_rate=150)
     for row in history:
         row.update(changes)
-    assert conclusions(session(avg_heart_rate=155), history=history) == []
+    items = conclusions(session(avg_heart_rate=155), history=history)
+    if changes == {"is_race": None}:
+        assert [item.code for item in items] == ["coach.history.pace"]
+        assert items[0].kind == "descriptive"
+        assert "comparability remains limited" in items[0].text
+    else:
+        assert items == []
 
 
 def test_history_separate_populations_never_cross():
@@ -370,10 +376,12 @@ def test_reported_splits_longer_than_workout_are_rejected():
     assert conclusions(continuous_session(distance_km=2, km_splits=splits())) == []
 
 
-def test_history_insufficient_metric_coverage_is_not_coach_conclusion():
+def test_history_insufficient_hr_coverage_does_not_block_pace_conclusion():
     history = prior()
     history[1]["avg_heart_rate"] = None
-    assert conclusions(history=history) == []
+    items = conclusions(history=history)
+    assert [item.code for item in items] == ["coach.history.pace"]
+    assert not any("heart_rate" in key for key in items[0].evidence)
 
 
 def test_history_single_reference_abstains():
