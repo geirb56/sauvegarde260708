@@ -929,6 +929,7 @@ def _build_similar_reference(
     workout: dict,
     candidate_workouts: List[dict],
     language: str,
+    historical_phases: Optional[Dict[str, List[ActivityPhase]]] = None,
 ) -> WorkoutAnalysisSimilarReference:
     matches = retrieve_similar_workouts(workout, candidate_workouts)
     if not matches:
@@ -1022,17 +1023,27 @@ def _build_similar_reference(
         hr_nature_status=hr_nature,
         pace_limitations=pace_limitations,
         hr_limitations=hr_limitations,
-        pace_structure_status=_recorded_structure_status(pace_matches),
-        hr_structure_status=_recorded_structure_status(hr_matches),
+        pace_structure_status=_recorded_structure_status(pace_matches, historical_phases),
+        hr_structure_status=_recorded_structure_status(hr_matches, historical_phases),
     )
+
+
+def _reference_is_continuous(
+    match: dict, historical_phases: Optional[Dict[str, List[ActivityPhase]]],
+) -> bool:
+    """Same _session_structure() criteria as the current session; no write, no inference."""
+    phases = (historical_phases or {}).get(str(match.get("id", "")))
+    structure = _session_structure(match, _build_phase_analysis(phases), "en")
+    return structure.available and structure.code == "continuous"
 
 
 def _recorded_structure_status(
     metric_matches: List[dict],
+    historical_phases: Optional[Dict[str, List[ActivityPhase]]] = None,
 ) -> Optional[Literal["continuous_recorded", "unknown"]]:
     if not metric_matches:
         return None
-    if all(match.get("session_structure") == "continuous" for match in metric_matches):
+    if all(_reference_is_continuous(match, historical_phases) for match in metric_matches):
         return "continuous_recorded"
     return "unknown"
 
@@ -1280,11 +1291,14 @@ def _build_comparison(workout: dict, workouts: List[dict]) -> WorkoutAnalysisCom
     )
 
 
-def _localized_comparison(workout: dict, workouts: List[dict], language: str) -> WorkoutAnalysisComparison:
+def _localized_comparison(
+    workout: dict, workouts: List[dict], language: str,
+    historical_phases: Optional[Dict[str, List[ActivityPhase]]] = None,
+) -> WorkoutAnalysisComparison:
     comparison = _build_comparison(workout, workouts)
     if not comparison.available:
         comparison.reason_unavailable = _template(language, "unavailable.baseline", days=comparison.baseline_period_days)
-    comparison.similar = _build_similar_reference(workout, workouts, language)
+    comparison.similar = _build_similar_reference(workout, workouts, language, historical_phases)
     return comparison
 
 
@@ -2104,8 +2118,12 @@ def build_workout_analysis_v2(
     historical_workouts: List[dict],
     language: str = "en",
     phases: Optional[List[ActivityPhase]] = None,
+    *,
+    historical_phases: Optional[Dict[str, List[ActivityPhase]]] = None,
 ) -> WorkoutAnalysisV2Response:
-    comparison = _localized_comparison(workout, historical_workouts, language)
+    """``historical_phases`` maps reference ids to their validated cached phases, so
+    references are judged by the same _session_structure() criteria as the session."""
+    comparison = _localized_comparison(workout, historical_workouts, language, historical_phases)
     physiology = _build_physiology(workout, language)
     pacing = _build_pacing(workout, language)
     signals = _build_signals(workout, comparison, physiology, language)

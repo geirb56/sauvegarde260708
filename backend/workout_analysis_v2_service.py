@@ -10,6 +10,7 @@ from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
     build_workout_analysis_v2,
+    retrieve_similar_workouts,
     workout_analysis_candidate_date_bounds,
 )
 
@@ -255,6 +256,43 @@ def _cached_activity_phases(activity_doc: dict[str, Any]) -> Optional[list[Activ
     return phases
 
 
+async def _historical_activity_phases(
+    db: Any, user_id: str, references: list[dict[str, Any]],
+) -> dict[str, list[ActivityPhase]]:
+    """Read-only: validated cached phases of Garmin references, keyed by workout id.
+
+    Ambiguous (several activity documents) or unreadable data yields no phases,
+    so the reference keeps the same unknown structure as before.
+    """
+    wanted: dict[str, str] = {}
+    for reference in references:
+        if _is_garmin_workout(reference):
+            external_id = _extract_garmin_external_id(reference)
+            if external_id:
+                wanted[external_id] = str(reference.get("id") or "")
+    if not wanted or db is None or not hasattr(db, "garmin_activities"):
+        return {}
+    keys: list[Any] = list(wanted)
+    keys += [int(key) for key in wanted if key.isdigit()]
+    try:
+        docs = await db.garmin_activities.find(
+            {"user_id": user_id, "external_id": {"$in": keys}},
+            {"_id": 0, "external_id": 1, "activity_details": 1},
+        ).to_list(length=len(keys))
+    except Exception:
+        logger.warning("Historical activity phases unavailable for user_id=%s", user_id)
+        return {}
+    found: dict[str, list[Optional[list[ActivityPhase]]]] = {}
+    for doc in docs or []:
+        if isinstance(doc, dict) and str(doc.get("external_id")) in wanted:
+            found.setdefault(str(doc["external_id"]), []).append(_cached_activity_phases(doc))
+    return {
+        wanted[external_id]: candidates[0]
+        for external_id, candidates in found.items()
+        if len(candidates) == 1 and candidates[0]
+    }
+
+
 async def load_scoped_workout_analysis_v2(
     *,
     db: Any,
@@ -295,11 +333,15 @@ async def load_scoped_workout_analysis_v2(
             .sort("date", -1)
             .to_list(length=200)
         )
+        historical_phases = await _historical_activity_phases(
+            db, user_id, retrieve_similar_workouts(workout, historical_workouts),
+        )
         analysis = build_workout_analysis_v2(
             workout=workout,
             historical_workouts=historical_workouts,
             language=language,
             phases=phases,
+            historical_phases=historical_phases,
         )
     except Exception:
         logger.exception(
