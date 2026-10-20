@@ -990,6 +990,43 @@ async def _get_analysis_lang(client, workout_id: str, language: str, user_id: st
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("has_phases", [False, True])
+async def test_get_preserves_additive_coach_limitations_and_legacy_fields(client, language, has_phases):
+    from activity_phases import ActivityPhase
+
+    workout = {
+        "id": _FakeDB.CURRENT_ID, "type": "run", "date": "2026-10-10",
+        "distance_km": 5, "duration_minutes": 30,
+    }
+    phases = [
+        ActivityPhase(order=index, phase_type="effort", duration_s=240,
+                      distance_m=240000 / pace, source="garmin")
+        for index, pace in enumerate([288, 282, 271, 291])
+    ] if has_phases else None
+    analysis = workout_analysis_v2.build_workout_analysis_v2(workout, [], language, phases)
+    with patch.object(server, "load_scoped_workout_analysis_v2",
+                      AsyncMock(return_value=(workout, analysis))) as loader:
+        response = await _get_analysis_lang(client, workout["id"], language)
+    assert response.status_code == 200
+    payload = response.json()
+    loader.assert_awaited_once_with(
+        db=client.fake_db, user_id="user-a", workout_id=workout["id"], language=language,
+    )
+    assert payload == analysis.model_dump(mode="json")
+    assert payload["coach_language"]["limitations"] == (
+        [] if has_phases else ["repetitions.phases_unavailable"]
+    )
+    assert workout_analysis_v2.WorkoutAnalysisV2Response.model_validate(payload) == analysis
+    if has_phases:
+        item, = payload["coach_language"]["conclusions"]
+        assert item["evidence"]["comparable_effort_count"] == 4
+        assert item["evidence"]["atypical_effort_number"] == 3
+    else:
+        assert payload["coach_language"]["conclusions"] == []
+
+
 # Workout Analysis V2 describes and compares; Training Today/Week V2 remain the only
 # prescription authorities. These phrasings decide what the athlete should do next and
 # are therefore forbidden in every supported language.

@@ -13,6 +13,7 @@ from coach_language import RepetitionJudgmentConfig, build_coach_language
 from workout_analysis_v2 import (
     _effort_comparison_cohort,
     _efforts_comparable,
+    WorkoutAnalysisV2Response,
     build_workout_analysis_v2,
 )
 from workout_analysis_v2_service import load_scoped_workout_analysis_v2
@@ -145,6 +146,47 @@ def test_noncomparable_efforts_abstain_without_discarding_legacy_facts():
     assert analysis.coach_language.limitations == ["repetitions.insufficient_comparability"]
     assert analysis.phase_analysis.effort_regularity.partial_comparison
     assert analysis.meaning.factual_observations
+
+
+@pytest.mark.parametrize("durations,comparable_count,reason", [
+    ([240, 240, 240, 240], 4, None),
+    ([240, 240, 240, 60], 3, "insufficient_comparability"),
+    ([240, 240, 60], 2, "insufficient_comparability"),
+    ([240, 60, 240, 240], 3, "insufficient_comparability"),
+    ([240, 0, 240, 240], 3, "invalid_measurements"),
+])
+def test_complete_cohort_required_even_when_a_valid_subset_exists(durations, comparable_count, reason):
+    phases = [
+        phase.model_copy(update={"duration_s": duration, "distance_m": duration * 1000 / 300})
+        for phase, duration in zip(repetitions([300] * len(durations)), durations)
+    ]
+    analysis = analyze(phases=phases)
+    assert analysis.phase_analysis.effort_regularity.comparable_effort_count == comparable_count
+    assert [phase.effort_number for phase in analysis.phase_analysis.efforts] == list(
+        range(1, len(durations) + 1),
+    )
+    if reason:
+        assert analysis.coach_language.conclusions == []
+        assert analysis.coach_language.limitations == [f"repetitions.{reason}"]
+    else:
+        item, = analysis.coach_language.conclusions
+        assert item.evidence["comparable_effort_count"] == len(durations)
+        assert analysis.coach_language.limitations == []
+
+
+@pytest.mark.parametrize("paces", [None, [300] * 4])
+def test_additive_coach_limitations_roundtrip_and_legacy_default(paces):
+    analysis = analyze(paces)
+    payload = json.loads(analysis.model_dump_json())
+    assert set(payload["coach_language"]) == {"version", "conclusions", "limitations"}
+    assert WorkoutAnalysisV2Response.model_validate(payload) == analysis
+    reasons = payload["coach_language"].pop("limitations")
+    legacy = WorkoutAnalysisV2Response.model_validate(payload)
+    assert legacy.coach_language.limitations == []
+    assert legacy.coach_language.conclusions == analysis.coach_language.conclusions
+    assert legacy.meaning == analysis.meaning
+    assert legacy.phase_analysis == analysis.phase_analysis
+    assert reasons == (["repetitions.phases_unavailable"] if paces is None else [])
 
 
 @pytest.mark.parametrize("field", ["duration_s", "distance_m", "average_speed_mps"])
