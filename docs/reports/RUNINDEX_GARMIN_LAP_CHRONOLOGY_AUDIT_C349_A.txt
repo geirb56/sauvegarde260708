@@ -1,0 +1,59 @@
+## Verdict : correction non justifiée à ce stade — aucune PR créée
+
+L’audit en lecture seule ne démontre pas que l’écart de **1,058 s** est un artefact de représentation. Il ne démontre pas non plus que l’activité réelle est intrinsèquement invalide. **Augmenter la tolérance serait donc prématuré.**
+
+### Constats techniques
+
+Références ci-dessous relatives à `/home/runner/work/sauvegarde260708/sauvegarde260708/`.
+
+| Point | Comportement vérifié |
+|---|---|
+| `duration_s` | Copie de `duration`. Utilisée pour l’allure, la vitesse moyenne et la réconciliation de durée avec le résumé. |
+| `moving_duration_s` | Copie de `movingDuration`. Si renseignée, doit être positive et ≤ `duration_s + 0,01 s`. Sert au contrôle de vitesse moyenne en mouvement. |
+| `elapsed_duration_s` | Copie de `elapsedDuration`. Si renseignée, doit être positive et ≥ `duration_s − 0,01 s`. Utilisée pour la chronologie ; sinon, repli sur `duration_s`. |
+| Pauses | Une pause comptabilisée dans `elapsed_duration_s` est acceptée sans être ajoutée à l’allure. Un test existant couvre explicitement ce cas. |
+| Horodatages | Le normaliseur préserve la chaîne source. Les parseurs acceptent les fractions de seconde, interprètent l’absence de fuseau comme UTC et refusent un décalage non nul. **Aucun arrondi n’est effectué ici.** |
+| Chronologie | Contrôle entre laps successifs **et** depuis le premier lap, chacun à ±1 s. Les timestamps décroissants sont rejetés. |
+| Données manquantes | Timestamps tous absents : contrôle chronologique omis. Présence partielle : `incomplete_chronology`. |
+
+Sources principales : `backend/garmin/activity_laps.py:14-33,46-109` et `backend/garmin_laps_analysis.py:103-144`.
+
+### Pourquoi 1,058 s n’est pas expliqué par la seule résolution à la seconde
+
+Pour des timestamps quantifiés uniformément à une seconde :
+
+- par troncature, chaque erreur appartient à un intervalle de largeur 1 s ;
+- par arrondi au plus proche, chaque erreur appartient à `[−0,5 ; +0,5] s`.
+
+Dans les deux cas, **l’erreur sur leur différence est au plus 1 s**. Avec une durée exacte, cela ne justifie donc pas **1,058 s**.
+
+Une incertitude supplémentaire sur les durées ou les frontières des laps pourrait changer cette conclusion, mais **son existence et sa borne ne sont pas établies dans le dépôt**. Les décimales présentes ne constituent pas une garantie d’exactitude physique.
+
+La fixture réelle contient des timestamps terminés par `.0` et des durées telles que `341.128`. Elle ne contient que deux laps **non consécutifs** : elle ne permet ni de mesurer l’erreur locale, ni d’établir une précision contractuelle Garmin.
+
+### Seuils et garde-fous existants
+
+Dans `backend/garmin_laps_analysis.py` :
+
+- **1 s chronologique** : justifiée dans le commentaire par des timestamps parfois à la seconde ; tests de fractions et de dérive cumulée présents.
+- **1 m** : tolérance sur chaque kilomètre et sur les frontières kilométriques cumulées.
+- **5 m / 30 s** : allowances documentées pour un résumé arrondi à 0,01 km / à la minute entière.
+- **0,01 s** entre durées et **1 %** pour les vitesses : seuils présents, sans justification source explicite trouvée dans les éléments inspectés.
+- FC : positivité et `average_hr ≤ max_hr`, sans contrôle physiologique supplémentaire.
+- Ordre : indices et positions entiers strictement croissants.
+- Laps incompatibles : rejet des distances non kilométriques intermédiaires et des intensités explicites autres que `ACTIVE` ; seul le dernier partiel est permis, sans publication comme kilomètre.
+
+**Le mode manuel/automatique n’est pas fourni par le schéma : le code ne peut pas l’identifier directement.**
+
+Passer à ±2 s accepterait notamment les trous et chevauchements de **2 s actuellement couverts par les tests de rejet**, ainsi que certaines erreurs alternées qui s’annulent au cumul. Le contrôle cumulatif reste nécessaire, mais ne remplace pas le contrôle local.
+
+### Limites de preuve et validation
+
+- Les payloads complets du **12 octobre** et des **25 laps du 15 octobre** n’ont pas été trouvés dans les fichiers inspectés. Leur validation réelle reste impossible.
+- Les tests C343 inspectés couvrent déjà pauses, chronologie, dérive cumulée, ordre, distances, durées et fractionnés.
+- **Aucun test exécuté ou ajouté** : arrêt après l’audit, avant toute modification. Aucun résultat vert ni échec préexistant n’est revendiqué ; les trois échecs historiques FR/EN/ES n’ont pas été touchés.
+- HEAD local : `6d9887de79ca1b52c75457afdf4a4e8ad4db2416`.
+- Base demandée : `copilot/dev` ; son SHA n’a pas été vérifié dans cet audit.
+- Aucun fichier modifié, aucun accès Garmin/GCCLI, aucune écriture Mongo/Redis, aucun commit ni merge.
+
+**Pour poursuivre, il manque un export anonymisé des laps concernés et une preuve bornant l’incertitude temporelle de la source. En leur absence, l’acceptation du 12 octobre ne peut pas être techniquement justifiée.**
