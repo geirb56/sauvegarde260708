@@ -278,7 +278,7 @@ async def _historical_activity_phases(
         docs = await db.garmin_activities.find(
             {"user_id": user_id, "external_id": {"$in": keys}},
             {"_id": 0, "external_id": 1, "activity_details": 1},
-        ).to_list(length=len(keys))
+        ).to_list(length=None)
     except Exception:
         logger.warning("Historical activity phases unavailable for user_id=%s", user_id)
         return {}
@@ -333,6 +333,7 @@ async def load_scoped_workout_analysis_v2(
             .sort("date", -1)
             .to_list(length=200)
         )
+        # Same selection (same defaults) as build_workout_analysis_v2's similar reference.
         historical_phases = await _historical_activity_phases(
             db, user_id, retrieve_similar_workouts(workout, historical_workouts),
         )

@@ -284,7 +284,8 @@ def assess_lap_structure(workout: dict, activity_doc: Any) -> LapStructureAssess
                     reasons.append("chronology_incoherent")
                     break
                 previous = start
-                previous_elapsed = lap.get("elapsed_duration_s") or lap["duration_s"]
+                elapsed_value = lap.get("elapsed_duration_s")
+                previous_elapsed = elapsed_value if elapsed_value is not None else lap["duration_s"]
                 elapsed_total += previous_elapsed
 
         # Pauses and stationary time: absence of the fields is not absence of pauses.
