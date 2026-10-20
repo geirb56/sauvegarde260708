@@ -87,6 +87,11 @@ EXPECTED_COMPARISON = {
         "distance_sample_count": 2, "pace_sample_count": 2, "pace_avg_distance_km": 15.0,
         "hr_sample_count": 2, "pace_difference_min_km": -1.25,
         "heart_rate_difference_bpm": None, "limitations": [], "reason_unavailable": None,
+        # C349-B additive metric-specific diagnostics; legacy fields above are unchanged.
+        "pace_comparability": "strong", "hr_comparability": "insufficient",
+        "pace_nature_status": "same_known", "hr_nature_status": "same_known",
+        "pace_limitations": [], "hr_limitations": ["current_hr_missing"],
+        "pace_structure_status": "unknown", "hr_structure_status": "unknown",
     },
     "reason_unavailable": None,
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from statistics import mean
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -132,6 +132,23 @@ class WorkoutAnalysisSimilarReference(BaseModel):
     heart_rate_difference_bpm: Optional[float] = None
     limitations: List[str] = []
     reason_unavailable: Optional[str] = None
+    # Additive, metric-specific diagnostics. ``comparable`` above keeps its historical
+    # meaning (no limitation at all); these fields let each metric be judged on its
+    # own population only. "strong": known and identical training/race nature;
+    # "distance_only": comparable distance, same nature not guaranteed;
+    # "insufficient": no admissible comparison for this metric.
+    pace_comparability: Literal["strong", "distance_only", "insufficient"] = "insufficient"
+    hr_comparability: Literal["strong", "distance_only", "insufficient"] = "insufficient"
+    pace_nature_status: Optional[Literal["same_known", "unknown"]] = None
+    hr_nature_status: Optional[Literal["same_known", "unknown"]] = None
+    pace_limitations: List[str] = []
+    hr_limitations: List[str] = []
+    # Training structure is independent from training/race nature: "strong" above never
+    # implies an identical structure. "continuous_recorded" only when every reference of
+    # the metric population carries an explicit session_structure == "continuous";
+    # nothing is inferred from name, pace or heart rate.
+    pace_structure_status: Optional[Literal["continuous_recorded", "unknown"]] = None
+    hr_structure_status: Optional[Literal["continuous_recorded", "unknown"]] = None
 
 
 class WorkoutAnalysisComparison(BaseModel):
@@ -975,6 +992,14 @@ def _build_similar_reference(
     # distance/pace gap is still exposed alongside the explicit limitation.
     comparable = not limitations
 
+    current_competition = _competition_flag(workout)
+    pace_nature, pace_comparability, pace_limitations = _metric_comparability(
+        current_competition, pace_matches, current_pace, pace_difference, "pace",
+    )
+    hr_nature, hr_comparability, hr_limitations = _metric_comparability(
+        current_competition, hr_matches, current_hr, hr_difference, "hr",
+    )
+
     return WorkoutAnalysisSimilarReference(
         available=True,
         comparable=comparable,
@@ -991,7 +1016,69 @@ def _build_similar_reference(
         heart_rate_difference_bpm=hr_difference,
         limitations=limitations,
         reason_unavailable=None,
+        pace_comparability=pace_comparability,
+        hr_comparability=hr_comparability,
+        pace_nature_status=pace_nature,
+        hr_nature_status=hr_nature,
+        pace_limitations=pace_limitations,
+        hr_limitations=hr_limitations,
+        pace_structure_status=_recorded_structure_status(pace_matches),
+        hr_structure_status=_recorded_structure_status(hr_matches),
     )
+
+
+def _recorded_structure_status(
+    metric_matches: List[dict],
+) -> Optional[Literal["continuous_recorded", "unknown"]]:
+    if not metric_matches:
+        return None
+    if all(match.get("session_structure") == "continuous" for match in metric_matches):
+        return "continuous_recorded"
+    return "unknown"
+
+
+def _metric_comparability(
+    current_competition: Optional[bool],
+    metric_matches: List[dict],
+    current_value: Optional[float],
+    difference: Optional[float],
+    metric: str,
+) -> Tuple[
+    Literal["same_known", "unknown"],
+    Literal["strong", "distance_only", "insufficient"],
+    List[str],
+]:
+    """Judge one metric on its own population only; never on another metric's gaps.
+
+    The nature status rests only on the sessions carrying this metric. An unknown
+    nature never becomes strong comparability; it may at most support a
+    distance-only description, and never when the current session is a race.
+    """
+    nature: Literal["same_known", "unknown"] = (
+        "same_known"
+        if metric_matches and current_competition is not None
+        and all(_competition_flag(match) == current_competition for match in metric_matches)
+        else "unknown"
+    )
+    current_missing = current_value is None
+    sample_too_small = len(metric_matches) < SIMILAR_MIN_COMPARABLE_SAMPLE
+    difference_unavailable = not current_missing and not sample_too_small and not _valid_finite_number(difference)
+    limitations: List[str] = []
+    if current_missing:
+        limitations.append(f"current_{metric}_missing")
+    if sample_too_small:
+        limitations.append(f"{metric}_sample_too_small")
+    if difference_unavailable:
+        limitations.append(f"{metric}_difference_unavailable")
+    if nature == "unknown":
+        limitations.append("session_nature_unknown")
+    if current_missing or sample_too_small or difference_unavailable:
+        return nature, "insufficient", limitations
+    if nature == "same_known":
+        return nature, "strong", limitations
+    if current_competition is True:
+        return nature, "insufficient", limitations
+    return nature, "distance_only", limitations
 
 
 def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
