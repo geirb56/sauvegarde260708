@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from statistics import mean
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -1025,27 +1025,36 @@ def _metric_comparability(
     current_value: Optional[float],
     difference: Optional[float],
     metric: str,
-) -> tuple:
+) -> Tuple[
+    Literal["same_known", "unknown"],
+    Literal["strong", "distance_only", "insufficient"],
+    List[str],
+]:
     """Judge one metric on its own population only; never on another metric's gaps.
 
     The nature status rests only on the sessions carrying this metric. An unknown
     nature never becomes strong comparability; it may at most support a
     distance-only description, and never when the current session is a race.
     """
-    nature = (
+    nature: Literal["same_known", "unknown"] = (
         "same_known"
         if metric_matches and current_competition is not None
-        and all(_competition_flag(match) is not None for match in metric_matches)
+        and all(_competition_flag(match) == current_competition for match in metric_matches)
         else "unknown"
     )
+    current_missing = current_value is None
+    sample_too_small = len(metric_matches) < SIMILAR_MIN_COMPARABLE_SAMPLE
+    difference_unavailable = not current_missing and not sample_too_small and not _valid_finite_number(difference)
     limitations: List[str] = []
-    if current_value is None:
+    if current_missing:
         limitations.append(f"current_{metric}_missing")
-    if len(metric_matches) < SIMILAR_MIN_COMPARABLE_SAMPLE:
+    if sample_too_small:
         limitations.append(f"{metric}_sample_too_small")
+    if difference_unavailable:
+        limitations.append(f"{metric}_difference_unavailable")
     if nature == "unknown":
         limitations.append("session_nature_unknown")
-    if current_value is None or len(metric_matches) < SIMILAR_MIN_COMPARABLE_SAMPLE or not _valid_finite_number(difference):
+    if current_missing or sample_too_small or difference_unavailable:
         return nature, "insufficient", limitations
     if nature == "same_known":
         return nature, "strong", limitations
