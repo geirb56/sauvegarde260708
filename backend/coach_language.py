@@ -156,7 +156,7 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
     ):
         return None, "repetitions.category_uncertain"
     band = "homogeneous" if dispersion <= low else "noticeable" if dispersion <= high else "variable"
-    direction, _ = _pace_description(paces, language)
+    direction = "stable" if band == "homogeneous" else "variable"
     first, last = cohort[0], cohort[-1]
     evidence = {
         "comparable_effort_count": len(cohort), "total_effort_count": len(phases.efforts),
@@ -177,6 +177,7 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
     delta = paces[-1] - paces[0]
     trend_limit = max(config.trend_floor_sec_km, reference * config.trend_relative)
     if len(paces) == 2:
+        evidence["direction"] = "slower" if delta > 0 else "faster" if delta < 0 else "stable"
         evidence["comparison_scope"] = "two_efforts_only"
         evidence["regularity_band"] = "not_assessed"
         text = _localized(
@@ -210,6 +211,7 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
             if (abs(pace - center) > limit + 2 * uncertainty
                     and max(abs(value - center) for value in others) <= limit):
                 atypical.append((index, center, limit))
+    evidence["atypical_candidate_count"] = len(atypical)
     if len(atypical) == 1:
         index, center, limit = atypical[0]
         pace = paces[index]
@@ -242,10 +244,14 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
                         trend_limit_sec_per_km=trend_limit,
                         trend_scope="equal_count_endpoint_groups_middle_excluded")
         # Require a consistent direction within both groups, not just their centers.
-        monotonic = (all(b <= a for a, b in zip(paces, paces[1:])) if change < 0
-                     else all(b >= a for a, b in zip(paces, paces[1:])))
+        groups = (paces[:size], paces[-size:])
+        monotonic = all(
+            all(b <= a if change < 0 else b >= a for a, b in zip(group, group[1:]))
+            for group in groups
+        )
         if abs(change) > trend_limit + 2 * uncertainty and monotonic:
             evidence["group_direction"] = "faster" if change < 0 else "slower"
+            evidence["direction"] = evidence["group_direction"]
             text += " " + _localized(
                 language, f"La fin est plus {'rapide' if change < 0 else 'lente'} : {_n(abs(change))} s/km entre les {size} premières et les {size} dernières répétitions.",
                 f"The finish is {'faster' if change < 0 else 'slower'}: {_n(abs(change))} s/km between the first {size} and last {size} repetitions.",
@@ -253,6 +259,16 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
             )
         elif abs(change) + 2 * uncertainty <= trend_limit:
             evidence["group_direction"] = "close"
+    elif len(paces) == 3 and abs(delta) > trend_limit + 2 * uncertainty:
+        monotonic = all(b <= a if delta < 0 else b >= a for a, b in zip(paces, paces[1:]))
+        if monotonic:
+            evidence["direction"] = "faster" if delta < 0 else "slower"
+            evidence["trend_scope"] = "first_last_of_three_efforts"
+            text += " " + _localized(
+                language, f"La dernière répétition est {_n(abs(delta))} s/km plus {'rapide' if delta < 0 else 'lente'} que la première.",
+                f"The last repetition is {_n(abs(delta))} s/km {'faster' if delta < 0 else 'slower'} than the first.",
+                f"La última repetición es {_n(abs(delta))} s/km más {'rápida' if delta < 0 else 'lenta'} que la primera.",
+            )
     return (text, evidence, True), None
 
 
@@ -589,8 +605,8 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
         direction = evidence["direction"]
         first, last = cohort[0], cohort[-1]
         crossed = (all(_positive(phase.average_hr) for phase in cohort)
-                  and (direction == "stable"
-                        or abs(paces[-1] - paces[0]) >= PACE_DISPLAY_CHANGE_SEC_KM))
+                  and (max(paces) - min(paces) < PACE_DISPLAY_CHANGE_SEC_KM
+                       or direction in {"faster", "slower"}))
         if crossed:
             evidence.update(first_hr_bpm=first.average_hr, last_hr_bpm=last.average_hr,
                            heart_rate_change_bpm=last.average_hr - first.average_hr)
@@ -602,7 +618,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
         add("coach.repetitions.pace_hr" if crossed else "coach.repetitions.pacing",
             description, evidence, "repetitions",
             _semantic_priority(
-                direction, crossed, (first.average_hr, last.average_hr) if crossed else None,
+                direction,
+                crossed and (direction in {"faster", "slower"} or max(paces) == min(paces)),
+                (first.average_hr, last.average_hr) if crossed else None,
                 equality=max(paces) == min(paces),
             ),
             ["fact.effort_dispersion", "fact.effort_extremes"]

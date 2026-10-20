@@ -100,6 +100,24 @@ def test_equal_endpoints_do_not_hide_interior_variability_or_invent_trend():
     assert "atypical_effort_number" not in item.evidence
 
 
+def test_homogeneous_series_does_not_borrow_legacy_endpoint_direction_or_priority():
+    phases = [phase.model_copy(update={"average_hr": 140 if index == 0 else 141})
+              for index, phase in enumerate(repetitions([288] + [300] * 98 + [312]))]
+    item, = analyze(phases=phases).coach_language.conclusions
+    assert item.metadata["regularity_band"] == "homogeneous"
+    assert item.metadata["direction"] == "stable"
+    assert item.metadata["group_direction"] == "close"
+    assert item.priority == 30
+
+
+def test_group_direction_ignores_the_explicitly_excluded_middle_repetition():
+    item, = analyze([300, 301, 302, 301.5, 340, 341, 342]).coach_language.conclusions
+    assert item.evidence["group_size"] == 3
+    assert item.evidence["group_pace_change_sec_per_km"] == 40
+    assert item.metadata["group_direction"] == "slower"
+    assert item.metadata["direction"] == "slower"
+
+
 def test_two_efforts_are_one_bounded_description_not_series_judgment():
     item, = analyze([300, 320]).coach_language.conclusions
     assert item.kind == "descriptive"
