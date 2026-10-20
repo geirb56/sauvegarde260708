@@ -1475,6 +1475,11 @@ async def test_unknown_session_nature_is_reported_and_blocks_strong_comparabilit
     assert "earlier session(s) of comparable distance" not in meaning
     assert similar["pace_difference_min_km"] is not None
     assert "limitations.session_nature_unknown" in {item["code"] for item in payload["limitations"]}
+    # C349-B additive diagnostics: an unknown nature is never strong for any metric.
+    assert similar["pace_nature_status"] == "unknown"
+    assert similar["pace_comparability"] in {"distance_only", "insufficient"}
+    assert similar["hr_comparability"] in {"distance_only", "insufficient"}
+    assert "session_nature_unknown" in similar["pace_limitations"]
 
 
 def test_explicit_race_metadata_excludes_incompatible_history():

@@ -198,9 +198,9 @@ def test_excluded_middle_effort_keeps_exact_number_sequence():
     assert [p.effort_number for p in analysis.phase_analysis.efforts] == [1, 2, 3]
 
 
-@pytest.mark.parametrize("changes", [{"is_race": None}, {"type": "ride"},
+@pytest.mark.parametrize("changes", [{"type": "ride"},
                                     {"distance_km": 10}, {"date": "2025-01-01"}])
-def test_history_unknown_nature_wrong_sport_distance_or_date_abstains(changes):
+def test_history_wrong_sport_distance_or_date_abstains(changes):
     history = prior(avg_heart_rate=150)
     for row in history:
         row.update(changes)
@@ -370,10 +370,15 @@ def test_reported_splits_longer_than_workout_are_rejected():
     assert conclusions(continuous_session(distance_km=2, km_splits=splits())) == []
 
 
-def test_history_insufficient_metric_coverage_is_not_coach_conclusion():
+def test_history_insufficient_hr_coverage_does_not_block_admissible_pace():
+    # C349-B: one HR reference only must not block a pace comparison resting on
+    # two pace references of known, identical nature.
     history = prior()
     history[1]["avg_heart_rate"] = None
-    assert conclusions(history=history) == []
+    items = conclusions(history=history)
+    assert [item.code for item in items] == ["coach.history.pace"]
+    assert items[0].evidence["pace_sample_count"] == 2
+    assert items[0].metadata["comparability"] == "strong"
 
 
 def test_history_single_reference_abstains():
