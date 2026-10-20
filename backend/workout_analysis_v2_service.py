@@ -10,6 +10,7 @@ from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
     build_workout_analysis_v2,
+    retrieve_similar_workouts,
     workout_analysis_candidate_date_bounds,
 )
 
@@ -255,6 +256,73 @@ def _cached_activity_phases(activity_doc: dict[str, Any]) -> Optional[list[Activ
     return phases
 
 
+def _reliable_activity_type(activity_doc: Any) -> Optional[str]:
+    """Precise Garmin type key (e.g. ``treadmill_running``) only when unambiguous.
+
+    Read from the source document only; the activity name is never used. The
+    top-level copy and the normalized sub-document must agree when both exist.
+    """
+    if not isinstance(activity_doc, dict):
+        return None
+    sub = activity_doc.get("garmin_activity")
+    values = [activity_doc.get("activity_type"),
+              sub.get("activity_type") if isinstance(sub, dict) else None]
+    keys = set()
+    for value in values:
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip() or len(value) > 64:
+            return None
+        keys.add(value.strip().lower())
+    return keys.pop() if len(keys) == 1 else None
+
+
+async def _historical_garmin_sources(
+    db: Any, user_id: str, references: list[dict[str, Any]],
+) -> tuple[dict[str, list[ActivityPhase]], dict[str, str]]:
+    """Read-only: validated cached phases and precise activity types of Garmin
+    references, keyed by workout id.
+
+    Ambiguous (several activity documents) or unreadable data yields nothing,
+    so the reference keeps an unknown structure and an unknown activity type.
+    """
+    wanted: dict[str, str] = {}
+    for reference in references:
+        if _is_garmin_workout(reference):
+            external_id = _extract_garmin_external_id(reference)
+            if external_id:
+                wanted[external_id] = str(reference.get("id") or "")
+    if not wanted or db is None or not hasattr(db, "garmin_activities"):
+        return {}, {}
+    keys: list[Any] = list(wanted)
+    keys += [int(key) for key in wanted if key.isdigit()]
+    try:
+        docs = await db.garmin_activities.find(
+            {"user_id": user_id, "external_id": {"$in": keys}},
+            {"_id": 0, "external_id": 1, "activity_details": 1,
+             "activity_type": 1, "garmin_activity.activity_type": 1},
+        ).to_list(length=None)
+    except Exception:
+        logger.warning("Historical Garmin sources unavailable for user_id=%s", user_id)
+        return {}, {}
+    found: dict[str, list[dict[str, Any]]] = {}
+    for doc in docs or []:
+        if isinstance(doc, dict) and str(doc.get("external_id")) in wanted:
+            found.setdefault(str(doc["external_id"]), []).append(doc)
+    phases: dict[str, list[ActivityPhase]] = {}
+    types: dict[str, str] = {}
+    for external_id, candidates in found.items():
+        if len(candidates) != 1:
+            continue
+        cached = _cached_activity_phases(candidates[0])
+        if cached:
+            phases[wanted[external_id]] = cached
+        activity_type = _reliable_activity_type(candidates[0])
+        if activity_type:
+            types[wanted[external_id]] = activity_type
+    return phases, types
+
+
 async def load_scoped_workout_analysis_v2(
     *,
     db: Any,
@@ -270,6 +338,7 @@ async def load_scoped_workout_analysis_v2(
         return None
 
     phases = None
+    current_type = None
     if _is_garmin_workout(workout):
         ext_id = _extract_garmin_external_id(workout)
         if ext_id:
@@ -277,6 +346,7 @@ async def load_scoped_workout_analysis_v2(
             if activity_doc:
                 workout = enrich_workout_from_garmin_activity(workout, activity_doc)
                 phases = _cached_activity_phases(activity_doc)
+                current_type = _reliable_activity_type(activity_doc)
 
     try:
         lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
@@ -295,11 +365,19 @@ async def load_scoped_workout_analysis_v2(
             .sort("date", -1)
             .to_list(length=200)
         )
+        # Same selection (same defaults) as build_workout_analysis_v2's similar reference.
+        historical_phases, activity_types = await _historical_garmin_sources(
+            db, user_id, retrieve_similar_workouts(workout, historical_workouts),
+        )
+        if current_type:
+            activity_types[str(workout.get("id") or "")] = current_type
         analysis = build_workout_analysis_v2(
             workout=workout,
             historical_workouts=historical_workouts,
             language=language,
             phases=phases,
+            historical_phases=historical_phases,
+            activity_types=activity_types,
         )
     except Exception:
         logger.exception(

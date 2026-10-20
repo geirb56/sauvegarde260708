@@ -499,27 +499,41 @@ def _history_metric_admissible(workout, similar, metric):
     )
 
 
-def _history_choice(workout, similar, session_structure):
+# Recorded structures that are known not to be a single continuous effort.
+_KNOWN_NON_CONTINUOUS_RECORDS = {"intervals", "other"}
+
+
+def _history_choice(workout, similar, session_structure, environment=None):
     """Return (metric, scope) for at most one admissible history phenomenon.
 
     Nature (training/race), structure (continuous/intervals) and distance are
-    distinct guarantees. Any history conclusion requires the current session to be
-    validated as continuous by V2; an unknown, interval or other structure abstains.
-    Strong scope additionally needs a known identical nature *and* every reference
-    of the metric's own population recorded as continuous. Otherwise, a metric with
-    an admissible population is at most described with an explicitly limited scope.
+    distinct guarantees. Strong scope requires the current session validated as
+    continuous by V2, a known identical nature *and* every reference of the
+    metric's own population recorded as continuous.
+
+    A distance-only description of the average does not depend on the structure,
+    so it is also admitted when the current structure is unknown, never when it is
+    known to be intervals/other. Without proven structure, the precise Garmin
+    activity type (e.g. treadmill vs outdoor) must additionally be known and
+    identical for the session and every reference of the metric population.
     """
     if similar is None or not similar.available:
         return None
-    if (getattr(session_structure, "available", None) is not True
-            or getattr(session_structure, "code", None) != "continuous"):
+    available = getattr(session_structure, "available", None) is True
+    continuous = available and getattr(session_structure, "code", None) == "continuous"
+    if not continuous and (
+        available or workout.get("session_structure") in _KNOWN_NON_CONTINUOUS_RECORDS
+    ):
         return None
+    environment = environment or {}
     scopes = {}
     for metric, comparability, structure in (
         ("pace", similar.pace_comparability, similar.pace_structure_status),
         ("hr", similar.hr_comparability, similar.hr_structure_status),
     ):
-        if comparability == "strong" and structure == "continuous_recorded":
+        if not continuous and environment.get(metric) != "same_known":
+            continue
+        if continuous and comparability == "strong" and structure == "continuous_recorded":
             scopes[metric] = "strong"
         elif comparability in {"strong", "distance_only"}:
             scopes[metric] = "distance_only"
@@ -531,7 +545,8 @@ def _history_choice(workout, similar, session_structure):
 
 
 def build_coach_language(workout, phase_analysis, comparison, cohort, basis, comparable, language="en",
-                         *, session_structure=None, repetition_config=None):
+                         *, session_structure=None, repetition_config=None,
+                         history_environment=None):
     """Consume validated phase output and raw measured km rows, without legacy changes."""
     candidates = []
 
@@ -685,9 +700,13 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
     # deterministically: strong (same known nature and recorded continuous structure) before
     # distance-only, pace before HR.
     # Each metric is admitted on its own population; a gap in one never blocks the other.
-    history = _history_choice(workout, similar, session_structure)
+    history = _history_choice(workout, similar, session_structure, history_environment)
     if history is not None:
         metric, scope = history
+        structure_status = (
+            "continuous" if getattr(session_structure, "code", None) == "continuous"
+            and getattr(session_structure, "available", None) is True else "unknown"
+        )
         limited = scope == "distance_only"
         if metric == "pace":
             delta = similar.pace_difference_min_km
@@ -731,7 +750,8 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                 {"pace_sample_count": count, "pace_difference_sec_per_km": seconds,
                  "baseline_pace_min_km": similar.avg_pace_min_km,
                  "current_pace_min_km": workout["avg_pace_min_km"],
-                 "population": "pace_only", "comparability": scope},
+                 "population": "pace_only", "comparability": scope,
+                 "session_structure": structure_status},
                 "history", _history_priority(delta, limited), ["fact.similar_pace"],
                 "descriptive" if limited else "conclusion")
         else:
@@ -771,7 +791,8 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                 {"hr_sample_count": count, "heart_rate_difference_bpm": delta,
                  "baseline_heart_rate_bpm": baseline_hr,
                  "current_heart_rate_bpm": current_hr,
-                 "population": "hr_only", "comparability": scope},
+                 "population": "hr_only", "comparability": scope,
+                 "session_structure": structure_status},
                 "history", _history_priority(delta, limited), ["fact.similar_hr"],
                 "descriptive" if limited else "conclusion")
 
