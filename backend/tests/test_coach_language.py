@@ -183,17 +183,19 @@ def test_incomplete_pace_in_selected_cohort_abstains():
 
 def test_excluded_efforts_keep_original_numbers():
     phases = efforts(paces=(300, 300, 300), distances=(100, 1000, 1000))
-    item = conclusions(phases=phases)[0]
-    assert item.evidence["first_effort_number"] == 2
-    assert item.evidence["last_effort_number"] == 3
-    assert item.evidence["total_effort_count"] == 3
+    analysis = build_workout_analysis_v2(session(), [], phases=phases)
+    assert analysis.coach_language.conclusions == []
+    assert analysis.coach_language.limitations == ["repetitions.insufficient_comparability"]
+    assert [p.effort_number for p in analysis.phase_analysis.efforts] == [1, 2, 3]
 
 
 def test_excluded_middle_effort_keeps_exact_number_sequence():
-    item = conclusions(phases=efforts(paces=(300, 300, 300),
-                                     distances=(1000, 100, 1000)))[0]
-    assert item.metadata["effort_numbers"] == "1, 3"
-    assert "numbers 1, 3" in item.text
+    analysis = build_workout_analysis_v2(
+        session(), [], phases=efforts(paces=(300, 300, 300), distances=(1000, 100, 1000)),
+    )
+    assert analysis.coach_language.conclusions == []
+    assert analysis.coach_language.limitations == ["repetitions.insufficient_comparability"]
+    assert [p.effort_number for p in analysis.phase_analysis.efforts] == [1, 2, 3]
 
 
 @pytest.mark.parametrize("changes", [{"is_race": None}, {"type": "ride"},
@@ -379,10 +381,10 @@ def test_history_single_reference_abstains():
 
 
 def test_complete_partial_cohort_does_not_claim_all_efforts():
-    item = conclusions(phases=efforts(paces=(300, 300, 300),
-                                     distances=(100, 1000, 1000)))[0]
-    assert item.evidence["comparable_effort_count"] == 2
-    assert "2 comparable repetitions" in item.text
+    phases = efforts(paces=(300, 300, 300), distances=(100, 1000, 1000))
+    analysis = build_workout_analysis_v2(session(), [], phases=phases)
+    assert analysis.coach_language.conclusions == []
+    assert analysis.phase_analysis.effort_regularity.comparable_effort_count == 2
 
 
 def test_baseline_average_never_substitutes_for_similar_history():
@@ -555,7 +557,7 @@ def test_canonical_signal_handoff_keeps_exact_serialized_api_fields():
     assert set(payload["signals"]["session_structure"]) == {
         "available", "code", "text", "reason_unavailable",
     }
-    assert set(payload["coach_language"]) == {"version", "conclusions"}
+    assert set(payload["coach_language"]) == {"version", "conclusions", "limitations"}
     item, = payload["coach_language"]["conclusions"]
     assert set(item) == {
         "code", "text", "evidence", "metadata", "category", "priority", "available",
