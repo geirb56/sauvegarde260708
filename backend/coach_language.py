@@ -2,9 +2,10 @@
 
 from itertools import combinations
 import math
+from statistics import mean, median
 from typing import Dict, List, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # Display-only reuse of V2's 0.4 min/km change boundary. Not a physiological limit.
@@ -57,6 +58,218 @@ class CoachConclusionV1(BaseModel):
 class CoachLanguageV1(BaseModel):
     version: Literal["v1"] = "v1"
     conclusions: List[CoachConclusionV1] = Field(default_factory=list, max_length=3)
+    limitations: List[str] = Field(default_factory=list)
+
+
+class RepetitionJudgmentConfig(BaseModel):
+    """Descriptive display bands, not training targets or physiological limits.
+
+    D = mean(abs(pace - median(paces))) includes every comparable effort.
+    This L1 measure uses a robust location and linear, not squared, deviations;
+    it is not a median absolute deviation, nor an outlier-proof estimator.
+    Homogeneous: D <= max(1 s/km, 1% of median); noticeable: up to
+    max(2 s/km, 4% of median); larger deviations: important variations.
+    The bands separate small average gaps from wider ones, not good from bad.
+    With default +/-0.5 s/km representation uncertainty, abstain within
+    uncertainty * (2 + variable_relative) of either category boundary.
+    Any observed speed versus time/distance pace discrepancy is added to
+    that uncertainty; discrepancies beyond 1% prevent judgment entirely.
+
+    A unique atypical effort must exceed max(3 s/km, 4% of the others'
+    median, 3 times their median absolute deviation), plus uncertainty.
+    Trends compare equal-count endpoint groups (odd middle excluded), with
+    a 2% / 3 s/km floor and consistent direction; an isolated atypical
+    effort suppresses trend interpretation. All thresholds are display policy.
+    """
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    homogeneous_relative: float = Field(default=0.01, gt=0)
+    variable_relative: float = Field(default=0.04, gt=0)
+    rounding_floor_sec_km: float = Field(default=1.0, gt=0)
+    pace_uncertainty_sec_km: float = Field(default=0.5, ge=0)
+    atypical_relative: float = Field(default=0.04, gt=0)
+    atypical_floor_sec_km: float = Field(default=3.0, gt=0)
+    atypical_mad_multiplier: float = Field(default=3.0, gt=0)
+    trend_relative: float = Field(default=0.02, gt=0)
+    trend_floor_sec_km: float = Field(default=3.0, gt=0)
+
+    @model_validator(mode="after")
+    def _ordered_bands(self):
+        if self.variable_relative <= self.homogeneous_relative:
+            raise ValueError("Regularity bands must be increasing")
+        return self
+
+
+def _repetition_judgment(phases, cohort, basis, comparable, language, config):
+    """Interpret V2's individual paces without changing its legacy statistics."""
+    if not phases.available or not phases.phases:
+        return None, "repetitions.phases_unavailable"
+    if len(phases.efforts) < 2:
+        return None, "repetitions.insufficient_efforts"
+    orders = [phase.order for phase in phases.phases]
+    if any(order < 0 for order in orders) or any(
+        right <= left for left, right in zip(orders, orders[1:])
+    ):
+        return None, "repetitions.unreliable_order"
+    if (
+        [phase for phase in phases.phases if phase.phase_type == "effort"] != phases.efforts
+        or any(phase.phase_type == "unknown" for phase in phases.phases
+               if phases.efforts[0].order < phase.order < phases.efforts[-1].order)
+        or "incoherent_pace" in phases.limitations
+    ):
+        return None, "repetitions.incoherent_structure"
+    if any(
+        not all(_positive(value) for value in (
+            phase.duration_s, phase.distance_m, phase.pace_sec_per_km,
+        ))
+        or (phase.average_speed_mps is not None and not _positive(phase.average_speed_mps))
+        for phase in phases.efforts
+    ):
+        return None, "repetitions.invalid_measurements"
+    if (
+        len(cohort) != len(phases.efforts) or basis is None
+        or not all(comparable(left, right, basis) for left, right in combinations(cohort, 2))
+    ):
+        return None, "repetitions.insufficient_comparability"
+    # V2 permits a 20% speed/distance discrepancy for factual observations.
+    # A categorical judgment needs the tighter existing display reconciliation.
+    derived_paces = [phase.duration_s * 1000 / phase.distance_m for phase in cohort]
+    if any(not math.isclose(phase.pace_sec_per_km, derived,
+                            rel_tol=MEASUREMENT_RECONCILIATION_REL_TOL)
+           for phase, derived in zip(cohort, derived_paces)):
+        return None, "repetitions.imprecise_measurements"
+
+    paces = [phase.pace_sec_per_km for phase in cohort]
+    reference = median(paces)
+    # L1 dispersion uses EVERY effort. Median anchoring and linear deviations
+    # reduce sensitivity to extremes versus the legacy squared-deviation metric.
+    dispersion = mean(abs(pace - reference) for pace in paces)
+    low = max(config.rounding_floor_sec_km, config.homogeneous_relative * reference)
+    high = max(2 * config.rounding_floor_sec_km, config.variable_relative * reference)
+    disagreement = max(abs(pace - derived) for pace, derived in zip(paces, derived_paces))
+    if disagreement < 1e-8:
+        disagreement = 0
+    uncertainty = config.pace_uncertainty_sec_km + disagreement
+    error = uncertainty * (2 + config.variable_relative)
+    if len(paces) >= 3 and uncertainty and any(
+        abs(dispersion - boundary) <= error for boundary in (low, high)
+    ):
+        return None, "repetitions.category_uncertain"
+    band = "homogeneous" if dispersion <= low else "noticeable" if dispersion <= high else "variable"
+    direction = "stable" if band == "homogeneous" else "variable"
+    first, last = cohort[0], cohort[-1]
+    evidence = {
+        "comparable_effort_count": len(cohort), "total_effort_count": len(phases.efforts),
+        "first_effort_number": first.effort_number, "last_effort_number": last.effort_number,
+        "comparability_basis": basis, "effort_numbers": ", ".join(str(p.effort_number) for p in cohort),
+        "pace_range_sec_per_km": max(paces) - min(paces),
+        "first_to_last_pace_change_sec_per_km": paces[-1] - paces[0],
+        "first_pace_sec_per_km": paces[0], "last_pace_sec_per_km": paces[-1],
+        "direction": direction, "judgment_version": "v1",
+        "metric": "mean_absolute_deviation_from_median",
+        "median_pace_sec_per_km": reference, "absolute_deviation_sec_per_km": dispersion,
+        "relative_deviation": dispersion / reference,
+        "homogeneous_limit_sec_per_km": low, "variable_limit_sec_per_km": high,
+        "pace_uncertainty_sec_per_km": uncertainty,
+        "pace_reconciliation_gap_sec_per_km": disagreement,
+        **{f"effort_{phase.effort_number}_pace_sec_per_km": phase.pace_sec_per_km for phase in cohort},
+    }
+    delta = paces[-1] - paces[0]
+    trend_limit = max(config.trend_floor_sec_km, reference * config.trend_relative)
+    if len(paces) == 2:
+        evidence["direction"] = "slower" if delta > 0 else "faster" if delta < 0 else "stable"
+        evidence["comparison_scope"] = "two_efforts_only"
+        evidence["regularity_band"] = "not_assessed"
+        text = _localized(
+            language,
+            f"Sur tes deux répétitions comparables, l'écart d'allure est de {_n(abs(delta))} s/km ; cela ne suffit pas à juger la régularité d'une série.",
+            f"Your two comparable repetitions differ by {_n(abs(delta))} s/km; this is not enough to judge a whole series.",
+            f"Tus dos repeticiones comparables difieren {_n(abs(delta))} s/km; no basta para juzgar la regularidad de una serie.",
+        )
+        return (text, evidence, False), None
+
+    evidence.update(regularity_band=band, comparison_scope="all_comparable_efforts")
+    label = {
+        "homogeneous": _localized(language, "Allures homogènes", "Homogeneous paces", "Ritmos homogéneos"),
+        "noticeable": _localized(language, "Variations d'allure perceptibles", "Noticeable pace variations", "Variaciones de ritmo perceptibles"),
+        "variable": _localized(language, "Variations d'allure importantes", "Large pace variations", "Variaciones de ritmo importantes"),
+    }[band]
+    text = _localized(
+        language,
+        f"{label} sur tes {len(paces)} répétitions : écart moyen de {_n(dispersion)} s/km par rapport à l'allure centrale.",
+        f"{label} across your {len(paces)} repetitions: an average gap of {_n(dispersion)} s/km from the central pace.",
+        f"{label} en tus {len(paces)} repeticiones: diferencia media de {_n(dispersion)} s/km respecto al ritmo central.",
+    )
+    atypical = []
+    if len(paces) >= 4:
+        for index, pace in enumerate(paces):
+            others = paces[:index] + paces[index + 1:]
+            center = median(others)
+            mad = median(abs(value - center) for value in others)
+            limit = max(config.atypical_floor_sec_km, config.atypical_relative * center,
+                        config.atypical_mad_multiplier * mad)
+            if (abs(pace - center) > limit + 2 * uncertainty
+                    and max(abs(value - center) for value in others) <= limit):
+                atypical.append((index, center, limit))
+    evidence["atypical_candidate_count"] = len(atypical)
+    if len(atypical) == 1:
+        index, center, limit = atypical[0]
+        pace = paces[index]
+        seconds = int(math.floor(pace + 0.5))
+        formatted = f"{seconds // 60}:{seconds % 60:02d}/km"
+        number = cohort[index].effort_number
+        evidence.update(atypical_effort_number=number, atypical_pace_sec_per_km=pace,
+                        atypical_reference_sec_per_km=center,
+                        atypical_difference_sec_per_km=pace - center, atypical_limit_sec_per_km=limit)
+        text += " " + _localized(
+            language,
+            f"La répétition n° {number} se distingue à {formatted}, {_n(abs(pace - center))} s/km plus {'rapide' if pace < center else 'lente'} que l'allure centrale des autres répétitions.",
+            f"Repetition {number} stands out at {formatted}, {_n(abs(pace - center))} s/km {'faster' if pace < center else 'slower'} than the central pace of the other repetitions.",
+            f"La repetición n.º {number} destaca a {formatted}, {_n(abs(pace - center))} s/km más {'rápida' if pace < center else 'lenta'} que el ritmo central de las demás repeticiones.",
+        )
+        # Endpoint proximity adds context without interpreting an outlier as a trend.
+        if abs(delta) + 2 * uncertainty <= trend_limit:
+            text += " " + _localized(
+                language, f"La première et la dernière restent proches ({_n(abs(delta))} s/km d'écart).",
+                f"The first and last remain close ({_n(abs(delta))} s/km apart).",
+                f"La primera y la última siguen próximas ({_n(abs(delta))} s/km de diferencia).",
+            )
+            evidence["endpoint_relationship"] = "close"
+    elif len(paces) >= 4:
+        size = len(paces) // 2
+        start, end = median(paces[:size]), median(paces[-size:])
+        change = end - start
+        evidence.update(start_group_pace_sec_per_km=start, end_group_pace_sec_per_km=end,
+                        group_pace_change_sec_per_km=change, group_size=size,
+                        trend_limit_sec_per_km=trend_limit,
+                        trend_scope="equal_count_endpoint_groups_middle_excluded")
+        # Require a consistent direction within both groups, not just their centers.
+        groups = (paces[:size], paces[-size:])
+        monotonic = all(
+            all(b <= a if change < 0 else b >= a for a, b in zip(group, group[1:]))
+            for group in groups
+        )
+        if abs(change) > trend_limit + 2 * uncertainty and monotonic:
+            evidence["group_direction"] = "faster" if change < 0 else "slower"
+            evidence["direction"] = evidence["group_direction"]
+            text += " " + _localized(
+                language, f"La fin est plus {'rapide' if change < 0 else 'lente'} : {_n(abs(change))} s/km entre les {size} premières et les {size} dernières répétitions.",
+                f"The finish is {'faster' if change < 0 else 'slower'}: {_n(abs(change))} s/km between the first {size} and last {size} repetitions.",
+                f"El final es más {'rápido' if change < 0 else 'lento'}: {_n(abs(change))} s/km entre las primeras {size} y las últimas {size} repeticiones.",
+            )
+        elif abs(change) + 2 * uncertainty <= trend_limit:
+            evidence["group_direction"] = "close"
+    elif len(paces) == 3 and abs(delta) > trend_limit + 2 * uncertainty:
+        monotonic = all(b <= a if delta < 0 else b >= a for a, b in zip(paces, paces[1:]))
+        if monotonic:
+            evidence["direction"] = "faster" if delta < 0 else "slower"
+            evidence["trend_scope"] = "first_last_of_three_efforts"
+            text += " " + _localized(
+                language, f"La dernière répétition est {_n(abs(delta))} s/km plus {'rapide' if delta < 0 else 'lente'} que la première.",
+                f"The last repetition is {_n(abs(delta))} s/km {'faster' if delta < 0 else 'slower'} than the first.",
+                f"La última repetición es {_n(abs(delta))} s/km más {'rápida' if delta < 0 else 'lenta'} que la primera.",
+            )
+    return (text, evidence, True), None
 
 
 def _localized(language, fr, en, es):
@@ -265,7 +478,7 @@ def _semantic_priority(direction, crossed=False, hr_values=None, equality=False)
 
 
 def build_coach_language(workout, phase_analysis, comparison, cohort, basis, comparable, language="en",
-                         *, session_structure=None):
+                         *, session_structure=None, repetition_config=None):
     """Consume validated phase output and raw measured km rows, without legacy changes."""
     candidates = []
 
@@ -382,48 +595,37 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
             ["fact.pace_change", "fact.negative_split"],
             "descriptive" if direction in {"stable", "variable"} else "conclusion")
 
-    # Legacy anchor selection is retained, but no conclusion uses incompatible extremes.
-    valid_cohort = (
-        len(cohort) >= 2 and basis is not None
-        and all(comparable(left, right, basis) for left, right in combinations(cohort, 2))
-        and all(_positive(phase.pace_sec_per_km) for phase in cohort)
+    judgment, abstention = _repetition_judgment(
+        phase_analysis, cohort, basis, comparable, language,
+        repetition_config or RepetitionJudgmentConfig(),
     )
-    if valid_cohort:
+    if judgment:
+        description, evidence, series = judgment
         paces = [phase.pace_sec_per_km for phase in cohort]
-        direction, description = _pace_description(paces, language)
+        direction = evidence["direction"]
         first, last = cohort[0], cohort[-1]
-        numbers = ", ".join(str(phase.effort_number) for phase in cohort)
-        evidence = {
-            "comparable_effort_count": len(cohort), "total_effort_count": len(phase_analysis.efforts),
-            "first_effort_number": first.effort_number, "last_effort_number": last.effort_number,
-            "comparability_basis": basis, "pace_range_sec_per_km": max(paces) - min(paces),
-            "first_to_last_pace_change_sec_per_km": paces[-1] - paces[0], "direction": direction,
-            "first_pace_sec_per_km": paces[0], "last_pace_sec_per_km": paces[-1],
-            "effort_numbers": numbers,
-        }
-        scope = _localized(
-            language, f"Sur tes {len(cohort)} répétitions comparables (n° {numbers}) : ",
-            f"Across your {len(cohort)} comparable repetitions (numbers {numbers}): ",
-            f"En tus {len(cohort)} repeticiones comparables (n.º {numbers}): ",
-        )
         crossed = (all(_positive(phase.average_hr) for phase in cohort)
-                   and (direction == "stable"
-                        or abs(paces[-1] - paces[0]) >= PACE_DISPLAY_CHANGE_SEC_KM))
-        hr_delta = 0
+                  and (max(paces) - min(paces) < PACE_DISPLAY_CHANGE_SEC_KM
+                       or direction in {"faster", "slower"}))
         if crossed:
-            hr_delta = last.average_hr - first.average_hr
-            description = _crossed_description(paces, first.average_hr, last.average_hr, language)
             evidence.update(first_hr_bpm=first.average_hr, last_hr_bpm=last.average_hr,
-                            heart_rate_change_bpm=hr_delta)
+                           heart_rate_change_bpm=last.average_hr - first.average_hr)
+            description += " " + _localized(
+               language, f"La FC moyenne passe de {_n(first.average_hr)} à {_n(last.average_hr)} bpm entre la première et la dernière.",
+               f"Average heart rate goes from {_n(first.average_hr)} to {_n(last.average_hr)} bpm between the first and last.",
+               f"La FC media pasa de {_n(first.average_hr)} a {_n(last.average_hr)} lpm entre la primera y la última.",
+            )
         add("coach.repetitions.pace_hr" if crossed else "coach.repetitions.pacing",
-            scope + description, evidence, "repetitions",
+            description, evidence, "repetitions",
             _semantic_priority(
-                direction, crossed, (first.average_hr, last.average_hr) if crossed else None,
+                direction,
+                crossed and (direction in {"faster", "slower"} or max(paces) == min(paces)),
+                (first.average_hr, last.average_hr) if crossed else None,
                 equality=max(paces) == min(paces),
             ),
             ["fact.effort_dispersion", "fact.effort_extremes"]
             + (["fact.effort_hr_evolution"] if crossed else []),
-            "descriptive" if direction in {"stable", "variable"} else "conclusion")
+            "conclusion" if series else "descriptive")
 
     similar = comparison.similar
     # Separate populations are never crossed. At most one historical phenomenon is selected.
@@ -487,4 +689,4 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
         if item.category not in seen:
             selected.append(item)
             seen.add(item.category)
-    return CoachLanguageV1(conclusions=selected[:3])
+    return CoachLanguageV1(conclusions=selected[:3], limitations=[abstention] if abstention else [])
