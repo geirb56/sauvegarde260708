@@ -62,7 +62,25 @@ class CoachLanguageV1(BaseModel):
 
 
 class RepetitionJudgmentConfig(BaseModel):
-    """Descriptive display bands, not training targets or physiological limits."""
+    """Descriptive display bands, not training targets or physiological limits.
+
+    D = mean(abs(pace - median(paces))) includes every comparable effort.
+    This L1 measure uses a robust location and linear, not squared, deviations;
+    it is not a median absolute deviation, nor an outlier-proof estimator.
+    Homogeneous: D <= max(1 s/km, 1% of median); noticeable: up to
+    max(2 s/km, 4% of median); larger deviations: important variations.
+    The bands separate small average gaps from wider ones, not good from bad.
+    With default +/-0.5 s/km representation uncertainty, abstain within
+    uncertainty * (2 + variable_relative) of either category boundary.
+    Any observed speed versus time/distance pace discrepancy is added to
+    that uncertainty; discrepancies beyond 1% prevent judgment entirely.
+
+    A unique atypical effort must exceed max(3 s/km, 4% of the others'
+    median, 3 times their median absolute deviation), plus uncertainty.
+    Trends compare equal-count endpoint groups (odd middle excluded), with
+    a 2% / 3 s/km floor and consistent direction; an isolated atypical
+    effort suppresses trend interpretation. All thresholds are display policy.
+    """
 
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
     homogeneous_relative: float = Field(default=0.01, gt=0)
@@ -71,7 +89,9 @@ class RepetitionJudgmentConfig(BaseModel):
     pace_uncertainty_sec_km: float = Field(default=0.5, ge=0)
     atypical_relative: float = Field(default=0.04, gt=0)
     atypical_floor_sec_km: float = Field(default=3.0, gt=0)
+    atypical_mad_multiplier: float = Field(default=3.0, gt=0)
     trend_relative: float = Field(default=0.02, gt=0)
+    trend_floor_sec_km: float = Field(default=3.0, gt=0)
 
     @model_validator(mode="after")
     def _ordered_bands(self):
@@ -113,11 +133,10 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
         return None, "repetitions.insufficient_comparability"
     # V2 permits a 20% speed/distance discrepancy for factual observations.
     # A categorical judgment needs the tighter existing display reconciliation.
-    if any(
-        not math.isclose(phase.pace_sec_per_km, phase.duration_s * 1000 / phase.distance_m,
-                         rel_tol=MEASUREMENT_RECONCILIATION_REL_TOL)
-        for phase in cohort
-    ):
+    derived_paces = [phase.duration_s * 1000 / phase.distance_m for phase in cohort]
+    if any(not math.isclose(phase.pace_sec_per_km, derived,
+                            rel_tol=MEASUREMENT_RECONCILIATION_REL_TOL)
+           for phase, derived in zip(cohort, derived_paces)):
         return None, "repetitions.imprecise_measurements"
 
     paces = [phase.pace_sec_per_km for phase in cohort]
@@ -127,7 +146,10 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
     dispersion = mean(abs(pace - reference) for pace in paces)
     low = max(config.rounding_floor_sec_km, config.homogeneous_relative * reference)
     high = max(2 * config.rounding_floor_sec_km, config.variable_relative * reference)
-    uncertainty = config.pace_uncertainty_sec_km
+    disagreement = max(abs(pace - derived) for pace, derived in zip(paces, derived_paces))
+    if disagreement < 1e-8:
+        disagreement = 0
+    uncertainty = config.pace_uncertainty_sec_km + disagreement
     error = uncertainty * (2 + config.variable_relative)
     if len(paces) >= 3 and uncertainty and any(
         abs(dispersion - boundary) <= error for boundary in (low, high)
@@ -149,10 +171,11 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
         "relative_deviation": dispersion / reference,
         "homogeneous_limit_sec_per_km": low, "variable_limit_sec_per_km": high,
         "pace_uncertainty_sec_per_km": uncertainty,
+        "pace_reconciliation_gap_sec_per_km": disagreement,
         **{f"effort_{phase.effort_number}_pace_sec_per_km": phase.pace_sec_per_km for phase in cohort},
     }
     delta = paces[-1] - paces[0]
-    trend_limit = max(config.atypical_floor_sec_km, reference * config.trend_relative)
+    trend_limit = max(config.trend_floor_sec_km, reference * config.trend_relative)
     if len(paces) == 2:
         evidence["comparison_scope"] = "two_efforts_only"
         evidence["regularity_band"] = "not_assessed"
@@ -182,7 +205,8 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
             others = paces[:index] + paces[index + 1:]
             center = median(others)
             mad = median(abs(value - center) for value in others)
-            limit = max(config.atypical_floor_sec_km, config.atypical_relative * center, 3 * mad)
+            limit = max(config.atypical_floor_sec_km, config.atypical_relative * center,
+                        config.atypical_mad_multiplier * mad)
             if (abs(pace - center) > limit + 2 * uncertainty
                     and max(abs(value - center) for value in others) <= limit):
                 atypical.append((index, center, limit))

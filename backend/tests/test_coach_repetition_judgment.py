@@ -2,17 +2,20 @@
 
 import json
 import math
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import ValidationError
 
-from activity_phases import ActivityPhase
+from activity_phases import ACTIVITY_PHASE_SCHEMA_VERSION, ActivityPhase
 from coach_language import RepetitionJudgmentConfig, build_coach_language
 from workout_analysis_v2 import (
     _effort_comparison_cohort,
     _efforts_comparable,
     build_workout_analysis_v2,
 )
+from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 
 
 def repetitions(paces, duration=240):
@@ -177,6 +180,31 @@ def test_speed_distance_discrepancy_is_not_precise_enough_for_judgment():
     assert coach.limitations == ["repetitions.imprecise_measurements"]
 
 
+def test_small_reconciliation_gap_can_make_category_uncertain():
+    phases = repetitions([294, 294, 306, 306])
+    # The alternative time/distance observations are 2 s/km away, within 1%.
+    phases = [phase.model_copy(update={"average_speed_mps": 1000 / (pace + 2)})
+              for phase, pace in zip(phases, [294, 294, 306, 306])]
+    coach = analyze(phases=phases).coach_language
+    assert coach.conclusions == []
+    assert coach.limitations == ["repetitions.category_uncertain"]
+
+
+@pytest.mark.parametrize("gap,atypical", [(12.999, False), (13, False), (13.001, True)])
+def test_atypical_threshold_includes_rounding_uncertainty(gap, atypical):
+    item, = configured([300, 300, 300 + gap, 300],
+                       homogeneous_relative=0.001, variable_relative=0.1).conclusions
+    assert ("atypical_effort_number" in item.evidence) is atypical
+
+
+@pytest.mark.parametrize("gap,directional", [(6.999, False), (7, False), (7.001, True)])
+def test_group_direction_threshold_includes_rounding_uncertainty(gap, directional):
+    item, = configured([300, 300, 300 + gap, 300 + gap], trend_relative=0.001,
+                       trend_floor_sec_km=6, homogeneous_relative=0.001,
+                       variable_relative=0.1).conclusions
+    assert (item.metadata.get("group_direction") == "slower") is directional
+
+
 @pytest.mark.parametrize("deviation,expected", [
     (2.999, "homogeneous"), (3, "homogeneous"), (3.001, "noticeable"),
     (11.999, "noticeable"), (12, "noticeable"), (12.001, "variable"),
@@ -272,3 +300,40 @@ def test_without_phases_no_repetition_judgment_from_rejected_laps():
                                  {"lap": 2, "distance_m": 700}])
     assert analysis.coach_language.conclusions == []
     assert analysis.coach_language.limitations == ["repetitions.phases_unavailable"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_status", ["complete", "partial"])
+async def test_scoped_get_service_uses_only_existing_validated_cache(october_reference, cache_status):
+    workout = dict(id="garmin-anonymous", external_id="anonymous", type="run",
+                   date="2026-10-10", distance_km=5, duration_minutes=30)
+    activity = {"activity_details": {
+        "schema_version": ACTIVITY_PHASE_SCHEMA_VERSION,
+        "status": cache_status, "source": "garmin", "endpoint": "typed-splits",
+        "phases": [phase.model_dump() for phase in october_reference],
+    }}
+    cursor = Mock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=[])
+    db = SimpleNamespace(
+        workouts=SimpleNamespace(find_one=AsyncMock(return_value=workout),
+                                 find=Mock(return_value=cursor)),
+        garmin_activities=SimpleNamespace(find_one=AsyncMock(return_value=activity)),
+    )
+    _, analysis = await load_scoped_workout_analysis_v2(
+        db=db, user_id="anonymous-user", workout_id=workout["id"], language="fr",
+    )
+    assert analysis is not None
+    db.workouts.find_one.assert_awaited_once_with(
+        {"id": "garmin-anonymous", "user_id": "anonymous-user"}, {"_id": 0},
+    )
+    db.garmin_activities.find_one.assert_awaited_once_with(
+        {"user_id": "anonymous-user", "external_id": "anonymous"}, {"_id": 0},
+    )
+    if cache_status == "complete":
+        item, = analysis.coach_language.conclusions
+        assert item.metadata["regularity_band"] == "noticeable"
+        assert item.evidence["atypical_effort_number"] == 3
+    else:
+        assert analysis.coach_language.conclusions == []
+        assert analysis.coach_language.limitations == ["repetitions.phases_unavailable"]
