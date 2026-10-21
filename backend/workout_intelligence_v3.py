@@ -212,7 +212,7 @@ def resolve_physiological_profile(
     sources.append(WIV3PhysiologicalSource(
         data="fcmax_declared",
         source=fcmax.provenance or "runner_profile.max_hr (physiological_metrics / user_profile)",
-        unit="bpm", persisted=fcmax.value_bpm is not None,
+        unit="bpm", available=fcmax.value_bpm is not None,
         usable_by_v3=fcmax.value_bpm is not None,
         kind="personal_declared" if fcmax.value_bpm is not None else "unavailable",
         valid_from=fcmax.declared_on,
@@ -226,7 +226,7 @@ def resolve_physiological_profile(
         if estimate is None or estimate.value_bpm is None:
             sources.append(WIV3PhysiologicalSource(
                 data=name, source="none: no RunIndex module persists or computes LT1/LT2",
-                unit="bpm", persisted=False, usable_by_v3=False, kind="unavailable",
+                unit="bpm", available=False, usable_by_v3=False, kind="unavailable",
                 reason="personal_threshold_not_persisted",
             ))
             continue
@@ -234,7 +234,7 @@ def resolve_physiological_profile(
         reliable = personal and estimate.confidence in RELIABLE_THRESHOLD_CONFIDENCE
         sources.append(WIV3PhysiologicalSource(
             data=name, source=f"physiological_metrics.{name}:{estimate.source}",
-            unit="bpm", persisted=True, usable_by_v3=reliable,
+            unit="bpm", available=True, usable_by_v3=reliable,
             kind=_KIND_BY_THRESHOLD_SOURCE.get(estimate.source, "unverified"),  # type: ignore[arg-type]
             valid_from=estimate.estimated_on,
             reason=("personal_reliable_subject_to_session_date_check" if reliable
@@ -242,7 +242,7 @@ def resolve_physiological_profile(
         ))
     sources.append(WIV3PhysiologicalSource(
         data="training_v2_zones", source="training_v2.training_paces (Daniels VDOT E/M/T/I/R)",
-        unit="min/km", persisted=False, usable_by_v3=False, kind="pace_based_not_hr",
+        unit="min/km", available=False, usable_by_v3=False, kind="pace_based_not_hr",
         reason="pace_zones_are_not_heart_rate_thresholds",
     ))
     provided = any(item is not None and item.value_bpm is not None for item in thresholds.values())
@@ -321,7 +321,7 @@ def extract_workout_intelligence_input(
         # Same rule as Workout Analysis V2 (_has_trusted_zone_provenance → False).
         updates["sources"] = list(profile.sources) + [WIV3PhysiologicalSource(
             data="workout_hr_zone_distribution", source="workouts.effort_zone_distribution",
-            unit="percent_of_duration", persisted=True, usable_by_v3=False, kind="unverified",
+            unit="percent_of_duration", available=True, usable_by_v3=False, kind="unverified",
             reason="zone_bounds_provenance_unverified_not_personal_thresholds",
         )]
     if updates:

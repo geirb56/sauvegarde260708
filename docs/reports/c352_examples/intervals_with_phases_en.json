@@ -1,5 +1,5 @@
 {
-  "_note": "SYNTHETIC fixture output (tests/test_workout_intelligence_v3.py) - not a real Garmin validation",
+  "_note": "SYNTHETIC fixture run through load_scoped_workout_intelligence_v3 (read-only fake DB). Not a validation on real Garmin activities. Runtime default inputs (no physiological data).",
   "workout_id": "cur",
   "workout_intelligence_v3": {
     "version": "v3",
@@ -12,45 +12,81 @@
       "session.duration_minutes",
       "session.activity_type",
       "session.recorded_structure",
-      "profile.fcmax",
-      "profile.lt1",
-      "profile.lt2",
+      "profile.observed_max_hr",
       "history",
       "workout_analysis_v2.comparison.similar"
     ],
     "intensity_assessment": {
-      "position": "between_LT1_LT2",
+      "position": "unknown",
       "hr_used_bpm": 160.0,
       "hr_metric": "session_average_hr",
       "session_max_hr_bpm": 170.0,
-      "lt1": {
-        "value_bpm": 150.0,
-        "source": "lab_test",
-        "estimated_on": "2026-01-01",
-        "confidence": "high"
-      },
-      "lt2": {
-        "value_bpm": 170.0,
-        "source": "lab_test",
-        "estimated_on": "2026-01-01",
-        "confidence": "high"
-      },
-      "fcmax_bpm": 170.0,
-      "fcmax_source": "observed_history",
+      "lt1": null,
+      "lt2": null,
+      "fcmax_bpm": null,
+      "fcmax_source": "unavailable",
+      "observed_max_hr_bpm": 170.0,
+      "observed_max_hr_observation_count": 4,
+      "physiological_sources": [
+        {
+          "data": "fcmax_declared",
+          "source": "runner_profile.max_hr (physiological_metrics / user_profile)",
+          "unit": "bpm",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "unavailable",
+          "valid_from": null,
+          "reason": "no_declared_fcmax_supplied_runtime_passes_none"
+        },
+        {
+          "data": "lt1",
+          "source": "none: no RunIndex module persists or computes LT1/LT2",
+          "unit": "bpm",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "unavailable",
+          "valid_from": null,
+          "reason": "personal_threshold_not_persisted"
+        },
+        {
+          "data": "lt2",
+          "source": "none: no RunIndex module persists or computes LT1/LT2",
+          "unit": "bpm",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "unavailable",
+          "valid_from": null,
+          "reason": "personal_threshold_not_persisted"
+        },
+        {
+          "data": "training_v2_zones",
+          "source": "training_v2.training_paces (Daniels VDOT E/M/T/I/R)",
+          "unit": "min/km",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "pace_based_not_hr",
+          "valid_from": null,
+          "reason": "pace_zones_are_not_heart_rate_thresholds"
+        }
+      ],
       "rejected_thresholds": {},
-      "confidence": "medium",
+      "confidence": "none",
       "limitations": [
-        "average_hr_is_not_time_in_zone"
+        "personal_thresholds_not_persisted",
+        "average_hr_is_not_time_in_zone",
+        "no_reliable_personal_threshold"
       ],
       "source_paths": [
         "session.avg_hr",
         "profile.lt1",
         "profile.lt2",
-        "profile.fcmax"
+        "profile.fcmax",
+        "profile.observed_max_hr"
       ]
     },
     "session_classification": {
       "type": "intervals",
+      "decision_tier": "garmin_phases",
       "confidence": "high",
       "evidence": {
         "effort_count": 5.0,
@@ -145,7 +181,7 @@
       ]
     },
     "prescription_assessment": {
-      "status": "indeterminate",
+      "status": "unavailable",
       "prescription_id": null,
       "planned_date": null,
       "prescribed_workout_type": null,
@@ -154,7 +190,7 @@
       "prescribed_duration_minutes": null,
       "observed_classification": null,
       "reasons": [
-        "session_local_date_unknown"
+        "no_historical_prescription"
       ],
       "source_paths": [
         "training_prescription_snapshots"
@@ -176,8 +212,8 @@
       "evidence": [],
       "limitations": [
         {
-          "code": "limit.average_hr",
-          "text": "Average heart rate is a session mean, not the time spent in each zone.",
+          "code": "limit.no_thresholds",
+          "text": "Personal LT1/LT2 thresholds are not available: intensity cannot be placed in a personal zone.",
           "evidence": {},
           "source_paths": [
             "intensity_assessment.limitations"

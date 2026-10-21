@@ -1,5 +1,5 @@
 {
-  "_note": "SYNTHETIC fixture output (tests/test_workout_intelligence_v3.py) - not a real Garmin validation",
+  "_note": "SYNTHETIC fixture run through load_scoped_workout_intelligence_v3 (read-only fake DB). Not a validation on real Garmin activities. physiological_metrics are injected: RunIndex persists no LT1/LT2 today.",
   "workout_id": "cur",
   "workout_intelligence_v3": {
     "version": "v3",
@@ -13,11 +13,11 @@
       "session.activity_type",
       "session.recorded_structure",
       "profile.fcmax",
+      "profile.observed_max_hr",
       "profile.lt1",
       "profile.lt2",
       "history",
-      "workout_analysis_v2.comparison.similar",
-      "prescription_snapshot"
+      "workout_analysis_v2.comparison.similar"
     ],
     "intensity_assessment": {
       "position": "below_LT1",
@@ -36,8 +36,52 @@
         "estimated_on": "2026-01-01",
         "confidence": "high"
       },
-      "fcmax_bpm": 170.0,
-      "fcmax_source": "observed_history",
+      "fcmax_bpm": 192.0,
+      "fcmax_source": "user_declared",
+      "observed_max_hr_bpm": 170.0,
+      "observed_max_hr_observation_count": 4,
+      "physiological_sources": [
+        {
+          "data": "fcmax_declared",
+          "source": "runner_profile.physiological_metrics.max_hr",
+          "unit": "bpm",
+          "available": true,
+          "usable_by_v3": true,
+          "kind": "personal_declared",
+          "valid_from": "2026-01-15",
+          "reason": "declared_value_consistency_checks_only"
+        },
+        {
+          "data": "lt1",
+          "source": "physiological_metrics.lt1:lab_test",
+          "unit": "bpm",
+          "available": true,
+          "usable_by_v3": true,
+          "kind": "personal_measured",
+          "valid_from": "2026-01-01",
+          "reason": "personal_reliable_subject_to_session_date_check"
+        },
+        {
+          "data": "lt2",
+          "source": "physiological_metrics.lt2:lab_test",
+          "unit": "bpm",
+          "available": true,
+          "usable_by_v3": true,
+          "kind": "personal_measured",
+          "valid_from": "2026-01-01",
+          "reason": "personal_reliable_subject_to_session_date_check"
+        },
+        {
+          "data": "training_v2_zones",
+          "source": "training_v2.training_paces (Daniels VDOT E/M/T/I/R)",
+          "unit": "min/km",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "pace_based_not_hr",
+          "valid_from": null,
+          "reason": "pace_zones_are_not_heart_rate_thresholds"
+        }
+      ],
       "rejected_thresholds": {},
       "confidence": "medium",
       "limitations": [
@@ -47,11 +91,13 @@
         "session.avg_hr",
         "profile.lt1",
         "profile.lt2",
-        "profile.fcmax"
+        "profile.fcmax",
+        "profile.observed_max_hr"
       ]
     },
     "session_classification": {
       "type": "easy_run_probable",
+      "decision_tier": "personal_thresholds",
       "confidence": "medium",
       "evidence": {
         "avg_hr_bpm": 140.0
@@ -85,7 +131,7 @@
         ],
         "hr_tolerance_bpm": 5.0,
         "reference_pace_min_km": 6.0,
-        "reference_hr_bpm": 141.0,
+        "reference_hr_bpm": 145.0,
         "current_pace_min_km": 6.0,
         "pace_difference_sec_per_km": 0.0
       },
@@ -98,10 +144,10 @@
           "h3"
         ],
         "pace_tolerance_sec_per_km": 15.0,
-        "reference_hr_bpm": 141.0,
+        "reference_hr_bpm": 145.0,
         "reference_pace_min_km": 6.0,
         "current_hr_bpm": 140.0,
-        "hr_difference_bpm": -1.0
+        "hr_difference_bpm": -5.0
       },
       "v2_similar_reference": {
         "available": true,
@@ -130,7 +176,7 @@
     },
     "performance_trend": {
       "status": "stable",
-      "confidence": "medium",
+      "confidence": "low",
       "observation_count": 5,
       "span_days": 70,
       "earlier_median_pace_min_km": 6.0,
@@ -150,17 +196,17 @@
         {
           "hr_tolerance_bpm": 3.0,
           "margin_sec_per_km": 5.0,
-          "status": "stable"
+          "status": "insufficient_data"
         },
         {
           "hr_tolerance_bpm": 3.0,
           "margin_sec_per_km": 10.0,
-          "status": "stable"
+          "status": "insufficient_data"
         },
         {
           "hr_tolerance_bpm": 3.0,
           "margin_sec_per_km": 15.0,
-          "status": "stable"
+          "status": "insufficient_data"
         },
         {
           "hr_tolerance_bpm": 5.0,
@@ -195,7 +241,8 @@
       ],
       "limitations": [
         "variation_is_not_physiological_proof",
-        "terrain_weather_not_controlled"
+        "terrain_weather_not_controlled",
+        "status_sensitive_to_criteria"
       ],
       "source_paths": [
         "historical_comparison.pace_at_comparable_hr",
@@ -203,20 +250,19 @@
       ]
     },
     "prescription_assessment": {
-      "status": "consistent",
-      "prescription_id": "user-a:2026-05-10:sunday",
-      "planned_date": "2026-05-10",
-      "prescribed_workout_type": "easy",
-      "prescribed_intensity_class": "low",
-      "prescribed_distance_km": 8.0,
-      "prescribed_duration_minutes": 48,
-      "observed_classification": "easy_run_probable",
+      "status": "unavailable",
+      "prescription_id": null,
+      "planned_date": null,
+      "prescribed_workout_type": null,
+      "prescribed_intensity_class": null,
+      "prescribed_distance_km": null,
+      "prescribed_duration_minutes": null,
+      "observed_classification": null,
       "reasons": [
-        "observed_type_matches_prescription"
+        "no_historical_prescription"
       ],
       "source_paths": [
-        "training_prescription_snapshots",
-        "session_classification"
+        "training_prescription_snapshots"
       ]
     },
     "coach_assessment": {
@@ -241,25 +287,6 @@
           },
           "source_paths": [
             "historical_comparison.pace_at_comparable_hr"
-          ]
-        },
-        {
-          "code": "evidence.trend",
-          "text": "Tendance sur plusieurs séances à FC comparable : stable (5 séances sur 70 jours).",
-          "evidence": {
-            "median_change_sec_per_km": 0.0,
-            "observation_count": 5.0
-          },
-          "source_paths": [
-            "performance_trend"
-          ]
-        },
-        {
-          "code": "evidence.prescription",
-          "text": "Contrôle de la prescription : conforme (prévu : easy).",
-          "evidence": {},
-          "source_paths": [
-            "prescription_assessment"
           ]
         }
       ],

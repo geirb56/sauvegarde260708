@@ -100,7 +100,8 @@ class WIV3PhysiologicalSource(BaseModel):
     ]
     source: str
     unit: str
-    persisted: bool
+    available: bool
+    """Value actually supplied to V3 (not a claim of Mongo persistence)."""
     usable_by_v3: bool
     kind: SourceKind
     valid_from: Optional[str] = None

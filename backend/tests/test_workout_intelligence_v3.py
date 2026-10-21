@@ -683,7 +683,7 @@ def test_loader_hr_zone_distribution_is_flagged_unverified():
     current = _w("cur", CURRENT_DAY, effort_zone_distribution={"z1": 50, "z2": 50})
     result = _load(_db(current, _flat_history()))
     row = _sources(result)["workout_hr_zone_distribution"]
-    assert row.persisted and not row.usable_by_v3 and row.kind == "unverified"
+    assert row.available and not row.usable_by_v3 and row.kind == "unverified"
     assert result.intensity_assessment.position == "unknown"
 
 
