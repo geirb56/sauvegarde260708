@@ -1,0 +1,82 @@
+{
+  "stage": "after",
+  "kind": "unknown-treadmill",
+  "viewportName": "desktop",
+  "fixture": "synthetic contract-based; not actual Garmin evidence",
+  "head": "ee0109efe6f614136bf7aee98e409b70d73858ef",
+  "apiRequests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-unknown-treadmill",
+    "/api/coach/workout-intelligence/c356-unknown-treadmill",
+    "/api/coach/workout-analysis/c356-unknown-treadmill",
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/workouts/c356-unknown-treadmill",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-unknown-treadmill",
+    "/api/coach/workout-intelligence/c356-unknown-treadmill",
+    "/api/coach/workout-analysis/c356-unknown-treadmill",
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/coach/workout-intelligence/c356-unknown-treadmill",
+    "/api/workouts/c356-unknown-treadmill",
+    "/api/coach/workout-analysis/c356-unknown-treadmill"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "metrics": [
+    {
+      "pathname": "/workout/c356-unknown-treadmill",
+      "viewportWidth": 1440,
+      "documentWidth": 1440,
+      "horizontalOverflow": false,
+      "heading": "Too little evidence to classify this treadmill session",
+      "headings": [
+        "Session summary",
+        "Synthetic · Treadmill",
+        "Too little evidence to classify this treadmill session",
+        "What the data shows"
+      ],
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · Treadmill\n\nSun, Oct 18 · Run\n\nDuration\n30m\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nExplore session details\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+    },
+    {
+      "pathname": "/sessions/c356-unknown-treadmill",
+      "viewportWidth": 1440,
+      "documentWidth": 1440,
+      "horizontalOverflow": false,
+      "heading": "Too little evidence to classify this treadmill session",
+      "headings": [
+        "Synthetic · Treadmill",
+        "Too little evidence to classify this treadmill session",
+        "What the data shows",
+        "Metrics"
+      ],
+      "bodyText": "Back to sessions\n\nRun\n\nSynthetic · Treadmill\n\nOctober 18, 2026 at 08:00 AM\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nExplore session details\nMETRICS\n\nDURATION\n\n30m\n\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+    },
+    {
+      "pathname": "/workout/c356-unknown-treadmill/analysis",
+      "viewportWidth": 1440,
+      "documentWidth": 1440,
+      "horizontalOverflow": false,
+      "heading": "Too little evidence to classify this treadmill session",
+      "headings": [
+        "Synthetic · Treadmill",
+        "Too little evidence to classify this treadmill session",
+        "What the data shows"
+      ],
+      "bodyText": "DETAILED ANALYSIS\nSun, Oct 18\nSynthetic · Treadmill\nDuration\n30m\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nExplore session details\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+    }
+  ]
+}

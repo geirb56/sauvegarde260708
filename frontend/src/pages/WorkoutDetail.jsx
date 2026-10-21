@@ -8,10 +8,13 @@ import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotic
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getSessionSynthesis } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getSessionSynthesis, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
+import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
+import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
+import { formatAnalysisNumber } from "@/lib/analysisFormat";
 import {
   ArrowLeft,
   MessageSquare,
@@ -43,19 +46,13 @@ const formatDuration = (minutes) => {
 
 const formatHeartRate = (value) => Number.isFinite(value) ? `${Math.round(value)} bpm` : "--";
 
-const distanceNumberFormatter = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 2,
-  useGrouping: false,
-});
-
-export const formatDistance = (value) => {
+export const formatDistance = (value, lang = "en") => {
   if (!Number.isFinite(value)) return "--";
-  const rounded = distanceNumberFormatter.format(value);
-  return `${rounded === "-0" ? "0" : rounded} km`;
+  return `${formatAnalysisNumber(value, lang, 2)} km`;
 };
 
-export const formatSignedDistance = (metric) => {
-  const distance = formatDistance(metric?.difference);
+export const formatSignedDistance = (metric, lang = "en") => {
+  const distance = formatDistance(metric?.difference, lang);
   if (distance === "--" || distance === "0 km") return distance;
   return `${metric.difference > 0 ? "+" : ""}${distance}`;
 };
@@ -83,6 +80,8 @@ export default function WorkoutDetail() {
   const { unitSystem } = useUnitSystem();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
+  const { data: intelligence, error: intelligenceError } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
+  const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
   const [workout, setWorkout] = useState(null);
   const [workoutLoading, setWorkoutLoading] = useState(true);
   const [workoutError, setWorkoutError] = useState(null);
@@ -199,6 +198,15 @@ export default function WorkoutDetail() {
   const fallback = synthesis ? null : getAnalysisFallback(analysisForRender, t);
   const classification = getSessionClassification(analysisForRender, t);
   const intensity = analysisForRender?.signals?.intensity;
+  const detailsAvailable = (analysisForRender?.phase_analysis?.available === true
+    && getRenderableAnalysisPhases(analysisForRender.phase_analysis).length > 0)
+    || (Array.isArray(workout.km_splits) && workout.km_splits.some((split) =>
+      Number.isFinite(split?.km) && split.km > 0
+      && Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0));
+  const analysisDetails = <>
+    <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
+    <WorkoutKilometerSplits splits={workout.km_splits} workoutType={workout.type} unitSystem={unitSystem} t={t} lang={lang} />
+  </>;
 
   return (
     <div className="p-4 pb-24 max-w-3xl mx-auto min-w-0 break-words space-y-5" data-testid="workout-detail">
@@ -224,14 +232,14 @@ export default function WorkoutDetail() {
           <dl className="grid grid-cols-2 gap-3" data-testid="primary-metrics">
             {[
               Number.isFinite(workout.distance_km) && workout.distance_km > 0
-                ? ["distance", formatDistance(workout.distance_km)] : null,
+                ? ["distance", formatDistance(workout.distance_km, lang)] : null,
               Number.isFinite(workout.duration_minutes) && workout.duration_minutes > 0
                 ? ["duration", formatDuration(workout.duration_minutes)] : null,
               isCycle
-                ? (averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric" })])
+                ? (averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric", lang })])
                 : (hasWorkoutPace
                   ? ["averagePace", formatPaceDisplay(workout.avg_pace_min_km)]
-                  : averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric" })]),
+                  : averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric", lang })]),
               Number.isFinite(avgHr) && avgHr > 0 ? ["averageHeartRate", formatHeartRate(avgHr)] : null,
             ].filter(Boolean).map(([label, value]) => <div key={label} className="min-w-0">
               <dt className="text-sm text-muted-foreground">{t(`workoutDetailExtended.${label}`)}</dt>
@@ -249,6 +257,10 @@ export default function WorkoutDetail() {
       </Card>
       </section>
 
+      {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
+      {narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+        {analysisDetails}
+      </NarrativeWorkoutAnalysis> : <>
       {hasAvailableSynthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
         <h2 id="session-synthesis-title" className="text-base font-semibold">{t("workoutDetailExtended.sessionSynthesis")}</h2>
         <p className="text-sm leading-relaxed" data-testid="synthesis-primary">{synthesisLabel(synthesisPrimary)}<strong>{synthesisPrimary.text}</strong></p>
@@ -275,13 +287,7 @@ export default function WorkoutDetail() {
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
       </section>}
-      <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
-      <WorkoutKilometerSplits
-        splits={workout.km_splits}
-        workoutType={workout.type}
-        unitSystem={unitSystem}
-        t={t}
-      />
+      {analysisDetails}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
@@ -296,9 +302,10 @@ export default function WorkoutDetail() {
           )}
         </CardContent></Card>
       </section>}
+      </>}
 
       {canAccessAnalysis && <section aria-labelledby="coach-advice-title">
-        {coachObservation && <div className="mb-3">
+        {!narrative && coachObservation && <div className="mb-3">
           <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachObservation")}</h2>
           <p className="text-sm leading-relaxed" data-testid="advice-text">{coachObservation}</p>
         </div>}

@@ -14,10 +14,12 @@ import { useUnitSystem } from "@/context/UnitContext";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
+import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
+import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
+import { getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 
@@ -50,6 +52,8 @@ export default function SessionDetail() {
   const { t, lang } = useLanguage();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
+  const { data: intelligence, error: intelligenceError } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
+  const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
   const { unitSystem } = useUnitSystem();
   const [session, setSession] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -93,19 +97,19 @@ export default function SessionDetail() {
     const cycling = ["cycle", "cycling", "ride"].includes(session.type);
     const metrics = [
       Number.isFinite(session.distance_km) && session.distance_km > 0
-        ? { label: t("sessions.columns.distance"), value: formatDistance(session.distance_km, { unitSystem }) } : null,
+        ? { label: t("sessions.columns.distance"), value: formatDistance(session.distance_km, { unitSystem, lang }) } : null,
       Number.isFinite(session.duration_minutes) && session.duration_minutes > 0
         ? { label: t("sessions.columns.duration"), value: formatDuration(session.duration_minutes) } : null,
       cycling
         ? (Number.isFinite(session.avg_speed_kmh) && session.avg_speed_kmh > 0
-          ? { label: t("workout.avgSpeed"), value: formatSpeed(session.avg_speed_kmh, { unitSystem }) } : null)
+          ? { label: t("workout.avgSpeed"), value: formatSpeed(session.avg_speed_kmh, { unitSystem, lang }) } : null)
         : (Number.isFinite(session.avg_pace_min_km) && session.avg_pace_min_km > 0
           ? { label: t("sessions.columns.pace"), value: formatPace(session.avg_pace_min_km * 60, { unitSystem }) } : null),
       Number.isFinite(session.avg_heart_rate) && session.avg_heart_rate > 0
         ? { label: t("workout.avgHeartRate"), value: `${Math.round(session.avg_heart_rate)} bpm` } : null,
     ].filter(Boolean);
     return metrics;
-  }, [session, t, unitSystem]);
+  }, [session, t, unitSystem, lang]);
 
   if (loading) return <DetailSkeleton />;
 
@@ -127,6 +131,15 @@ export default function SessionDetail() {
   const observation = getDistinctCoachObservation(analysisForRender);
   const observations = getAnalysisObservations(analysisForRender);
   const fallback = getAnalysisFallback(analysisForRender, t);
+  const detailsAvailable = (analysisForRender?.phase_analysis?.available === true
+    && getRenderableAnalysisPhases(analysisForRender.phase_analysis).length > 0)
+    || (Array.isArray(session.km_splits) && session.km_splits.some((split) =>
+      Number.isFinite(split?.km) && split.km > 0
+      && Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0));
+  const analysisDetails = <>
+    <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
+    <WorkoutKilometerSplits splits={session.km_splits} workoutType={session.type} unitSystem={unitSystem} t={t} lang={lang} />
+  </>;
 
   return (
     <div className="min-w-0 break-words p-4 pb-24 space-y-4" data-testid="session-detail-page">
@@ -153,6 +166,11 @@ export default function SessionDetail() {
         </div>
       </div>
 
+      {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
+      {narrative && <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+        {analysisDetails}
+      </NarrativeWorkoutAnalysis>}
+
       <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
         <div className="flex items-center gap-2">
           <Scale className="h-4 w-4 text-muted-foreground" />
@@ -171,20 +189,16 @@ export default function SessionDetail() {
         </div>
       </section>
 
+      {!narrative && <>
       {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
       </section>}
-      <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
-      <WorkoutKilometerSplits
-        splits={session.km_splits}
-        workoutType={session.type}
-        unitSystem={unitSystem}
-        t={t}
-      />
+      {analysisDetails}
+      </>}
 
       {canAccessAnalysis ? <>
-        {analysisForRender && (observations.length > 0 || fallback || classification || observation
+        {!narrative && analysisForRender && (observations.length > 0 || fallback || classification || observation
           || (analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text)) && <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -204,7 +218,7 @@ export default function SessionDetail() {
           <p className="mt-1 text-sm leading-6" data-testid="advice-text">{observation}</p>
         </div>}
         </section>}
-        {analysisForRender && <Link to={`/coach?analyze=${encodeURIComponent(id)}`} data-testid="ask-coach-btn" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-3 text-sm font-mono uppercase tracking-wider text-foreground">
+        {(analysisForRender || narrative) && <Link to={`/coach?analyze=${encodeURIComponent(id)}`} data-testid="ask-coach-btn" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-3 text-sm font-mono uppercase tracking-wider text-foreground">
           <MessageSquare className="h-3.5 w-3.5" />
           {t("workoutDetailExtended.askCoach")}
         </Link>}

@@ -1,0 +1,82 @@
+{
+  "stage": "after",
+  "kind": "probable-easy",
+  "viewportName": "mobile",
+  "fixture": "synthetic contract-based; not actual Garmin evidence",
+  "head": "ee0109efe6f614136bf7aee98e409b70d73858ef",
+  "apiRequests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-probable-easy",
+    "/api/coach/workout-intelligence/c356-probable-easy",
+    "/api/coach/workout-analysis/c356-probable-easy",
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/workouts/c356-probable-easy",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-probable-easy",
+    "/api/coach/workout-intelligence/c356-probable-easy",
+    "/api/coach/workout-analysis/c356-probable-easy",
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/coach/workout-intelligence/c356-probable-easy",
+    "/api/workouts/c356-probable-easy",
+    "/api/coach/workout-analysis/c356-probable-easy"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "metrics": [
+    {
+      "pathname": "/workout/c356-probable-easy",
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": "A probable easy run, not a confirmed physiological zone",
+      "headings": [
+        "Session summary",
+        "Synthetic · Probable easy run",
+        "A probable easy run, not a confirmed physiological zone",
+        "What the data shows"
+      ],
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · Probable easy run\n\nSun, Oct 18 · Run\n\nDistance\n6 km\nDuration\n40m\nAverage pace\n6:40/km\nAverage heart rate\n132 bpm\n\nTHE COACH\n\nA probable easy run, not a confirmed physiological zone\n\nThe recorded kilometres have similar paces, and this synthetic personal-history comparison places the effort toward the lower end.\n\nProbable easy running is a relative interpretation, not proof of being below LT1.\n\nWithout individualized thresholds, physiological intensity remains uncertain.\n\nWhat the data shows\nSession type\nProbably an easy run\nPersonal heart-rate reference (not a zone)\n6 reference sessions\nHistorical comparison\nInsufficient comparable history\nExplore session details\nRecorded kilometer splits · 6\nKm 1\n6:39 /km\nKm 2\n6:40 /km\nKm 3\n6:40 /km\nKm 4\n6:41 /km\nKm 5\n6:41 /km\nKm 6\n6:42 /km\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+    },
+    {
+      "pathname": "/sessions/c356-probable-easy",
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": "A probable easy run, not a confirmed physiological zone",
+      "headings": [
+        "Synthetic · Probable easy run",
+        "A probable easy run, not a confirmed physiological zone",
+        "What the data shows",
+        "Metrics"
+      ],
+      "bodyText": "Back to sessions\n\nRun\n\nSynthetic · Probable easy run\n\nOctober 18, 2026 at 08:00 AM\n\nTHE COACH\n\nA probable easy run, not a confirmed physiological zone\n\nThe recorded kilometres have similar paces, and this synthetic personal-history comparison places the effort toward the lower end.\n\nProbable easy running is a relative interpretation, not proof of being below LT1.\n\nWithout individualized thresholds, physiological intensity remains uncertain.\n\nWhat the data shows\nSession type\nProbably an easy run\nPersonal heart-rate reference (not a zone)\n6 reference sessions\nHistorical comparison\nInsufficient comparable history\nExplore session details\nRecorded kilometer splits · 6\nKm 1\n6:39 /km\nKm 2\n6:40 /km\nKm 3\n6:40 /km\nKm 4\n6:41 /km\nKm 5\n6:41 /km\nKm 6\n6:42 /km\nMETRICS\n\nDISTANCE\n\n6 km\n\nDURATION\n\n40m\n\nAVG PACE\n\n6:40 /km\n\nAVG HEART RATE\n\n132 bpm\n\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+    },
+    {
+      "pathname": "/workout/c356-probable-easy/analysis",
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": "A probable easy run, not a confirmed physiological zone",
+      "headings": [
+        "Synthetic · Probable easy run",
+        "A probable easy run, not a confirmed physiological zone",
+        "What the data shows"
+      ],
+      "bodyText": "DETAILED ANALYSIS\nSun, Oct 18\nSynthetic · Probable easy run\nDistance\n6 km\nDuration\n40m\nAverage pace\n6:40/km\nAverage heart rate\n132 bpm\n\nTHE COACH\n\nA probable easy run, not a confirmed physiological zone\n\nThe recorded kilometres have similar paces, and this synthetic personal-history comparison places the effort toward the lower end.\n\nProbable easy running is a relative interpretation, not proof of being below LT1.\n\nWithout individualized thresholds, physiological intensity remains uncertain.\n\nWhat the data shows\nSession type\nProbably an easy run\nPersonal heart-rate reference (not a zone)\n6 reference sessions\nHistorical comparison\nInsufficient comparable history\nExplore session details\nRecorded kilometer splits · 6\nKm 1\n6:39 /km\nKm 2\n6:40 /km\nKm 3\n6:40 /km\nKm 4\n6:41 /km\nKm 5\n6:41 /km\nKm 6\n6:42 /km\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+    }
+  ]
+}

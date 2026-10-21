@@ -1,5 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { formatPaceDisplay, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
+import { formatAnalysisNumber } from "@/lib/analysisFormat";
 
 const formatDuration = (seconds) => {
   if (!Number.isFinite(seconds) || seconds < 0) return null;
@@ -12,10 +13,7 @@ const formatDuration = (seconds) => {
     : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
-const formatNumber = (value, lang) => new Intl.NumberFormat(
-  { fr: "fr-FR", en: "en-US", es: "es-ES" }[lang] || "en-US",
-  { maximumFractionDigits: 1 },
-).format(value);
+const formatNumber = formatAnalysisNumber;
 
 const sortPhases = (phases) => (Array.isArray(phases) ? phases : [])
   .map((phase, index) => ({ phase, index }))

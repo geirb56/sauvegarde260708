@@ -909,7 +909,11 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
     .map(([url]) => url)
     .filter((url) => url.includes("/coach/") || url.includes("/rag/"));
 
-  expect(analysisCalls).toEqual([expect.stringContaining("/coach/workout-analysis/w1")]);
+  expect(analysisCalls).toHaveLength(2);
+  expect(analysisCalls).toEqual(expect.arrayContaining([
+    expect.stringContaining("/coach/workout-analysis/w1?language=en"),
+    expect.stringContaining("/coach/workout-intelligence/w1?language=en"),
+  ]));
   expect(analysisCalls.some((url) => url.includes("/coach/detailed-analysis/"))).toBe(false);
   expect(analysisCalls.some((url) => url.includes("/rag/workout/"))).toBe(false);
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
@@ -980,7 +984,8 @@ test("structured phases show compact 4×4 efforts with collapsed ordered recover
   expect(section).not.toHaveTextContent("175 bpm");
   expect(section).not.toHaveTextContent("832 m");
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
-  expect(axios.get).toHaveBeenCalledTimes(2);
+  expect(axios.get).toHaveBeenCalledTimes(3);
+  expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/w1?language=en"))).toHaveLength(1);
 });
 
 test("structured phases sort efforts and recoveries by their recorded order", async () => {
@@ -1465,7 +1470,8 @@ test("WorkoutDetail shows one coherent error state for analysis failure", async 
   expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
   expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
   expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
-  expect(axios.get).toHaveBeenCalledTimes(2);
+  expect(axios.get).toHaveBeenCalledTimes(3);
+  expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/w1?language=en"))).toHaveLength(1);
 });
 
 test("WorkoutDetail keeps primary recorded facts visible while canonical analysis is pending", async () => {
@@ -1489,7 +1495,8 @@ test("WorkoutDetail keeps primary recorded facts visible while canonical analysi
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
   resolveAnalysis({ data: analysis });
   await screen.findByTestId("coach-summary");
-  expect(axios.get).toHaveBeenCalledTimes(2);
+  expect(axios.get).toHaveBeenCalledTimes(3);
+  expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/w1?language=en"))).toHaveLength(1);
 });
 
 test.each(["fr", "en", "es"])("visible analysis headings use the same translated hierarchy in %s", async (language) => {
@@ -1575,7 +1582,7 @@ test.each(["fr", "en", "es"])("running with invalid pace reuses recorded speed b
   await screen.findByTestId("coach-summary");
   const metrics = screen.getByTestId("primary-metrics");
   expect(metrics).toHaveTextContent(translations[language].workoutDetailExtended.averageSpeed);
-  expect(metrics).toHaveTextContent("10.0 km/h");
+  expect(metrics).toHaveTextContent(language === "en" ? "10.0 km/h" : "10,0 km/h");
   expect(metrics).not.toHaveTextContent("/km");
 });
 
@@ -1599,7 +1606,7 @@ test.each(["fr", "en", "es"])("cycling uses recorded speed, never average min/km
   await screen.findByTestId("coach-summary");
   const metrics = screen.getByTestId("primary-metrics");
   expect(metrics).toHaveTextContent(translations[language].workoutDetailExtended.averageSpeed);
-  expect(metrics).toHaveTextContent("24.5 km/h");
+  expect(metrics).toHaveTextContent(language === "en" ? "24.5 km/h" : "24,5 km/h");
   expect(metrics).not.toHaveTextContent("/km");
   expect(screen.queryByTestId("primary-metrics")).not.toHaveTextContent("/km");
 });
