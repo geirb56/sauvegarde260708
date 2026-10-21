@@ -171,7 +171,7 @@ export default function DetailedAnalysis() {
       {narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysis} lang={lang} t={t} detailsAvailable={detailsAvailable}>
         {analysisDetails}
       </NarrativeWorkoutAnalysis> : <>
-      {!analysis && <p className="text-muted-foreground" data-testid="analysis-not-found">{t("workout.notFound")}</p>}
+      {!analysis && <p className="text-muted-foreground" data-testid="analysis-not-found">{t("workoutDetailExtended.analysisLoadError")}</p>}
       {coachConclusions.length > 0 && <section className="my-3 space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}

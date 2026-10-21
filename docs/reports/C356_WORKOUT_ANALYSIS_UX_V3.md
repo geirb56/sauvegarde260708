@@ -5,7 +5,9 @@
 - Base : `copilot/dev`, `ee0109efe6f614136bf7aee98e409b70d73858ef` (merge C355).
 - Branche de livraison : `copilot/c356-workout-analysis-ux-v3`.
 - HEAD d'intégration soumis à la revue et à CodeQL : `bb66a394d12e35eb442b7fb119bbdac597865eb4`.
-- HEAD du code validé par les tests définitifs : renseigné après leur exécution.
+- HEAD du code validé par les tests définitifs : `a06fa80dd97df1cba00d100b70e1cde3cad9fbdf`
+  (même arbre frontend que les tests finaux ; les commits de rapport ultérieurs ne
+  modifient pas ce code).
 - Frontend uniquement, hors présent rapport et fixtures/tests de présentation.
 - Aucun changement des moteurs V2/V3, de prescription, des seuils, des abonnements ou des données.
 - Aucun accès MongoDB, appel Garmin/GCCLI, déploiement ou merge.
@@ -99,7 +101,7 @@ Validation de l'intégration, depuis `frontend/` :
 | Commande | Résultat |
 | --- | --- |
 | `CI=true npm test -- --watchAll=false --runInBand --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/workout-analysis-v3-pages.test.jsx` | **765/765 tests**, 2/2 suites |
-| `CI=true npm test -- --watchAll=false --forceExit --runInBand` | **1 392/1 392 tests**, 37/37 suites, 59,437 s |
+| `CI=true npm test -- --watchAll=false --forceExit --runInBand` | **1 392/1 392 tests**, 37/37 suites ; dernier passage sur le code `a06fa80` : 68,794 s |
 | `npm run build` | **Compilation de production réussie** |
 | `git diff --check` | Aucun problème d'espacement |
 
@@ -117,11 +119,14 @@ d'appels et de séparateurs décimaux ; elles ont été adaptées aux seuls chan
 La précision fixe existante des unités a été préservée. Aucun test sans rapport supprimé
 ni aucune assertion métier affaiblie.
 
-- `parallel_validation` sur `bb66a394d12e35eb442b7fb119bbdac597865eb4` :
+- `parallel_validation` sur `bb66a394d12e35eb442b7fb119bbdac597865eb4`, puis à nouveau
+  sur `a06fa80dd97df1cba00d100b70e1cde3cad9fbdf` après les gardes de contexte :
   **CodeQL JavaScript : 0 alerte**. L'outil de revue intégré est **indisponible**
   (`autofind` absent) : son statut « Success » ne prouve pas une revue exécutée.
   Revue indépendante du diff par agent read-only effectuée en complément :
   **aucun problème significatif identifié**.
+- Scans de secrets des sources modifiées, tests, rapport et mesures JSON :
+  **aucun secret détecté**.
 
 ## 7. Validation visuelle
 

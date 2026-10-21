@@ -2801,7 +2801,7 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       mockAxios({ analysisPayload: payload === "api-error" ? null : payload, rejectAnalysis: payload === "api-error" });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
       if (name === "DetailedAnalysis") {
-        expect(await screen.findByTestId("analysis-not-found")).toHaveTextContent(translations.en.workout.notFound);
+        expect(await screen.findByTestId("analysis-not-found")).toHaveTextContent(translations.en.workoutDetailExtended.analysisLoadError);
       } else {
         await screen.findByTestId(testId);
         expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
