@@ -51,8 +51,8 @@ from workout_analysis_v2 import (
     WorkoutAnalysisV2Response,
 )
 from workout_analysis_v2_service import load_scoped_workout_analysis_v2
-from workout_intelligence_v3_models import WorkoutIntelligenceV3Response
-from workout_intelligence_v3_service import load_scoped_workout_intelligence_v3
+from narrative_coach_v3_models import WorkoutIntelligenceV3NarrativeResponse
+from workout_intelligence_v3_service import load_scoped_workout_intelligence_v3_with_narrative
 
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
@@ -2154,9 +2154,9 @@ async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: d
     return analysis
 
 
-@api_router.get("/coach/workout-intelligence/{workout_id}", response_model=WorkoutIntelligenceV3Response)
+@api_router.get("/coach/workout-intelligence/{workout_id}", response_model=WorkoutIntelligenceV3NarrativeResponse)
 async def get_workout_intelligence_v3(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
-    """C352 — additive deterministic Workout Intelligence V3 (read-only)."""
+    """C352 facts with C355 evidence-validated narrative (read-only)."""
     user_id = user["id"]
     _, allowed = await _coach_access(user_id)
     if not allowed:
@@ -2165,7 +2165,7 @@ async def get_workout_intelligence_v3(workout_id: str, language: str = "en", use
             "message": "Subscription required to access this feature",
             "upgrade_url": "/subscription",
         })
-    result = await load_scoped_workout_intelligence_v3(
+    result = await load_scoped_workout_intelligence_v3_with_narrative(
         db=db,
         user_id=user_id,
         workout_id=workout_id,
@@ -2173,10 +2173,13 @@ async def get_workout_intelligence_v3(workout_id: str, language: str = "en", use
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Workout not found")
-    _, intelligence = result
+    _, intelligence, narrative = result
     if intelligence is None:
         raise HTTPException(status_code=422, detail="Workout intelligence unavailable")
-    return WorkoutIntelligenceV3Response(workout_id=workout_id, workout_intelligence_v3=intelligence)
+    return WorkoutIntelligenceV3NarrativeResponse(
+        workout_id=workout_id, workout_intelligence_v3=intelligence,
+        narrative_coach_v3=narrative,
+    )
 
 
 # ========== CARDIO COACH RUNNING SCREEN ==========

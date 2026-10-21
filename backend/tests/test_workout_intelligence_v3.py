@@ -535,6 +535,60 @@ def test_loader_returns_none_for_other_user():
         db=db, user_id="user-b", workout_id="cur", language="en")) is None
 
 
+@pytest.mark.parametrize("fallback_broken", [False, True])
+def test_narrative_failure_never_hides_factual_v3(fallback_broken):
+    from unittest.mock import AsyncMock, patch
+
+    import narrative_coach_v3
+
+    expected = _load(_loader_db()).model_dump()
+    fallback = narrative_coach_v3.deterministic_fallback
+    with patch.object(narrative_coach_v3, "generate_narrative_coach_v3",
+                      AsyncMock(side_effect=RuntimeError("generation unavailable"))), \
+            patch.object(narrative_coach_v3, "deterministic_fallback",
+                         side_effect=RuntimeError("fallback unavailable") if fallback_broken else fallback):
+        _, facts, narrative = asyncio.run(
+            wiv3_service.load_scoped_workout_intelligence_v3_with_narrative(
+                db=_loader_db(), user_id="user-a", workout_id="cur", language="fr",
+            )
+        )
+    assert facts.model_dump(exclude={"coach_assessment"}) == {
+        key: value for key, value in expected.items() if key != "coach_assessment"
+    }
+    assert narrative.language == "fr"
+    assert narrative.generation_mode == ("none" if fallback_broken else "deterministic_fallback")
+
+
+def test_narrative_reuses_scoped_canonical_phase_analysis_without_extra_reads():
+    from unittest.mock import AsyncMock, patch
+
+    import narrative_coach_v3
+    from narrative_coach_v3_models import NarrativeCoachV3
+
+    db = _db(_w("cur", CURRENT_DAY), [], phases=_interval_phases())
+    legacy_db = _db(_w("cur", CURRENT_DAY), [], phases=_interval_phases())
+    _, legacy = asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3(
+        db=legacy_db, user_id="user-a", workout_id="cur", language="en",
+    ))
+    generator = AsyncMock(return_value=NarrativeCoachV3())
+    with patch.object(narrative_coach_v3, "generate_narrative_coach_v3", generator):
+        _, facts, _ = asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3_with_narrative(
+            db=db, user_id="user-a", workout_id="cur", language="en",
+        ))
+    assert facts.model_dump() == legacy.model_dump()
+    assert {name: coll.queries for name, coll in vars(db).items()} == {
+        name: coll.queries for name, coll in vars(legacy_db).items()
+    }
+    generator.assert_awaited_once()
+    phases = generator.call_args.kwargs["phase_analysis"]
+    assert phases.effort_regularity.available
+    assert len(phases.efforts) == 5
+    assert generator.call_args.kwargs["coach_language"] is not None
+    assert asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3_with_narrative(
+        db=db, user_id="user-b", workout_id="cur", language="en",
+    )) is None
+
+
 def test_v3_sources_have_no_writes_garmin_calls_or_rag():
     for module in (wiv3, wiv3_service):
         source = inspect.getsource(module)
@@ -1003,13 +1057,13 @@ def test_v3_api_endpoint_is_additive():
     assert "/api/coach/workout-intelligence/{workout_id}" in paths
     assert "/api/coach/workout-analysis/{workout_id}" in paths
     db = _loader_db()
-    intelligence = asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3(
+    intelligence = asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3_with_narrative(
         db=db, user_id="user-a", workout_id="cur", language="en"))
     with patch.object(server, "_coach_access", AsyncMock(return_value=(None, True))), \
-            patch.object(server, "load_scoped_workout_intelligence_v3", AsyncMock(return_value=intelligence)):
+            patch.object(server, "load_scoped_workout_intelligence_v3_with_narrative", AsyncMock(return_value=intelligence)):
         payload = asyncio.run(server.get_workout_intelligence_v3("cur", "en", {"id": "user-a"}))
     assert isinstance(payload, WorkoutIntelligenceV3Response)
-    assert set(payload.model_dump()) == {"workout_id", "workout_intelligence_v3"}
+    assert set(payload.model_dump()) == {"workout_id", "workout_intelligence_v3", "narrative_coach_v3"}
     assert set(payload.workout_intelligence_v3.model_dump()) >= {
         "intensity_assessment", "session_classification", "historical_comparison",
         "performance_trend", "prescription_assessment", "coach_assessment",
@@ -1019,10 +1073,16 @@ def test_v3_api_endpoint_is_additive():
             asyncio.run(server.get_workout_intelligence_v3("cur", "en", {"id": "user-a"}))
     assert denied.value.status_code == 403
     with patch.object(server, "_coach_access", AsyncMock(return_value=(None, True))), \
-            patch.object(server, "load_scoped_workout_intelligence_v3", AsyncMock(return_value=None)):
+            patch.object(server, "load_scoped_workout_intelligence_v3_with_narrative", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as missing:
             asyncio.run(server.get_workout_intelligence_v3("nope", "en", {"id": "user-a"}))
     assert missing.value.status_code == 404
+    with patch.object(server, "_coach_access", AsyncMock(return_value=(None, True))), \
+            patch.object(server, "load_scoped_workout_intelligence_v3_with_narrative",
+                         AsyncMock(return_value=({}, None, intelligence[2]))):
+        with pytest.raises(HTTPException) as unavailable:
+            asyncio.run(server.get_workout_intelligence_v3("cur", "en", {"id": "user-a"}))
+    assert unavailable.value.status_code == 422
 
 
 # ── C354: historical INTERVAL_REST persisted as "unknown" (19 Sept shape) ────
