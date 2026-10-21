@@ -111,7 +111,28 @@
       ],
       "source_paths": [
         "intensity_assessment"
-      ]
+      ],
+      "relative_effort": {
+        "status": "not_evaluated",
+        "relative_position": null,
+        "current_hr_bpm": null,
+        "current_pace_min_km": null,
+        "reference_count": 0,
+        "workout_ids": [],
+        "period_start": null,
+        "period_end": null,
+        "hr_min_bpm": null,
+        "hr_q1_bpm": null,
+        "hr_median_bpm": null,
+        "hr_q3_bpm": null,
+        "hr_max_bpm": null,
+        "hr_iqr_bpm": null,
+        "pace_q1_min_km": null,
+        "pace_q3_min_km": null,
+        "exclusions": {},
+        "criteria": {},
+        "limitations": []
+      }
     },
     "historical_comparison": {
       "status": "available",

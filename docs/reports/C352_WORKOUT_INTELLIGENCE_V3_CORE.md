@@ -15,7 +15,7 @@ Snapshot report. The current behaviour is defined by the code and its tests, not
 | `backend/workout_intelligence_v3.py` | New. Pure deterministic engine with seven stages: extraction → intensity → classification → history comparison → trend → prescription → coach assessment (FR/EN/ES). |
 | `backend/workout_intelligence_v3_service.py` | New. Read-only loader that reuses the Workout Analysis V2 helpers and `build_workout_analysis_v2` unchanged. |
 | `backend/server.py` | Additive endpoint `GET /api/coach/workout-intelligence/{workout_id}?language=fr|en|es`, using the same auth and subscription gate as `/coach/workout-analysis`. |
-| `backend/tests/test_workout_intelligence_v3.py` | New. 61 tests (43 core + 18 loader-level physiological wiring, see §11). |
+| `backend/tests/test_workout_intelligence_v3.py` | New. 85 tests: 43 core, 18 loader-level physiological wiring (§11) and 24 Level C individual-history tests (§12). |
 | `docs/reports/c352_examples/*.json` | Synthetic example outputs. |
 
 The `WorkoutAnalysisV2Response` contract is **unchanged**. A test pins its exact key set. V3 has its own endpoint, so no existing consumer (WorkoutDetail, Coach Context V2, Ask Coach) sees a different payload.
@@ -66,7 +66,8 @@ The rules are evaluated in this order:
 4. **`easy_run_probable`:** `below_LT1`. Confidence is at most `medium`.
 5. **`steady_run_probable`:** `between_LT1_LT2`. Confidence `low`, limitation `tempo_not_distinguishable_from_average_hr`.
 6. **`tempo_probable`:** `above_LT2` without phases. Confidence `low`, limitation `intervals_not_identifiable_without_phases`.
-7. **`unknown`:** everything else. This is the default when personal thresholds are missing and no phase structure exists.
+7. **Level C, individual history (only when `position = unknown`):** `easy_run_probable` or `steady_run_probable`, always with confidence `low`. See §12.
+8. **`unknown`:** everything else.
 
 A fast average pace or a high average HR **never** produces `intervals`.
 
@@ -149,7 +150,7 @@ RunIndex currently persists **no personal LT1/LT2** and wires **no declared FCma
 The loader therefore resolves `lt_source_status="not_persisted"` (see §11 for the source-by-source evidence). In production, until a measured or estimated personal threshold source exists, every session will be:
 
 - `intensity_assessment.position = "unknown"`;
-- `session_classification` = `intervals` (from phases), `long_run_probable` (low confidence) or `unknown`.
+- `session_classification` = `intervals` (from phases), `long_run_probable` (low confidence), a Level C relative classification (low confidence, §12) or `unknown`.
 
 This is intentional. No threshold was invented, and no %FCmax formula was used, to work around it.
 
@@ -218,12 +219,7 @@ These are full payloads in `docs/reports/c352_examples/`. They were regenerated 
 - `intensity_assessment.position = unknown`
 - Diagnosis: "Interval session identified from 5 Garmin effort phases separated by recoveries."
 
-**Abstention without reliable thresholds (ES)**, from `footing_without_thresholds_es.json`. This is the same session as the FR example, with the runtime default inputs:
-
-- `position = unknown`, `fcmax_bpm = null`, `observed_max_hr_bpm = 170`; limitations `personal_thresholds_not_persisted`, `no_reliable_personal_threshold`
-- `session_classification = unknown`, `decision_tier = insufficient_data`
-- Diagnosis: « Sin diagnóstico fiable del tipo de sesión con los datos disponibles. »
-- Advice: run a field or lab test to establish personal thresholds.
+**Probable footing without LT1/LT2 (FR)** and **indeterminate session (ES)**: see §12.6. The former `footing_without_thresholds_es.json` example is replaced by `indeterminate_session_es.json`.
 
 ## 11. Correction: physiological wiring
 
@@ -310,7 +306,7 @@ These are the `test_loader_*` tests added in `tests/test_workout_intelligence_v3
 
 ### 11.5 Residual limitations
 
-- In production, V3 intensity stays `unknown` and footings stay unclassified unless Garmin phases exist. This is because no personal LT1/LT2 is stored. **No validation on real Garmin activities was performed.**
+- In production, V3 intensity stays `unknown` because no personal LT1/LT2 is stored. Since §12, footings can still be classified *relative to the athlete's history* (Level C, low confidence). **No validation on real Garmin activities was performed.**
 - An observed maximum is only a lower bound. It cannot replace a declared FCmax, and V3 derives no zone from it.
 - An undated declared FCmax (the RunnerProfile contract carries no date) is accepted for consistency checks only, with the limitation `fcmax_declaration_date_unknown`.
 
@@ -319,3 +315,135 @@ These are the `test_loader_*` tests added in `tests/test_workout_intelligence_v3
 1. Persist a dated, user-scoped physiological profile, for example `physiological_profiles` with `{user_id, max_hr, max_hr_declared_on, lt1:{value_bpm, source, estimated_on, confidence}, lt2:{…}}`. This needs a write endpoint and a settings UI, so it is outside this PR.
 2. In `get_workout_intelligence_v3`, read that document (read-only) and pass it as `physiological_metrics`. No engine change is needed: date validity, source and confidence filtering, and audit are already enforced and tested.
 3. Optionally, ingest Garmin's own lactate-threshold HR (user settings) as `source="device_estimate"` with its measurement date. This would need a new GCCLI endpoint, which is out of scope here.
+
+## 12. Correction: individual-history classification without LT1/LT2 (Level C)
+
+- **Reviewed head:** `0907b4a`.
+- **Scope:** PR #352 only. No frontend change, no new physiological engine, no FCmax formula, no LT1/LT2 created, no Garmin/GCCLI call, no Mongo write.
+
+### 12.1 Hierarchy
+
+| Tier (`decision_tier`) | Condition | Possible types |
+|---|---|---|
+| A `garmin_phases` | Reliable V2 phases: efforts separated by recoveries, or a single effort block with warm-up/cool-down | `intervals`, `tempo_probable` (the block rule needs a personal LT1) |
+| B `personal_thresholds` | Reliable LT1/LT2, dated on or before the session (C352 rules, unchanged) | `easy_run_probable`, `steady_run_probable`, `tempo_probable`, `long_run_probable` |
+| C `individual_history` | **Only** when `intensity_assessment.position = unknown` | `long_run_probable` (existing volume rule), `easy_run_probable`, `steady_run_probable`, all with confidence `low` |
+| D `insufficient_data` | Everything else | `unknown`, with explicit `rules` and `limitations` |
+
+A missing phase is **not** treated as a confirmed continuous session. Only a V2 `continuous` structure (`continuous_recorded`) allows the Level C `steady_run_probable`.
+
+### 12.2 Level C method
+
+`relative_effort_reference()` places the session's **average HR** within the distribution of average HRs from the athlete's own admissible earlier sessions. It uses robust statistics only: quartiles with `statistics.quantiles(method="inclusive")`, the interquartile range (IQR), and the minimum and maximum. No absolute HR, no %FCmax and no generic formula is used.
+
+**Reference admissibility** (`_relative_exclusions`, independent from the comparison and trend eligibility, which is unchanged). Each excluded session is counted under its reason in `relative_effort.exclusions`:
+
+| Criterion | Exclusion code |
+|---|---|
+| Strictly prior, within the V2 180-day window | `not_strictly_prior`, `outside_window` |
+| Same sport | `different_sport` |
+| Known and identical environment (`running` ≠ `treadmill_running`) | `environment_unknown`, `different_environment` |
+| Not an identified competition (`_competition_flag` is True) | `competition` |
+| No known interval or structured session | `interval_or_structured_session` |
+| Valid pace | `missing_pace` |
+| Valid HR (≤ 230 bpm, average ≤ max) | `missing_or_aberrant_hr` |
+| Duration between 0.5× and 2× the current duration | `duration_unknown`, `duration_not_comparable` |
+
+**Exact criteria.** These are module constants, exposed in `relative_effort.criteria`. They are operational choices, not physiological constants.
+
+| Constant | Value | Justification |
+|---|---|---|
+| `RELATIVE_MIN_REFERENCES` | 8 references on 8 distinct days | Quartiles of fewer than 8 values are each driven by 1–2 sessions. |
+| `RELATIVE_MIN_IQR_BPM` | 8 bpm | Below this, the central half of the history is too homogeneous to separate effort levels (`no_separation`). This is the guard against "almost every run is fast": a history dominated by sustained runs has a narrow IQR, so V3 abstains. |
+| `RELATIVE_RANGE_MARGIN_BPM` | 5 bpm | Same value as the existing HR match tolerance. A current HR outside [min − 5, max + 5] of the references is not interpreted (`out_of_reference_range`). It could come from walking, pauses, the sensor or terrain. |
+| `RELATIVE_DURATION_RATIO_RANGE` | 0.5–2.0× | Excludes much shorter or longer sessions, where HR drift differs. |
+
+**Decision rules**, with relative position `low` when HR ≤ Q1, `high` when HR ≥ Q3, and `intermediate` otherwise:
+
+| Situation | Result |
+|---|---|
+| `low`, and pace not faster than the references' fast quartile (pace Q1) | `easy_run_probable`, `low` |
+| `low` with a pace in the fastest quartile | `unknown` (`incoherent_hr_pace`, `low_hr_with_fast_pace_not_interpreted`) |
+| `high`, V2 structure `continuous`, and pace not slower than the slow quartile (pace Q3) | `steady_run_probable`, `low` (limitation `tempo_not_distinguishable_from_average_hr`) |
+| `high` with a slow pace | `unknown` (`high_hr_with_slow_pace_not_interpreted`) |
+| `high` without a recorded continuous structure | `unknown`. The session could be intervals without phases. |
+| `intermediate` | `unknown` |
+| Current session is a competition, is structured, has an unusable HR, no pace or an unknown environment | `relative_effort.status = not_applicable`, `unknown` |
+| Long run (existing volume rule) | Kept, except when the relative position is `high` |
+
+The `relative_effort` block always reports:
+
+- the current HR and pace;
+- the reference count and workout IDs;
+- the period (`period_start`, `period_end`);
+- the HR minimum, Q1, median, Q3, maximum and IQR;
+- the pace Q1 and Q3;
+- the exclusions, criteria, status and limitations.
+
+### 12.3 Relative vs physiological intensity
+
+- `intensity_assessment.position` keeps its meaning: physiological position against **personal LT1/LT2**. Without reliable thresholds it stays `unknown`, even when the session is classified at Level C. The combination `position=unknown` + `easy_run_probable / low / individual_history` is intended.
+- A relatively low HR **is not proof** of easy physiological intensity. Every Level C output carries:
+  - `relative_effort_not_physiological_intensity` (classification);
+  - `relative_position_is_not_a_physiological_zone` and `low_hr_may_reflect_walking_pauses_sensor_or_terrain` (`relative_effort`);
+  - the coach limitation `limit.relative_not_physiological`.
+- Coach wording, FR/EN/ES. Diagnoses `diagnosis.easy_run_relative` and `diagnosis.steady_run_relative`, plus evidence `evidence.relative_hr_low` / `evidence.relative_hr_high` (HR, count, quartiles). For example: « Cette séance ressemble à un footing relativement facile par rapport à vos efforts habituels. » / « Votre FC moyenne (139 bpm) se situe dans la partie basse de vos 12 séances de référence personnelles… » / « Sans seuil LT1 fiable, je ne peux pas confirmer une zone d'intensité physiologique… ». No "zone 2", "fundamental endurance", fatigue, recovery or adaptation claims (tested). No new training advice: the only advice remains the pre-existing threshold-measurement advice.
+- `historical_comparison`, `performance_trend` and comparison eligibility are **unchanged**. Classification and trend stay independent (tested: identical dumps with and without thresholds).
+- `prescription_assessment` still sees confidence `low`, so it returns `indeterminate` and never a forced deviation.
+
+### 12.4 Misclassification risks (residual)
+
+- A runner whose "easy" runs are all too hard still gets a *relative* label. This is mitigated by the IQR guard and by the wording, but not eliminated: a varied history of runs that are all hard would still yield a low quartile.
+- Average HR hides within-session variation. Intervals without phases with long recoveries can have a low average. The limitation `intervals_not_identifiable_without_phases` is always present.
+- Heat, terrain, elevation, sensor drop-outs and cardiac drift are not controlled. Heart-rate trends over months (fitness changes) shift the distribution, and the 180-day window bounds but does not remove this.
+- The quartile thresholds and the 8-bpm IQR are operational choices, not physiological constants.
+
+### 12.5 Tests
+
+`python -m pytest tests/test_workout_intelligence_v3.py -n 0` → **85 passed**. All fixtures are synthetic and run through `load_scoped_workout_intelligence_v3` with a read-only fake DB.
+
+| # | Required case | Test |
+|---|---|---|
+| 1 | Probable footing, varied history | `test_level_c_easy_run_with_varied_history_without_thresholds` |
+| 2 | Without splits | `test_level_c_easy_run_without_splits` |
+| 3 | Insufficient history | `test_level_c_insufficient_history_abstains` |
+| 4 | Homogeneous history | `test_level_c_homogeneous_history_abstains` |
+| 5 | Mostly sustained history | `test_level_c_mostly_sustained_history_is_not_an_easy_reference` |
+| 6 | Slow session with high HR | `test_level_c_slow_session_with_high_hr_is_never_easy` |
+| 7 | Fast session with low HR | `test_level_c_fast_session_with_low_hr_is_not_interpreted`, `test_level_c_hr_far_below_reference_range_may_be_an_artifact` |
+| 8 | Intervals from Garmin phases | `test_level_a_phases_keep_priority_over_relative_history` |
+| 9 | Intervals without phases | `test_level_c_high_effort_without_recorded_structure_stays_unknown` |
+| 10 | Competition exclusion | `test_level_c_competitions_are_excluded` |
+| 11 | Treadmill / outdoor | `test_level_c_treadmill_and_outdoor_are_never_mixed` |
+| 12 | Strictly prior | `test_level_c_uses_strictly_prior_history_only` |
+| 13 | Missing / aberrant HR | `test_level_c_missing_or_aberrant_hr_abstains` (3 variants), `test_level_c_aberrant_reference_hr_is_excluded` |
+| 14 | No LT1/LT2 | covered by test 1 (`position=unknown`, `lt1=lt2=None`) |
+| 15 | Reliable LT1/LT2 keep priority | `test_level_b_reliable_thresholds_keep_priority` |
+| 16 | Trend non-regression | `test_level_c_does_not_change_comparison_or_trend`, plus the existing trend tests |
+| 17 | FR / EN / ES | `test_level_c_coach_assessment_is_translated` (3 variants) |
+| — | Intermediate effort / steady | `test_level_c_intermediate_effort_stays_unknown`, `test_level_c_high_effort_with_recorded_continuous_structure_is_steady` |
+
+**Regressions.** Batch run of V3, V2, Coach Context V2, Coach Language, session synthesis, runner_profile, performance_model, training_paces, prescription_snapshot and week_plan: **1081 passed, 5 failed**. The 5 failures are the same tests that already fail on `8d66efc` and `0907b4a`:
+
+- `test_workout_analysis_v2.py::test_comparable_history_stays_separate_and_metrics_are_unchanged[en|fr|es]`
+- `test_pr165_week_plan_v2_authority.py::test_partial_reprise_distance_prescription_is_conserved`
+- `test_training_week_plan_route_removed.py` (needs MongoDB)
+
+No new regression.
+
+### 12.6 Example JSON outputs (synthetic, complete payloads)
+
+- **`c352_examples/footing_relative_history_fr.json`**: probable footing without LT1/LT2.
+  - `position=unknown`; `easy_run_probable`, `low`, `individual_history`.
+  - `relative_effort`: `used`, `low`, 12 references from 2026-01-02 to 2026-03-23, Q1 141.5 / median 151 / Q3 160.5 bpm, current HR 139 bpm.
+  - Comparison: `strong`; trend: `stable`.
+- **`c352_examples/indeterminate_session_es.json`**: indeterminate session.
+  - Same history, HR 151 bpm.
+  - `relative_effort`: `used`, `intermediate`.
+  - Classification `unknown`, `insufficient_data`, rule `relative_effort_intermediate_type_not_identifiable`.
+  - The historical comparison stays descriptive.
+- **`c352_examples/intervals_with_phases_en.json`**: Garmin intervals.
+  - `intervals`, `garmin_phases`, `high`; `relative_effort.status = not_evaluated`.
+- `c352_examples/footing_below_lt1_fr.json` (unchanged scenario, regenerated): Level B with injected reliable thresholds.
+
+These outputs are simulations. **They are not a validation on real Garmin activities.**
