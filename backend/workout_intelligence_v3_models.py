@@ -199,6 +199,38 @@ class WIV3IntensityAssessment(BaseModel):
     source_paths: List[str] = Field(default_factory=list)
 
 
+class WIV3RelativeEffortReference(BaseModel):
+    """Level C evidence: the session's average HR within the athlete's own
+    distribution of comparable earlier sessions.
+
+    A RELATIVE position only: it never establishes a physiological zone and
+    never stands in for LT1/LT2.
+    """
+
+    status: Literal[
+        "not_evaluated", "used", "insufficient_references", "no_separation",
+        "out_of_reference_range", "incoherent_hr_pace", "not_applicable",
+    ] = "not_evaluated"
+    relative_position: Optional[Literal["low", "intermediate", "high"]] = None
+    current_hr_bpm: Optional[float] = None
+    current_pace_min_km: Optional[float] = None
+    reference_count: int = 0
+    workout_ids: List[str] = Field(default_factory=list)
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+    hr_min_bpm: Optional[float] = None
+    hr_q1_bpm: Optional[float] = None
+    hr_median_bpm: Optional[float] = None
+    hr_q3_bpm: Optional[float] = None
+    hr_max_bpm: Optional[float] = None
+    hr_iqr_bpm: Optional[float] = None
+    pace_q1_min_km: Optional[float] = None
+    pace_q3_min_km: Optional[float] = None
+    exclusions: Dict[str, int] = Field(default_factory=dict)
+    criteria: Dict[str, float] = Field(default_factory=dict)
+    limitations: List[str] = Field(default_factory=list)
+
+
 class WIV3SessionClassification(BaseModel):
     type: Literal[
         "easy_run_probable", "steady_run_probable", "tempo_probable",
@@ -213,6 +245,7 @@ class WIV3SessionClassification(BaseModel):
     rules: List[str] = Field(default_factory=list)
     limitations: List[str] = Field(default_factory=list)
     source_paths: List[str] = Field(default_factory=list)
+    relative_effort: WIV3RelativeEffortReference = Field(default_factory=WIV3RelativeEffortReference)
 
 
 class WIV3PaceAtComparableHr(BaseModel):

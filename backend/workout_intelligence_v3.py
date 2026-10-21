@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
-from statistics import mean, median
+from statistics import mean, median, quantiles
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from activity_phases import ActivityPhase
@@ -58,6 +58,7 @@ from workout_intelligence_v3_models import (
     WIV3PhysiologicalSource,
     WIV3PrescriptionAssessment,
     WIV3PrescriptionContext,
+    WIV3RelativeEffortReference,
     WIV3SessionClassification,
     WIV3ThresholdEstimate,
     WIV3ThresholdUsed,
@@ -87,6 +88,12 @@ TREND_SENSITIVITY_MARGINS = (5.0, 10.0, 15.0)
 # Long run: relative to the athlete's own habitual duration.
 LONG_RUN_DURATION_RATIO = 1.5
 LONG_RUN_MIN_HISTORY = 5
+# Level C — relative effort within the athlete's own history (no LT1/LT2).
+# Operational decision rules, not physiological constants (see report §12).
+RELATIVE_MIN_REFERENCES = 8          # distinct earlier sessions, enough for quartiles
+RELATIVE_MIN_IQR_BPM = 8.0           # below: history too homogeneous to separate effort levels
+RELATIVE_RANGE_MARGIN_BPM = 5.0      # current HR outside [min-5, max+5] → outside the reference range
+RELATIVE_DURATION_RATIO_RANGE = (0.5, 2.0)  # reference duration vs current duration
 
 _CONFIDENCE_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3}
 _STRUCTURE_FROM_V2 = {"continuous": "continuous_recorded", "intervals": "intervals", "other": "other"}
@@ -468,6 +475,149 @@ def _habitual_duration(data: WorkoutIntelligenceV3Input) -> Tuple[Optional[float
     return (median(durations) if len(durations) >= LONG_RUN_MIN_HISTORY else None), len(durations)
 
 
+# ── 3b. Level C: relative effort within the athlete's own history ───────────
+
+
+def _relative_exclusions(
+    session: WIV3CurrentSession, item: WIV3HistoricalSession, current_dt: Optional[datetime],
+) -> List[str]:
+    """Admissibility of an earlier session as a relative-effort reference.
+
+    Independent from ``eligible_references`` (comparison/trend eligibility
+    is unchanged).
+    """
+    reasons: List[str] = []
+    item_dt = _safe_date(item.date)
+    if current_dt is None or item_dt is None or item_dt >= current_dt:
+        reasons.append("not_strictly_prior")
+    elif (current_dt - item_dt).days > SIMILAR_HISTORY_WINDOW_DAYS:
+        reasons.append("outside_window")
+    if item.sport != session.sport:
+        reasons.append("different_sport")
+    if item.activity_type is None:
+        reasons.append("environment_unknown")
+    elif item.activity_type != session.activity_type:
+        reasons.append("different_environment")
+    if item.competition is True:
+        reasons.append("competition")
+    if item.structure in {"intervals", "other"}:
+        reasons.append("interval_or_structured_session")
+    if item.avg_pace_min_km is None or not _valid_positive_number(item.avg_pace_min_km):
+        reasons.append("missing_pace")
+    if item.avg_hr is None or not _valid_positive_number(item.avg_hr) or item.avg_hr > HR_CREDIBLE_CEILING_BPM or (
+        item.max_hr is not None and item.avg_hr > item.max_hr
+    ):
+        reasons.append("missing_or_aberrant_hr")
+    low, high = RELATIVE_DURATION_RATIO_RANGE
+    if item.duration_minutes is None or session.duration_minutes is None:
+        reasons.append("duration_unknown")
+    elif not (low * session.duration_minutes <= item.duration_minutes <= high * session.duration_minutes):
+        reasons.append("duration_not_comparable")
+    return reasons
+
+
+def relative_effort_reference(
+    data: WorkoutIntelligenceV3Input, intensity: WIV3IntensityAssessment,
+) -> WIV3RelativeEffortReference:
+    """Place the session average HR in the athlete's own reference distribution.
+
+    Robust statistics (quartiles, IQR), no absolute HR rule, no %FCmax.
+    """
+    session = data.session
+    criteria = {
+        "min_references": float(RELATIVE_MIN_REFERENCES),
+        "min_iqr_bpm": RELATIVE_MIN_IQR_BPM,
+        "range_margin_bpm": RELATIVE_RANGE_MARGIN_BPM,
+        "duration_ratio_min": RELATIVE_DURATION_RATIO_RANGE[0],
+        "duration_ratio_max": RELATIVE_DURATION_RATIO_RANGE[1],
+        "window_days": float(SIMILAR_HISTORY_WINDOW_DAYS),
+    }
+    base_limits = ["relative_position_is_not_a_physiological_zone"]
+    hr, pace = intensity.hr_used_bpm, session.avg_pace_min_km
+    common = dict(current_hr_bpm=hr, current_pace_min_km=pace, criteria=criteria)
+    blockers = []
+    if hr is None:
+        blockers.append("current_hr_unusable")
+    if pace is None:
+        blockers.append("current_pace_missing")
+    if session.activity_type is None:
+        blockers.append("current_environment_unknown")
+    if session.competition is True:
+        blockers.append("current_session_is_competition")
+    if session.structure in {"intervals", "other"}:
+        blockers.append("current_session_structured")
+    if blockers:
+        return WIV3RelativeEffortReference(status="not_applicable", limitations=base_limits + blockers, **common)
+
+    current_dt = _safe_date(session.date)
+    refs: List[WIV3HistoricalSession] = []
+    exclusions: Dict[str, int] = {}
+    seen_days = set()
+    for item in sorted(data.history, key=lambda h: h.date):
+        reasons = _relative_exclusions(session, item, current_dt)
+        for reason in reasons:
+            exclusions[reason] = exclusions.get(reason, 0) + 1
+        if not reasons:
+            refs.append(item)
+            seen_days.add(item.date[:10])
+    exclusions = dict(sorted(exclusions.items()))
+    common["exclusions"] = exclusions
+    if len(refs) < RELATIVE_MIN_REFERENCES or len(seen_days) < RELATIVE_MIN_REFERENCES:
+        return WIV3RelativeEffortReference(
+            status="insufficient_references", reference_count=len(refs),
+            workout_ids=[r.id for r in refs],
+            limitations=base_limits + ["too_few_admissible_references"], **common,
+        )
+    hrs = sorted(float(r.avg_hr) for r in refs)
+    paces = sorted(float(r.avg_pace_min_km) for r in refs)
+    q1, med, q3 = quantiles(hrs, n=4, method="inclusive")
+    pq1, _, pq3 = quantiles(paces, n=4, method="inclusive")
+    stats = dict(
+        reference_count=len(refs), workout_ids=[r.id for r in refs],
+        period_start=refs[0].date[:10], period_end=refs[-1].date[:10],
+        hr_min_bpm=round(hrs[0], 1), hr_q1_bpm=round(q1, 1), hr_median_bpm=round(med, 1),
+        hr_q3_bpm=round(q3, 1), hr_max_bpm=round(hrs[-1], 1), hr_iqr_bpm=round(q3 - q1, 1),
+        pace_q1_min_km=round(pq1, 3), pace_q3_min_km=round(pq3, 3),
+    )
+    limits = base_limits + ["low_hr_may_reflect_walking_pauses_sensor_or_terrain"]
+    if q3 - q1 < RELATIVE_MIN_IQR_BPM:
+        return WIV3RelativeEffortReference(
+            status="no_separation", limitations=limits + ["history_too_homogeneous_to_separate_effort_levels"],
+            **stats, **common,
+        )
+    if hr < hrs[0] - RELATIVE_RANGE_MARGIN_BPM or hr > hrs[-1] + RELATIVE_RANGE_MARGIN_BPM:
+        return WIV3RelativeEffortReference(
+            status="out_of_reference_range", limitations=limits + ["current_hr_outside_reference_range"],
+            **stats, **common,
+        )
+    position = "low" if hr <= q1 else "high" if hr >= q3 else "intermediate"
+    # HR/pace coherence: a low HR at a fast pace (or the reverse) is not
+    # interpreted (sensor, terrain, pauses, heat… are not controlled).
+    if position == "low" and pace < pq1:
+        return WIV3RelativeEffortReference(
+            status="incoherent_hr_pace", relative_position=position,
+            limitations=limits + ["low_hr_with_fast_pace_not_interpreted"], **stats, **common,
+        )
+    if position == "high" and pace > pq3:
+        return WIV3RelativeEffortReference(
+            status="incoherent_hr_pace", relative_position=position,
+            limitations=limits + ["high_hr_with_slow_pace_not_interpreted"], **stats, **common,
+        )
+    return WIV3RelativeEffortReference(
+        status="used", relative_position=position, limitations=limits, **stats, **common,
+    )
+
+
+def _relative_evidence(rel: WIV3RelativeEffortReference) -> Dict[str, float]:
+    return {
+        "avg_hr_bpm": rel.current_hr_bpm,
+        "reference_hr_q1_bpm": rel.hr_q1_bpm,
+        "reference_hr_median_bpm": rel.hr_median_bpm,
+        "reference_hr_q3_bpm": rel.hr_q3_bpm,
+        "reference_count": float(rel.reference_count),
+    }
+
+
 def classify_session(
     data: WorkoutIntelligenceV3Input, intensity: WIV3IntensityAssessment,
 ) -> WIV3SessionClassification:
@@ -510,10 +660,15 @@ def classify_session(
         and session.duration_minutes >= LONG_RUN_DURATION_RATIO * habitual
     )
     position = intensity.position
+    relative = (
+        relative_effort_reference(data, intensity) if position == "unknown"
+        else WIV3RelativeEffortReference()
+    )
     evidence: Dict[str, float] = {}
     if intensity.hr_used_bpm is not None and position != "unknown":
         evidence["avg_hr_bpm"] = intensity.hr_used_bpm
-    if is_long and position in {"below_LT1", "unknown"}:
+    relatively_high = relative.status == "used" and relative.relative_position == "high"
+    if is_long and (position == "below_LT1" or (position == "unknown" and not relatively_high)):
         evidence.update({
             "duration_minutes": float(session.duration_minutes),
             "habitual_duration_minutes": round(habitual, 1),
@@ -527,7 +682,7 @@ def classify_session(
             confidence="medium" if position == "below_LT1" else "low",
             evidence=evidence, rules=["duration_at_least_1_5x_habitual_median", "not_above_lt1_when_known"],
             decision_tier="personal_thresholds" if position == "below_LT1" else "individual_history",
-            limitations=limitations,
+            limitations=limitations, relative_effort=relative,
             source_paths=["session.duration_minutes", "history.duration_minutes", "intensity_assessment.position"],
         )
     if habitual is None:
@@ -552,11 +707,40 @@ def classify_session(
             limitations=limitations + ["intervals_not_identifiable_without_phases"],
             source_paths=["intensity_assessment"],
         )
+    # Level C — relative effort in the athlete's own history (thresholds absent).
+    rel_paths = ["session_classification.relative_effort", "history.avg_hr", "intensity_assessment.hr_used_bpm"]
+    rel_limits = limitations + ["relative_effort_not_physiological_intensity", "intervals_not_identifiable_without_phases"]
+    if relative.status == "used" and relative.relative_position == "low":
+        return WIV3SessionClassification(
+            type="easy_run_probable", confidence="low", decision_tier="individual_history",
+            evidence=_relative_evidence(relative),
+            rules=["average_hr_in_lower_quartile_of_personal_reference_distribution", "pace_not_in_fastest_quartile"],
+            limitations=rel_limits, relative_effort=relative, source_paths=rel_paths,
+        )
+    if (
+        relative.status == "used" and relative.relative_position == "high"
+        and session.structure == "continuous_recorded"
+    ):
+        return WIV3SessionClassification(
+            type="steady_run_probable", confidence="low", decision_tier="individual_history",
+            evidence=_relative_evidence(relative),
+            rules=["average_hr_in_upper_quartile_of_personal_reference_distribution", "continuous_structure_recorded"],
+            limitations=rel_limits + ["tempo_not_distinguishable_from_average_hr"],
+            relative_effort=relative, source_paths=rel_paths + ["signals.session_structure"],
+        )
+    abstain = ["abstention_no_reliable_intensity_or_structure"]
+    if relative.status == "used" and relative.relative_position == "intermediate":
+        abstain.append("relative_effort_intermediate_type_not_identifiable")
+    elif relative.status == "used":
+        abstain.append("relative_effort_high_without_confirmed_continuous_structure")
+    elif relative.status not in {"not_evaluated"}:
+        abstain.append(f"relative_effort_{relative.status}")
     return WIV3SessionClassification(
         type="unknown", confidence="none", evidence={},
-        rules=["abstention_no_reliable_intensity_or_structure"], decision_tier="insufficient_data",
+        rules=abstain, decision_tier="insufficient_data",
         limitations=limitations + ["intervals_not_identifiable_without_phases"],
-        source_paths=["intensity_assessment", "signals.session_structure"],
+        relative_effort=relative,
+        source_paths=["intensity_assessment", "signals.session_structure", "session_classification.relative_effort"],
     )
 
 
@@ -850,6 +1034,11 @@ _TEXT = {
         "diagnosis.easy_run_probable": "Probably an easy endurance run: average heart rate stayed below your personal LT1.",
         "diagnosis.steady_run_probable": "Probably a steady run: average heart rate sits between your personal LT1 and LT2.",
         "diagnosis.long_run_probable": "Probably a long run: {ratio}x your usual session duration.",
+        "diagnosis.easy_run_relative": "This session looks like a relatively easy run compared with your usual efforts.",
+        "diagnosis.steady_run_relative": "This continuous session looks relatively sustained compared with your usual efforts.",
+        "evidence.relative_hr_low": "Your average heart rate ({hr} bpm) sits in the lower part of your {count} personal reference sessions (lower quartile {q1} bpm, median {med} bpm).",
+        "evidence.relative_hr_high": "Your average heart rate ({hr} bpm) sits in the upper part of your {count} personal reference sessions (median {med} bpm, upper quartile {q3} bpm).",
+        "limit.relative_not_physiological": "Without a reliable LT1 threshold, I cannot confirm a physiological intensity zone: this position is relative to your own history only.",
         "diagnosis.unknown": "No reliable session-type diagnosis from the available data.",
         "evidence.intensity": "Average heart rate ({hr} bpm) is {position} for your personal thresholds.",
         "evidence.pace_at_hr": "At comparable heart rate (±{tol} bpm), pace differs by {delta} s/km from {count} comparable sessions.",
@@ -874,6 +1063,11 @@ _TEXT = {
         "diagnosis.easy_run_probable": "Probablement un footing d'endurance : la FC moyenne est restée sous votre LT1 personnel.",
         "diagnosis.steady_run_probable": "Probablement une sortie à allure soutenue modérée : la FC moyenne se situe entre votre LT1 et votre LT2 personnels.",
         "diagnosis.long_run_probable": "Probablement une sortie longue : {ratio} fois la durée habituelle de vos séances.",
+        "diagnosis.easy_run_relative": "Cette séance ressemble à un footing relativement facile par rapport à vos efforts habituels.",
+        "diagnosis.steady_run_relative": "Cette séance continue ressemble à un effort relativement soutenu par rapport à vos efforts habituels.",
+        "evidence.relative_hr_low": "Votre FC moyenne ({hr} bpm) se situe dans la partie basse de vos {count} séances de référence personnelles (quartile inférieur {q1} bpm, médiane {med} bpm).",
+        "evidence.relative_hr_high": "Votre FC moyenne ({hr} bpm) se situe dans la partie haute de vos {count} séances de référence personnelles (médiane {med} bpm, quartile supérieur {q3} bpm).",
+        "limit.relative_not_physiological": "Sans seuil LT1 fiable, je ne peux pas confirmer une zone d'intensité physiologique : cette position est relative à votre seul historique.",
         "diagnosis.unknown": "Pas de diagnostic fiable du type de séance avec les données disponibles.",
         "evidence.intensity": "La FC moyenne ({hr} bpm) se situe {position} selon vos seuils personnels.",
         "evidence.pace_at_hr": "À FC comparable (±{tol} bpm), l'allure diffère de {delta} s/km par rapport à {count} séances comparables.",
@@ -898,6 +1092,11 @@ _TEXT = {
         "diagnosis.easy_run_probable": "Probablemente un rodaje suave de resistencia: la FC media se mantuvo por debajo de tu LT1 personal.",
         "diagnosis.steady_run_probable": "Probablemente un rodaje sostenido moderado: la FC media está entre tu LT1 y tu LT2 personales.",
         "diagnosis.long_run_probable": "Probablemente una tirada larga: {ratio} veces la duración habitual de tus sesiones.",
+        "diagnosis.easy_run_relative": "Esta sesión parece un rodaje relativamente suave en comparación con tus esfuerzos habituales.",
+        "diagnosis.steady_run_relative": "Esta sesión continua parece un esfuerzo relativamente sostenido en comparación con tus esfuerzos habituales.",
+        "evidence.relative_hr_low": "Tu FC media ({hr} lpm) se sitúa en la parte baja de tus {count} sesiones de referencia personales (cuartil inferior {q1} lpm, mediana {med} lpm).",
+        "evidence.relative_hr_high": "Tu FC media ({hr} lpm) se sitúa en la parte alta de tus {count} sesiones de referencia personales (mediana {med} lpm, cuartil superior {q3} lpm).",
+        "limit.relative_not_physiological": "Sin un umbral LT1 fiable, no puedo confirmar una zona de intensidad fisiológica: esta posición es relativa solo a tu propio historial.",
         "diagnosis.unknown": "Sin diagnóstico fiable del tipo de sesión con los datos disponibles.",
         "evidence.intensity": "La FC media ({hr} lpm) está {position} según tus umbrales personales.",
         "evidence.pace_at_hr": "A FC comparable (±{tol} lpm), el ritmo difiere {delta} s/km respecto a {count} sesiones comparables.",
@@ -943,6 +1142,10 @@ def build_coach_assessment(
     lang = _lang(language)
     text = _TEXT[lang]
     kind = classification.type
+    relative_kind = (
+        {"easy_run_probable": "easy_run_relative", "steady_run_probable": "steady_run_relative"}.get(kind)
+        if classification.decision_tier == "individual_history" else None
+    )
     if kind == "intervals":
         diagnosis = _item(lang, "diagnosis.intervals", dict(classification.evidence),
                           ["session_classification"], efforts=int(classification.evidence["effort_count"]))
@@ -950,10 +1153,21 @@ def build_coach_assessment(
         ratio = classification.evidence["duration_ratio"]
         diagnosis = _item(lang, "diagnosis.long_run_probable", {"duration_ratio": ratio},
                           ["session_classification"], ratio=_localized(f"{ratio:g}", lang))
+    elif relative_kind:
+        diagnosis = _item(lang, f"diagnosis.{relative_kind}", dict(classification.evidence), ["session_classification"])
     else:
         diagnosis = _item(lang, f"diagnosis.{kind}", dict(classification.evidence), ["session_classification"])
 
     evidence: List[WIV3CoachItem] = []
+    if relative_kind:
+        rel = classification.relative_effort
+        evidence.append(_item(
+            lang, "evidence.relative_hr_low" if kind == "easy_run_probable" else "evidence.relative_hr_high",
+            _relative_evidence(rel), ["session_classification.relative_effort"],
+            hr=_localized(f"{rel.current_hr_bpm:g}", lang), count=rel.reference_count,
+            q1=_localized(f"{rel.hr_q1_bpm:g}", lang), med=_localized(f"{rel.hr_median_bpm:g}", lang),
+            q3=_localized(f"{rel.hr_q3_bpm:g}", lang),
+        ))
     # Intensity-based diagnoses already state the position; only volume-based ones need it.
     if intensity.position != "unknown" and kind == "long_run_probable":
         evidence.append(_item(lang, "evidence.intensity", {"avg_hr_bpm": intensity.hr_used_bpm},
@@ -991,6 +1205,8 @@ def build_coach_assessment(
         limitations.append(_item(lang, "limit.hr_unusable", {}, ["intensity_assessment.limitations"]))
     elif intensity.lt1 is None and intensity.lt2 is None:
         limitations.append(_item(lang, "limit.no_thresholds", {}, ["intensity_assessment.limitations"]))
+    if relative_kind:
+        limitations.append(_item(lang, "limit.relative_not_physiological", {}, ["session_classification.relative_effort"]))
     if intensity.position != "unknown":
         limitations.append(_item(lang, "limit.average_hr", {}, ["intensity_assessment.limitations"]))
     if comparison.status != "not_applicable" and comparison.comparability in {"insufficient", "low"}:

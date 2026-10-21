@@ -519,9 +519,10 @@ def test_v3_sources_have_no_writes_garmin_calls_or_rag():
 # tests are SYNTHETIC: they prove the wiring rules, not real Garmin data.
 
 
-def _db(current, history, *, phases=None, current_type=OUTDOOR):
+def _db(current, history, *, phases=None, current_type=OUTDOOR, history_types=None):
     workouts = [dict(item, data_source="garmin", external_id=item["id"]) for item in history + [current]]
-    activities = [_activity(item["id"], f"{item['date']}T07:00:00") for item in history]
+    activities = [_activity(item["id"], f"{item['date']}T07:00:00", (history_types or {}).get(item["id"], OUTDOOR))
+                  for item in history]
     current_activity = _activity(current["id"], f"{current['date']}T07:00:00", current_type)
     if phases is not None:
         current_activity["activity_details"] = {
@@ -693,6 +694,225 @@ def test_loader_comparison_and_trend_unchanged_by_physiological_wiring():
     wired = _load(db, physiological_metrics=_metrics(lt1=150, lt2=170))
     assert base.performance_trend.status == wired.performance_trend.status == "probable_improvement"
     assert (base.historical_comparison.model_dump() == wired.historical_comparison.model_dump())
+
+
+# ── Level C: classification relative to the athlete's own history ──────────
+# SYNTHETIC histories exercising the Level C decision rules through the
+# read-only loader; not a validation on real Garmin activities.
+
+_VARIED = [  # (hr, pace) — easy, moderate and sustained continuous runs
+    (136, 6.4), (138, 6.3), (140, 6.3), (142, 6.2), (148, 5.8), (150, 5.8),
+    (152, 5.7), (154, 5.6), (160, 5.2), (162, 5.1), (164, 5.1), (166, 5.0),
+]
+
+
+def _history_from(rows, *, prefix="r", start_month=1, **kwargs):
+    out = []
+    for index, (hr, pace) in enumerate(rows):
+        month, day = start_month + index // 4, 2 + (index % 4) * 7
+        out.append(_w(f"{prefix}{index}", f"2026-{month:02d}-{day:02d}", hr=hr, pace=pace, **kwargs))
+    return out
+
+
+def _rel(result):
+    return result.session_classification.relative_effort
+
+
+# 1 / 14 ─ Probable footing, varied history, no LT1/LT2
+def test_level_c_easy_run_with_varied_history_without_thresholds():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED)))
+    cls, rel = result.session_classification, _rel(result)
+    assert result.intensity_assessment.position == "unknown"
+    assert result.intensity_assessment.lt1 is None and result.intensity_assessment.lt2 is None
+    assert (cls.type, cls.confidence, cls.decision_tier) == ("easy_run_probable", "low", "individual_history")
+    assert rel.status == "used" and rel.relative_position == "low"
+    assert rel.reference_count == 12 and rel.period_start == "2026-01-02" and rel.period_end == "2026-03-23"
+    assert rel.hr_q1_bpm == 141.5 and rel.hr_median_bpm == 151.0 and rel.hr_q3_bpm == 160.5
+    assert rel.criteria["min_references"] == 8 and rel.criteria["min_iqr_bpm"] == 8
+    assert cls.evidence["avg_hr_bpm"] == 139 and cls.evidence["reference_count"] == 12
+    assert "relative_effort_not_physiological_intensity" in cls.limitations
+    assert "low_hr_may_reflect_walking_pauses_sensor_or_terrain" in rel.limitations
+    coach = result.coach_assessment
+    assert coach.diagnosis.code == "diagnosis.easy_run_relative"
+    assert coach.evidence[0].code == "evidence.relative_hr_low"
+    assert "limit.relative_not_physiological" in {item.code for item in coach.limitations}
+    assert "LT1" not in coach.diagnosis.text and "zone 2" not in coach.diagnosis.text.lower()
+    assert result.prescription_assessment.status != "deviation"
+
+
+# 2 ─ No splits
+def test_level_c_easy_run_without_splits():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3, km_splits=[], split_analysis={}),
+                       _history_from(_VARIED)))
+    assert "session.splits" not in result.data_used
+    assert result.session_classification.type == "easy_run_probable"
+    assert "no_splits_whole_session_averages_only" in result.session_classification.limitations
+
+
+# 3 ─ Insufficient history
+def test_level_c_insufficient_history_abstains():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED[:7])))
+    assert result.session_classification.type == "unknown"
+    assert _rel(result).status == "insufficient_references" and _rel(result).reference_count == 7
+    assert "relative_effort_insufficient_references" in result.session_classification.rules
+
+
+# 4 ─ Homogeneous history: no reliable separation
+def test_level_c_homogeneous_history_abstains():
+    rows = [(150 + (i % 3) - 1, 5.8) for i in range(12)]
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=146, pace=6.0), _history_from(rows)))
+    assert result.session_classification.type == "unknown"
+    assert _rel(result).status == "no_separation" and _rel(result).hr_iqr_bpm < 8
+    assert "history_too_homogeneous_to_separate_effort_levels" in _rel(result).limitations
+
+
+# 5 ─ History made mostly of sustained runs
+def test_level_c_mostly_sustained_history_is_not_an_easy_reference():
+    rows = [(140, 6.3), (141, 6.3)] + [(163 + i // 2, 5.1) for i in range(10)]
+    for hr in (141, 150):
+        result = _load(_db(_w("cur", CURRENT_DAY, hr=hr, pace=6.2), _history_from(rows)))
+        assert result.session_classification.type == "unknown"
+        assert _rel(result).status == "no_separation"
+
+
+# 6 ─ Slow session with high HR
+def test_level_c_slow_session_with_high_hr_is_never_easy():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=163, pace=6.5), _history_from(_VARIED)))
+    assert result.session_classification.type == "unknown"
+    assert _rel(result).status == "incoherent_hr_pace"
+    assert "high_hr_with_slow_pace_not_interpreted" in _rel(result).limitations
+
+
+# 7 ─ Fast session with low HR
+def test_level_c_fast_session_with_low_hr_is_not_interpreted():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=4.9), _history_from(_VARIED)))
+    assert result.session_classification.type == "unknown"
+    assert _rel(result).status == "incoherent_hr_pace"
+    assert "low_hr_with_fast_pace_not_interpreted" in _rel(result).limitations
+
+
+def test_level_c_hr_far_below_reference_range_may_be_an_artifact():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=120, pace=6.4), _history_from(_VARIED)))
+    assert result.session_classification.type == "unknown"
+    assert _rel(result).status == "out_of_reference_range"
+
+
+def test_level_c_intermediate_effort_stays_unknown():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=151, pace=5.7), _history_from(_VARIED)))
+    assert result.session_classification.type == "unknown"
+    assert "relative_effort_intermediate_type_not_identifiable" in result.session_classification.rules
+
+
+def test_level_c_high_effort_with_recorded_continuous_structure_is_steady():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=163, pace=5.1), _history_from(_VARIED)))
+    cls = result.session_classification
+    assert (cls.type, cls.confidence, cls.decision_tier) == ("steady_run_probable", "low", "individual_history")
+    assert result.coach_assessment.diagnosis.code == "diagnosis.steady_run_relative"
+    assert result.intensity_assessment.position == "unknown"
+
+
+# 8 ─ Intervals recognized from Garmin phases (Level A keeps priority)
+def test_level_a_phases_keep_priority_over_relative_history():
+    current = _w("cur", CURRENT_DAY, hr=139, pace=6.3, duration=45, continuous=False)
+    result = _load(_db(current, _history_from(_VARIED), phases=_interval_phases()))
+    assert result.session_classification.type == "intervals"
+    assert result.session_classification.decision_tier == "garmin_phases"
+    assert _rel(result).status == "not_evaluated"
+
+
+# 9 ─ Intervals without phases: no invented certainty
+def test_level_c_high_effort_without_recorded_structure_stays_unknown():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=164, pace=5.0, continuous=False), _history_from(_VARIED)))
+    cls = result.session_classification
+    assert cls.type == "unknown" and cls.type != "intervals"
+    assert "relative_effort_high_without_confirmed_continuous_structure" in cls.rules
+
+
+# 10 ─ Competitions are excluded from references, and a race is never classified
+def test_level_c_competitions_are_excluded():
+    races = _history_from([(135, 6.5)] * 3, prefix="race", start_month=4, is_race=True)
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED) + races))
+    rel = _rel(result)
+    assert rel.exclusions["competition"] == 3
+    assert not {f"race{i}" for i in range(3)} & set(rel.workout_ids)
+    assert result.session_classification.type == "easy_run_probable"
+    race_day = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3, is_race=True), _history_from(_VARIED)))
+    assert race_day.session_classification.type == "unknown"
+    assert "current_session_is_competition" in _rel(race_day).limitations
+
+
+# 11 ─ Treadmill / outdoor are never mixed
+def test_level_c_treadmill_and_outdoor_are_never_mixed():
+    history = _history_from(_VARIED)
+    treadmill = {item["id"]: TREADMILL for item in history[:6]}
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), history, history_types=treadmill))
+    assert _rel(result).exclusions["different_environment"] == 6
+    assert _rel(result).status == "insufficient_references"
+    on_treadmill = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), history, current_type=TREADMILL))
+    assert _rel(on_treadmill).exclusions["different_environment"] == 12
+    assert on_treadmill.session_classification.type == "unknown"
+
+
+# 12 ─ Strictly prior history only
+def test_level_c_uses_strictly_prior_history_only():
+    future = [_w(f"f{i}", f"2026-05-{12 + i:02d}", hr=130 + i, pace=6.6) for i in range(8)]
+    same_day = _w("same", f"{CURRENT_DAY}", hr=130, pace=6.6)
+    base = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED)))
+    leaked = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED) + future + [same_day]))
+    assert _rel(leaked).workout_ids == _rel(base).workout_ids
+    assert _rel(leaked).model_dump(exclude={"exclusions"}) == _rel(base).model_dump(exclude={"exclusions"})
+
+
+# 13 ─ Missing or aberrant HR
+@pytest.mark.parametrize("hr,max_hr", [(None, None), (250, None), (180, 170)])
+def test_level_c_missing_or_aberrant_hr_abstains(hr, max_hr):
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=hr, max_hr=max_hr, pace=6.3), _history_from(_VARIED)))
+    assert result.session_classification.type == "unknown"
+    assert _rel(result).status == "not_applicable"
+    assert "current_hr_unusable" in _rel(result).limitations
+
+
+def test_level_c_aberrant_reference_hr_is_excluded():
+    history = _history_from(_VARIED) + [_w("bad", "2026-04-20", hr=180, max_hr=170, pace=6.3)]
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), history))
+    assert _rel(result).exclusions["missing_or_aberrant_hr"] == 1 and "bad" not in _rel(result).workout_ids
+
+
+# 15 ─ Reliable LT1/LT2 keep priority (Level B)
+def test_level_b_reliable_thresholds_keep_priority():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED)),
+                   physiological_metrics=_metrics())
+    cls = result.session_classification
+    assert (cls.type, cls.decision_tier, cls.confidence) == ("easy_run_probable", "personal_thresholds", "medium")
+    assert _rel(result).status == "not_evaluated"
+    assert result.coach_assessment.diagnosis.code == "diagnosis.easy_run_probable"
+
+
+# 16 ─ Comparison and trend are independent from the new classification
+def test_level_c_does_not_change_comparison_or_trend():
+    db = _db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED))
+    relative = _load(db)
+    thresholds = _load(db, physiological_metrics=_metrics())
+    assert relative.session_classification.decision_tier == "individual_history"
+    assert relative.historical_comparison.model_dump() == thresholds.historical_comparison.model_dump()
+    assert relative.performance_trend.model_dump() == thresholds.performance_trend.model_dump()
+    improving = _load(_loader_db())
+    assert improving.performance_trend.status == "probable_improvement"
+
+
+# 17 ─ FR / EN / ES
+@pytest.mark.parametrize("language,phrase", [
+    ("fr", "relativement facile"), ("en", "relatively easy"), ("es", "relativamente suave"),
+])
+def test_level_c_coach_assessment_is_translated(language, phrase):
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=139, pace=6.3), _history_from(_VARIED)), language=language)
+    coach = result.coach_assessment
+    assert coach.language == language and phrase in coach.diagnosis.text
+    texts = [coach.diagnosis.text, *(item.text for item in coach.evidence), *(item.text for item in coach.limitations)]
+    assert all("{" not in text for text in texts)
+    joined = " ".join(texts).lower()
+    for forbidden in ("zone 2", "fatigue", "récupération", "recovery", "progress", "endurance fondamentale"):
+        assert forbidden not in joined
 
 
 # ── Non-regression: Workout Analysis V2 and Training V2 ─────────────────────
