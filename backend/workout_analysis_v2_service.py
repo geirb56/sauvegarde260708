@@ -4,7 +4,11 @@ import logging
 import math
 from typing import Any, Optional
 
-from activity_phases import ACTIVITY_PHASE_SCHEMA_VERSION, ActivityPhase
+from activity_phases import (
+    ACTIVITY_PHASE_SCHEMA_VERSION,
+    ActivityPhase,
+    garmin_native_phase_type,
+)
 from garmin_laps_analysis import adapt_garmin_laps
 from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
@@ -250,6 +254,9 @@ def _cached_activity_phases(activity_doc: dict[str, Any]) -> Optional[list[Activ
                     return None
             if raw.get("native_type") is not None and not isinstance(raw.get("native_type"), str):
                 return None
+            canonical = garmin_native_phase_type(raw.get("native_type"))
+            if canonical is not None and canonical != raw["phase_type"]:
+                raw = {**raw, "phase_type": canonical}
             phases.append(ActivityPhase.model_validate(raw))
     except (OverflowError, TypeError, ValueError):
         return None

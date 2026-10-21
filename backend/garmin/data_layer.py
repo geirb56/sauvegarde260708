@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
 import math
-from activity_phases import ActivityPhase
+from activity_phases import ActivityPhase, garmin_native_phase_type
 
 
 # --------------------------------------------------------------------------- #
@@ -196,12 +196,6 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
     splits = raw["splits"]
     if len(splits) > 1000:
         raise ValueError("Unsupported typed-splits payload")
-    phase_types = {
-        "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery",
-        "INTERVAL_REST": "recovery",
-        "INTERVAL_WARMUP": "warmup", "INTERVAL_COOLDOWN": "cooldown",
-    }
-
     def measurement(value):
         number = _num(value)
         try:
@@ -258,7 +252,7 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
         phases.append(ActivityPhase(
             order=order,
             native_type=native_type,
-            phase_type=phase_types.get(native_type, "unknown"),
+            phase_type=garmin_native_phase_type(native_type) or "unknown",
             duration_s=measurement(split.get("duration")),
             distance_m=measurement(split.get("distance")),
             average_speed_mps=measurement(split.get("averageSpeed")),
