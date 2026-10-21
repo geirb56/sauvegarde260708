@@ -1,0 +1,248 @@
+{
+  "_note": "SYNTHETIC fixture run through load_scoped_workout_intelligence_v3 (read-only fake DB). Not a validation on real Garmin activities. Runtime default inputs (no physiological data).",
+  "workout_id": "cur",
+  "workout_intelligence_v3": {
+    "version": "v3",
+    "workout_id": "cur",
+    "analyzed_date": "2026-05-10",
+    "data_used": [
+      "session.avg_pace_min_km",
+      "session.avg_hr",
+      "session.max_hr",
+      "session.duration_minutes",
+      "session.activity_type",
+      "session.recorded_structure",
+      "profile.observed_max_hr",
+      "history",
+      "workout_analysis_v2.comparison.similar"
+    ],
+    "intensity_assessment": {
+      "position": "unknown",
+      "hr_used_bpm": 160.0,
+      "hr_metric": "session_average_hr",
+      "session_max_hr_bpm": 170.0,
+      "lt1": null,
+      "lt2": null,
+      "fcmax_bpm": null,
+      "fcmax_source": "unavailable",
+      "observed_max_hr_bpm": 170.0,
+      "observed_max_hr_observation_count": 12,
+      "physiological_sources": [
+        {
+          "data": "fcmax_declared",
+          "source": "runner_profile.max_hr (physiological_metrics / user_profile)",
+          "unit": "bpm",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "unavailable",
+          "valid_from": null,
+          "reason": "no_declared_fcmax_supplied_runtime_passes_none"
+        },
+        {
+          "data": "lt1",
+          "source": "none: no RunIndex module persists or computes LT1/LT2",
+          "unit": "bpm",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "unavailable",
+          "valid_from": null,
+          "reason": "personal_threshold_not_persisted"
+        },
+        {
+          "data": "lt2",
+          "source": "none: no RunIndex module persists or computes LT1/LT2",
+          "unit": "bpm",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "unavailable",
+          "valid_from": null,
+          "reason": "personal_threshold_not_persisted"
+        },
+        {
+          "data": "training_v2_zones",
+          "source": "training_v2.training_paces (Daniels VDOT E/M/T/I/R)",
+          "unit": "min/km",
+          "available": false,
+          "usable_by_v3": false,
+          "kind": "pace_based_not_hr",
+          "valid_from": null,
+          "reason": "pace_zones_are_not_heart_rate_thresholds"
+        }
+      ],
+      "rejected_thresholds": {},
+      "confidence": "none",
+      "limitations": [
+        "personal_thresholds_not_persisted",
+        "average_hr_is_not_time_in_zone",
+        "no_reliable_personal_threshold"
+      ],
+      "source_paths": [
+        "session.avg_hr",
+        "profile.lt1",
+        "profile.lt2",
+        "profile.fcmax",
+        "profile.observed_max_hr"
+      ]
+    },
+    "session_classification": {
+      "type": "intervals",
+      "decision_tier": "garmin_phases",
+      "confidence": "high",
+      "evidence": {
+        "effort_count": 5.0,
+        "recovery_count": 5.0
+      },
+      "rules": [
+        "garmin_phases_recovery_between_efforts"
+      ],
+      "limitations": [],
+      "source_paths": [
+        "phase_analysis.efforts",
+        "phase_analysis.recoveries",
+        "signals.session_structure"
+      ],
+      "relative_effort": {
+        "status": "not_evaluated",
+        "relative_position": null,
+        "current_hr_bpm": null,
+        "current_pace_min_km": null,
+        "reference_count": 0,
+        "workout_ids": [],
+        "period_start": null,
+        "period_end": null,
+        "hr_min_bpm": null,
+        "hr_q1_bpm": null,
+        "hr_median_bpm": null,
+        "hr_q3_bpm": null,
+        "hr_max_bpm": null,
+        "hr_iqr_bpm": null,
+        "pace_q1_min_km": null,
+        "pace_q3_min_km": null,
+        "exclusions": {},
+        "criteria": {},
+        "limitations": []
+      }
+    },
+    "historical_comparison": {
+      "status": "not_applicable",
+      "comparability": "insufficient",
+      "candidate_count": 12,
+      "reference_count": 0,
+      "window_days": 180,
+      "period_start": null,
+      "period_end": null,
+      "pace_at_comparable_hr": {
+        "reference_count": 0,
+        "workout_ids": [],
+        "hr_tolerance_bpm": 5.0,
+        "reference_pace_min_km": null,
+        "reference_hr_bpm": null,
+        "current_pace_min_km": 5.2,
+        "pace_difference_sec_per_km": null
+      },
+      "hr_at_comparable_pace": {
+        "reference_count": 0,
+        "workout_ids": [],
+        "pace_tolerance_sec_per_km": 15.0,
+        "reference_hr_bpm": null,
+        "reference_pace_min_km": null,
+        "current_hr_bpm": 160.0,
+        "hr_difference_bpm": null
+      },
+      "v2_similar_reference": {
+        "available": true,
+        "sample_count": 5,
+        "workout_ids": [
+          "r11",
+          "r10",
+          "r9",
+          "r8",
+          "r7"
+        ],
+        "pace_comparability": "distance_only",
+        "hr_comparability": "distance_only",
+        "limitations": [
+          "session_nature_unknown"
+        ],
+        "source_path": "comparison.similar"
+      },
+      "exclusion_reasons": {},
+      "limitations": [
+        "structured_session_average_not_comparable"
+      ],
+      "source_paths": [
+        "history",
+        "comparison.similar"
+      ]
+    },
+    "performance_trend": {
+      "status": "insufficient_data",
+      "confidence": "none",
+      "observation_count": 0,
+      "span_days": null,
+      "earlier_median_pace_min_km": null,
+      "later_median_pace_min_km": null,
+      "median_change_sec_per_km": null,
+      "variation_confirmed": false,
+      "observed_variation_sec_per_km": null,
+      "criteria": {
+        "hr_tolerance_bpm": 5.0,
+        "min_observations": 4.0,
+        "min_per_half": 2.0,
+        "min_span_days": 21.0,
+        "pace_margin_sec_per_km": 10.0,
+        "duration_tolerance_pct": 30.0
+      },
+      "sensitivity": [],
+      "limitations": [
+        "structured_session_average_not_comparable"
+      ],
+      "source_paths": [
+        "historical_comparison.pace_at_comparable_hr",
+        "history"
+      ]
+    },
+    "prescription_assessment": {
+      "status": "unavailable",
+      "prescription_id": null,
+      "planned_date": null,
+      "prescribed_workout_type": null,
+      "prescribed_intensity_class": null,
+      "prescribed_distance_km": null,
+      "prescribed_duration_minutes": null,
+      "observed_classification": null,
+      "reasons": [
+        "no_historical_prescription"
+      ],
+      "source_paths": [
+        "training_prescription_snapshots"
+      ]
+    },
+    "coach_assessment": {
+      "language": "en",
+      "diagnosis": {
+        "code": "diagnosis.intervals",
+        "text": "Interval session identified from 5 Garmin effort phases separated by recoveries.",
+        "evidence": {
+          "effort_count": 5.0,
+          "recovery_count": 5.0
+        },
+        "source_paths": [
+          "session_classification"
+        ]
+      },
+      "evidence": [],
+      "limitations": [
+        {
+          "code": "limit.no_thresholds",
+          "text": "Personal LT1/LT2 thresholds are not available: intensity cannot be placed in a personal zone.",
+          "evidence": {},
+          "source_paths": [
+            "intensity_assessment.limitations"
+          ]
+        }
+      ],
+      "advice": null
+    }
+  }
+}
