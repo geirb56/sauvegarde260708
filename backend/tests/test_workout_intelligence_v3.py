@@ -303,6 +303,14 @@ def test_prescription_consistent_deviation_and_ambiguous():
     assert low_conf.prescription_assessment.status == "indeterminate"  # tempo_probable low confidence
 
 
+def test_deviation_advice_only_for_easy_prescriptions():
+    quality = WIV3PrescriptionContext(local_date=CURRENT_DAY, snapshots=[
+        _snapshot(CURRENT_DAY, served=CURRENT_DAY, workout_type="quality", intensity="high")])
+    result = _analyze(_w("cur", CURRENT_DAY, hr=140), [], prescription=quality)
+    assert result.prescription_assessment.status == "deviation"
+    assert result.coach_assessment.advice is None
+
+
 # 12 ─ Session without splits
 def test_session_without_splits_is_fully_analyzed():
     current = _w("cur", CURRENT_DAY, hr=140)

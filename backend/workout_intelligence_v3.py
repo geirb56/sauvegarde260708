@@ -546,7 +546,7 @@ def compare_history(
         level = "low"
     else:
         level = "strong" if structures_known else "moderate"
-    dates = sorted(_safe_date(ref.date) for ref in used.values())
+    dates = sorted(day for day in (_safe_date(ref.date) for ref in used.values()) if day is not None)
     return WIV3HistoricalComparison(
         status="available" if count else "insufficient",
         comparability=level,
@@ -790,10 +790,13 @@ _TEXT = {
 }
 
 
-def _fmt(value: float, language: str = "en") -> str:
-    text = f"{value:+.1f}" if value != 0 else "0"
-    text = text.rstrip("0").rstrip(".") if "." in text else text
+def _localized(text: str, language: str) -> str:
     return text.replace(".", ",") if language in {"fr", "es"} else text
+
+
+def _fmt(value: float, language: str = "en") -> str:
+    text = f"{value:+.1f}".removesuffix(".0") if value != 0 else "0"
+    return _localized(text, language)
 
 
 def _item(language: str, code: str, evidence: Dict[str, float], paths: List[str], **params) -> WIV3CoachItem:
@@ -817,7 +820,7 @@ def build_coach_assessment(
     elif kind == "long_run_probable":
         ratio = classification.evidence["duration_ratio"]
         diagnosis = _item(lang, "diagnosis.long_run_probable", {"duration_ratio": ratio},
-                          ["session_classification"], ratio=f"{ratio:g}".replace(".", "," if lang != "en" else "."))
+                          ["session_classification"], ratio=_localized(f"{ratio:g}", lang))
     else:
         diagnosis = _item(lang, f"diagnosis.{kind}", dict(classification.evidence), ["session_classification"])
 
@@ -869,7 +872,7 @@ def build_coach_assessment(
         limitations.append(_item(lang, "limit.structure_unknown", {}, ["historical_comparison.limitations"]))
 
     advice = None
-    if prescription.status == "deviation":
+    if prescription.status == "deviation" and prescription.prescribed_workout_type in {"easy", "recovery", "long_easy"}:
         advice = _item(lang, "advice.deviation", {}, ["prescription_assessment"])
     elif intensity.lt1 is None and intensity.lt2 is None and not hr_unusable and kind != "intervals":
         advice = _item(lang, "advice.thresholds", {}, ["intensity_assessment.rejected_thresholds", "profile"])

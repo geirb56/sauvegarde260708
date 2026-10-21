@@ -15,7 +15,7 @@ Snapshot report. The current behaviour is defined by the code and its tests, not
 | `backend/workout_intelligence_v3.py` | New. Pure deterministic engine with seven stages: extraction → intensity → classification → history comparison → trend → prescription → coach assessment (FR/EN/ES). |
 | `backend/workout_intelligence_v3_service.py` | New. Read-only loader that reuses the Workout Analysis V2 helpers and `build_workout_analysis_v2` unchanged. |
 | `backend/server.py` | Additive endpoint `GET /api/coach/workout-intelligence/{workout_id}?language=fr|en|es`, using the same auth and subscription gate as `/coach/workout-analysis`. |
-| `backend/tests/test_workout_intelligence_v3.py` | New. 42 tests. |
+| `backend/tests/test_workout_intelligence_v3.py` | New. 43 tests. |
 | `docs/reports/c352_examples/*.json` | Synthetic example outputs. |
 
 The `WorkoutAnalysisV2Response` contract is **unchanged**. A test pins its exact key set. V3 has its own endpoint, so no existing consumer (WorkoutDetail, Coach Context V2, Ask Coach) sees a different payload.
@@ -154,7 +154,7 @@ This is intentional. No threshold was invented, and no %FCmax formula was used, 
 
 ## 8. Test results
 
-`cd backend && python -m pytest tests/test_workout_intelligence_v3.py` → **42 passed**.
+`cd backend && python -m pytest tests/test_workout_intelligence_v3.py` → **43 passed**.
 
 The 15 required scenarios map to tests as follows:
 
@@ -187,7 +187,7 @@ Additional tests:
 
 - Workout Analysis V2, Coach Language, C351 synthesis, Coach Context V2 and Training V2 snapshot/week: 1144 passed, 3 failed.
 - The 3 failures, `test_workout_analysis_v2.py::test_comparable_history_stays_separate_and_metrics_are_unchanged[en|fr|es]`, **also fail on the base commit** and are unrelated to this PR.
-- Full backend suite, run serially (`-n 0 --continue-on-collection-errors`): the failure and error set is **identical** before and after this PR (environment failures: no MongoDB, missing optional packages). Passed tests rose from 4772 to 4814.
+- Full backend suite, run serially (`-n 0 --continue-on-collection-errors`): the failure and error set is **identical** before and after this PR (environment failures: no MongoDB, missing optional packages). Passed tests rose from 4772 to 4814 (measured with 42 tests; one more test added after review).
 - Under the default `-n 2` the totals vary between runs on the base commit itself (order-dependent tests), so the serial run is the reference comparison.
 
 ## 9. Known limitations
@@ -196,7 +196,7 @@ Additional tests:
 - **Average HR only:** there is no time-in-zone distribution. Positions are average positions.
 - **Not controlled:** terrain, elevation, weather, heat and cardiac drift (limitation `terrain_weather_not_controlled`).
 - **Same-day ambiguity check:** it uses the stored `workouts.date` prefix, which can be UTC. This is conservative: it can only increase `indeterminate`.
-- **Prescription check:** it compares session *type* only. Prescribed distance and duration are reported, not judged.
+- **Prescription check:** it compares session *type* only. Deviation advice ("keep easy days easy") is only emitted for `easy`, `recovery` or `long_easy` prescriptions. Prescribed distance and duration are reported, not judged.
 - **Trend:** it uses pace at comparable HR. HR at comparable pace is reported as supporting evidence and does not drive the status.
 - **Validation:** all results come from synthetic fixtures. **No real Garmin validation has been performed.**
 
