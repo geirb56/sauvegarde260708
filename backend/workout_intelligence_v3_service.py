@@ -4,6 +4,17 @@ Reads only: ``workouts``, ``garmin_activities`` (cached phases / precise type /
 local start time) and ``training_prescription_snapshots``. No write, no Garmin
 or GCCLI call, no clock. Workout Analysis V2 is reused unchanged as the
 source of session structure, phases and the existing similar comparison.
+
+Physiological wiring (C352 correction): the profile is resolved by
+``resolve_physiological_profile`` from the same declared inputs as
+``training_v2.runner_profile.build_runner_profile`` (``physiological_metrics``
+/ ``user_profile``). The Training V2 runtime supplies neither a declared
+FCmax nor physiological metrics (``week_plan_bridge`` passes
+``physiological_metrics=None`` and only training preferences as
+``user_profile``; ``performance_model`` runs with ``user_max_hr=None``), and
+no RunIndex collection persists FCmax, LT1 or LT2. The endpoint therefore
+passes nothing and V3 abstains; the observed Garmin maximum is computed from
+strictly-prior activities and reported as a lower bound only.
 """
 
 from __future__ import annotations
@@ -27,9 +38,12 @@ from workout_analysis_v2_service import (
     _reliable_activity_type,
     enrich_workout_from_garmin_activity,
 )
-from workout_intelligence_v3 import build_workout_intelligence_v3, extract_workout_intelligence_input
+from workout_intelligence_v3 import (
+    build_workout_intelligence_v3,
+    extract_workout_intelligence_input,
+    resolve_physiological_profile,
+)
 from workout_intelligence_v3_models import (
-    WIV3PhysiologicalProfile,
     WIV3PrescriptionContext,
     WorkoutIntelligenceV3,
 )
@@ -60,6 +74,8 @@ async def _historical_snapshots(db: Any, user_id: str, local_date: Optional[str]
 
 async def load_scoped_workout_intelligence_v3(
     *, db: Any, user_id: str, workout_id: str, language: str,
+    physiological_metrics: Optional[dict] = None,
+    user_profile: Optional[dict] = None,
 ) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3]]]:
     workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if workout is None:
@@ -123,8 +139,9 @@ async def load_scoped_workout_intelligence_v3(
             v2_analysis=v2_analysis,
             activity_types=activity_types,
             historical_phases=historical_phases,
-            # No personal LT1/LT2 is persisted in RunIndex today (documented blocker).
-            profile=WIV3PhysiologicalProfile(lt_source_status="not_persisted"),
+            profile=resolve_physiological_profile(
+                physiological_metrics=physiological_metrics, user_profile=user_profile,
+            ),
             prescription=prescription,
         )
         intelligence = build_workout_intelligence_v3(data, language)

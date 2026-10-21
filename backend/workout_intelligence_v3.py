@@ -27,6 +27,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from activity_phases import ActivityPhase
 from training_v2.prescription_snapshot import PrescriptionSnapshot, is_snapshot_authoritative
 from training_v2.performance_model import _resolve_fcmax_robust
+from training_v2.runner_profile import _first_valid_number, _parse_hr
 from workout_analysis_v2 import (
     SIMILAR_DISTANCE_TOLERANCE_PCT,
     SIMILAR_HISTORY_WINDOW_DAYS,
@@ -50,9 +51,11 @@ from workout_intelligence_v3_models import (
     WIV3HistoricalSession,
     WIV3HrAtComparablePace,
     WIV3IntensityAssessment,
+    WIV3ObservedMaxHr,
     WIV3PaceAtComparableHr,
     WIV3PerformanceTrend,
     WIV3PhysiologicalProfile,
+    WIV3PhysiologicalSource,
     WIV3PrescriptionAssessment,
     WIV3PrescriptionContext,
     WIV3SessionClassification,
@@ -139,8 +142,11 @@ def _structure_of(workout: dict, phases: Optional[List[ActivityPhase]]) -> Struc
     return _STRUCTURE_FROM_V2.get(signal.code, "unknown") if signal.available else "unknown"  # type: ignore[return-value]
 
 
-def observed_fcmax(history: Iterable[WIV3HistoricalSession]) -> WIV3FcMax:
-    """Observed FCmax from strictly-prior sessions with the Training V2 rule."""
+def observed_max_hr(history: Iterable[WIV3HistoricalSession]) -> WIV3ObservedMaxHr:
+    """Observed maximum from strictly-prior sessions with the Training V2 rule.
+
+    This is a lower bound of the physiological FCmax, never a certain FCmax.
+    """
     observed = [
         session.max_hr for session in history
         if session.max_hr is not None
@@ -148,8 +154,103 @@ def observed_fcmax(history: Iterable[WIV3HistoricalSession]) -> WIV3FcMax:
     ]
     value = _resolve_fcmax_robust(observed)
     if value is None:
-        return WIV3FcMax()
-    return WIV3FcMax(value_bpm=value, source="observed_history", observation_count=len(observed))
+        return WIV3ObservedMaxHr()
+    return WIV3ObservedMaxHr(
+        value_bpm=value, source="garmin_activities_strictly_prior", observation_count=len(observed),
+    )
+
+
+_KIND_BY_THRESHOLD_SOURCE = {
+    "lab_test": "personal_measured",
+    "field_test": "personal_measured",
+    "device_estimate": "personal_device_estimate",
+    "user_declared": "personal_declared",
+    "generic_formula": "generic",
+    "unknown": "unverified",
+}
+
+
+def _threshold_from(raw) -> Optional[WIV3ThresholdEstimate]:
+    if isinstance(raw, WIV3ThresholdEstimate):
+        return raw
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return WIV3ThresholdEstimate(**raw)
+    except Exception:
+        return WIV3ThresholdEstimate(source="unknown", confidence="unknown")
+
+
+def resolve_physiological_profile(
+    *,
+    physiological_metrics: Optional[dict] = None,
+    user_profile: Optional[dict] = None,
+) -> WIV3PhysiologicalProfile:
+    """Map the canonical RunnerProfile declared inputs to the V3 profile.
+
+    FCmax follows ``training_v2.runner_profile.build_runner_profile``
+    priority (``physiological_metrics`` then ``user_profile``; keys
+    ``max_hr`` / ``max_heart_rate``). No age formula, no derivation.
+    LT1/LT2 are read only from the V3 threshold contract
+    (``physiological_metrics["lt1"|"lt2"]`` with source/date/confidence):
+    no existing RunIndex module produces them.
+    """
+    sources: List[WIV3PhysiologicalSource] = []
+    fcmax = WIV3FcMax()
+    for container_name, container in (("physiological_metrics", physiological_metrics), ("user_profile", user_profile)):
+        value = _first_valid_number(container, _parse_hr, "max_hr", "max_heart_rate")
+        if value is None:
+            continue
+        key = "max_hr" if _parse_hr((container or {}).get("max_hr")) is not None else "max_heart_rate"
+        declared_on = (container or {}).get("max_hr_declared_on")
+        fcmax = WIV3FcMax(
+            value_bpm=float(value), source="user_declared",
+            declared_on=str(declared_on) if declared_on else None,
+            provenance=f"runner_profile.{container_name}.{key}",
+        )
+        break
+    sources.append(WIV3PhysiologicalSource(
+        data="fcmax_declared",
+        source=fcmax.provenance or "runner_profile.max_hr (physiological_metrics / user_profile)",
+        unit="bpm", persisted=fcmax.value_bpm is not None,
+        usable_by_v3=fcmax.value_bpm is not None,
+        kind="personal_declared" if fcmax.value_bpm is not None else "unavailable",
+        valid_from=fcmax.declared_on,
+        reason=("declared_value_consistency_checks_only" if fcmax.value_bpm is not None
+                else "no_declared_fcmax_supplied_runtime_passes_none"),
+    ))
+    thresholds = {}
+    for name in ("lt1", "lt2"):
+        estimate = _threshold_from((physiological_metrics or {}).get(name))
+        thresholds[name] = estimate
+        if estimate is None or estimate.value_bpm is None:
+            sources.append(WIV3PhysiologicalSource(
+                data=name, source="none: no RunIndex module persists or computes LT1/LT2",
+                unit="bpm", persisted=False, usable_by_v3=False, kind="unavailable",
+                reason="personal_threshold_not_persisted",
+            ))
+            continue
+        personal = estimate.source in PERSONAL_THRESHOLD_SOURCES
+        reliable = personal and estimate.confidence in RELIABLE_THRESHOLD_CONFIDENCE
+        sources.append(WIV3PhysiologicalSource(
+            data=name, source=f"physiological_metrics.{name}:{estimate.source}",
+            unit="bpm", persisted=True, usable_by_v3=reliable,
+            kind=_KIND_BY_THRESHOLD_SOURCE.get(estimate.source, "unverified"),  # type: ignore[arg-type]
+            valid_from=estimate.estimated_on,
+            reason=("personal_reliable_subject_to_session_date_check" if reliable
+                    else "not_personal_measurement" if not personal else "confidence_insufficient"),
+        ))
+    sources.append(WIV3PhysiologicalSource(
+        data="training_v2_zones", source="training_v2.training_paces (Daniels VDOT E/M/T/I/R)",
+        unit="min/km", persisted=False, usable_by_v3=False, kind="pace_based_not_hr",
+        reason="pace_zones_are_not_heart_rate_thresholds",
+    ))
+    provided = any(item is not None and item.value_bpm is not None for item in thresholds.values())
+    return WIV3PhysiologicalProfile(
+        fcmax=fcmax, lt1=thresholds["lt1"], lt2=thresholds["lt2"],
+        lt_source_status="provided" if provided else "not_persisted",
+        sources=sources,
+    )
 
 
 def extract_workout_intelligence_input(
@@ -213,8 +314,18 @@ def extract_workout_intelligence_input(
             structure=_structure_of(item, (historical_phases or {}).get(item_id)),
         ))
     profile = profile or WIV3PhysiologicalProfile()
-    if profile.fcmax.source == "unavailable":
-        profile = profile.model_copy(update={"fcmax": observed_fcmax(history)})
+    updates: dict = {}
+    if profile.observed_max_hr is None:
+        updates["observed_max_hr"] = observed_max_hr(history)
+    if isinstance(workout.get("effort_zone_distribution"), dict) and workout.get("effort_zone_distribution"):
+        # Same rule as Workout Analysis V2 (_has_trusted_zone_provenance → False).
+        updates["sources"] = list(profile.sources) + [WIV3PhysiologicalSource(
+            data="workout_hr_zone_distribution", source="workouts.effort_zone_distribution",
+            unit="percent_of_duration", persisted=True, usable_by_v3=False, kind="unverified",
+            reason="zone_bounds_provenance_unverified_not_personal_thresholds",
+        )]
+    if updates:
+        profile = profile.model_copy(update=updates)
     similar = v2_analysis.comparison.similar
     v2_reference = WIV3V2Reference(
         available=bool(similar and similar.available),
@@ -287,10 +398,23 @@ def assess_intensity(data: WorkoutIntelligenceV3Input) -> WIV3IntensityAssessmen
     if lt1 and lt2 and lt1.value_bpm >= lt2.value_bpm:
         rejected["lt1"] = rejected["lt2"] = "inconsistent_lt1_not_below_lt2"
         lt1 = lt2 = None
-    fcmax = profile.fcmax.value_bpm
-    # An observed historical max is only a lower bound of the true FCmax:
-    # consistency checks use a declared FCmax only.
-    declared_fcmax = fcmax if profile.fcmax.source == "user_declared" else None
+    # Only a declared FCmax (never an observed maximum, which is a lower
+    # bound) is used, and only for consistency checks.
+    declared_fcmax = profile.fcmax.value_bpm if profile.fcmax.source == "user_declared" else None
+    if declared_fcmax is not None and not (FCMAX_OBSERVED_FLOOR_BPM <= declared_fcmax <= HR_CREDIBLE_CEILING_BPM):
+        rejected["fcmax"] = "declared_value_out_of_credible_range"
+        declared_fcmax = None
+    declared_on = _safe_date(profile.fcmax.declared_on or "")
+    if declared_fcmax is not None and profile.fcmax.declared_on:
+        if declared_on is None:
+            rejected["fcmax"] = "declaration_date_invalid"
+            declared_fcmax = None
+        elif session_day is None or declared_on.date() > session_day:
+            rejected["fcmax"] = "declared_after_session"
+            declared_fcmax = None
+    elif declared_fcmax is not None:
+        limitations.append("fcmax_declaration_date_unknown")
+    observed = profile.observed_max_hr or WIV3ObservedMaxHr()
     if declared_fcmax is not None and lt2 is not None and lt2.value_bpm >= declared_fcmax:
         rejected["lt2"] = "inconsistent_lt2_not_below_fcmax"
         lt2 = None
@@ -321,11 +445,15 @@ def assess_intensity(data: WorkoutIntelligenceV3Input) -> WIV3IntensityAssessmen
         hr_used_bpm=_round(hr, 1),
         session_max_hr_bpm=session.max_hr,
         lt1=lt1, lt2=lt2,
-        fcmax_bpm=fcmax, fcmax_source=profile.fcmax.source,
+        fcmax_bpm=declared_fcmax,
+        fcmax_source="user_declared" if declared_fcmax is not None else "unavailable",
+        observed_max_hr_bpm=observed.value_bpm,
+        observed_max_hr_observation_count=observed.observation_count,
+        physiological_sources=list(profile.sources),
         rejected_thresholds=rejected,
         confidence=confidence,
         limitations=limitations,
-        source_paths=["session.avg_hr", "profile.lt1", "profile.lt2", "profile.fcmax"],
+        source_paths=["session.avg_hr", "profile.lt1", "profile.lt2", "profile.fcmax", "profile.observed_max_hr"],
     )
 
 
@@ -351,7 +479,7 @@ def classify_session(
             type="intervals",
             confidence="high" if session.effort_regularity_available else "medium",
             evidence=evidence,
-            rules=["garmin_phases_recovery_between_efforts"],
+            rules=["garmin_phases_recovery_between_efforts"], decision_tier="garmin_phases",
             limitations=[] if session.effort_regularity_available else ["effort_regularity_unavailable"],
             source_paths=["phase_analysis.efforts", "phase_analysis.recoveries", "signals.session_structure"],
         )
@@ -370,7 +498,7 @@ def classify_session(
         return WIV3SessionClassification(
             type="tempo_probable", confidence="medium",
             evidence={"effort_avg_hr_bpm": session.effort_avg_hr, "lt1_bpm": lt1},
-            rules=["single_effort_block_with_warmup_or_cooldown_at_or_above_lt1"],
+            rules=["single_effort_block_with_warmup_or_cooldown_at_or_above_lt1"], decision_tier="garmin_phases",
             limitations=limitations, source_paths=["phase_analysis.phases", "profile.lt1"],
         )
     if session.structure == "other":
@@ -398,6 +526,7 @@ def classify_session(
             type="long_run_probable",
             confidence="medium" if position == "below_LT1" else "low",
             evidence=evidence, rules=["duration_at_least_1_5x_habitual_median", "not_above_lt1_when_known"],
+            decision_tier="personal_thresholds" if position == "below_LT1" else "individual_history",
             limitations=limitations,
             source_paths=["session.duration_minutes", "history.duration_minutes", "intensity_assessment.position"],
         )
@@ -406,26 +535,26 @@ def classify_session(
     if position == "below_LT1":
         return WIV3SessionClassification(
             type="easy_run_probable", confidence=_min_confidence("medium", intensity.confidence),
-            evidence=evidence, rules=["average_hr_below_personal_lt1"],
+            evidence=evidence, rules=["average_hr_below_personal_lt1"], decision_tier="personal_thresholds",
             limitations=limitations, source_paths=["intensity_assessment"],
         )
     if position == "between_LT1_LT2":
         return WIV3SessionClassification(
             type="steady_run_probable", confidence="low",
-            evidence=evidence, rules=["average_hr_between_personal_lt1_lt2"],
+            evidence=evidence, rules=["average_hr_between_personal_lt1_lt2"], decision_tier="personal_thresholds",
             limitations=limitations + ["tempo_not_distinguishable_from_average_hr"],
             source_paths=["intensity_assessment"],
         )
     if position == "above_LT2":
         return WIV3SessionClassification(
             type="tempo_probable", confidence="low",
-            evidence=evidence, rules=["average_hr_above_personal_lt2_without_phase_structure"],
+            evidence=evidence, rules=["average_hr_above_personal_lt2_without_phase_structure"], decision_tier="personal_thresholds",
             limitations=limitations + ["intervals_not_identifiable_without_phases"],
             source_paths=["intensity_assessment"],
         )
     return WIV3SessionClassification(
         type="unknown", confidence="none", evidence={},
-        rules=["abstention_no_reliable_intensity_or_structure"],
+        rules=["abstention_no_reliable_intensity_or_structure"], decision_tier="insufficient_data",
         limitations=limitations + ["intervals_not_identifiable_without_phases"],
         source_paths=["intensity_assessment", "signals.session_structure"],
     )
@@ -899,7 +1028,8 @@ def build_workout_intelligence_v3(data: WorkoutIntelligenceV3Input, language: st
             ("session.activity_type", data.session.activity_type is not None),
             ("session.recorded_structure", data.session.structure != "unknown"),
             ("session.splits", data.session.has_splits),
-            ("profile.fcmax", data.profile.fcmax.value_bpm is not None),
+            ("profile.fcmax", intensity.fcmax_bpm is not None),
+            ("profile.observed_max_hr", intensity.observed_max_hr_bpm is not None),
             ("profile.lt1", intensity.lt1 is not None),
             ("profile.lt2", intensity.lt2 is not None),
             ("history", bool(data.history)),

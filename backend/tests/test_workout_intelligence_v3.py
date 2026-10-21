@@ -348,7 +348,8 @@ def test_old_session_never_reads_future_data():
     assert not data_ids & {f"f{i}" for i in range(4)}
     assert result.intensity_assessment.lt1 is None
     assert result.intensity_assessment.rejected_thresholds["lt1"] == "estimate_after_session"
-    assert result.intensity_assessment.fcmax_bpm == 170  # future 205 bpm max is ignored
+    assert result.intensity_assessment.observed_max_hr_bpm == 170  # future 205 bpm max is ignored
+    assert result.intensity_assessment.fcmax_bpm is None  # an observed max is never a physiological FCmax
     future_snapshot = WIV3PrescriptionContext(local_date="2026-03-15", snapshots=[_snapshot("2026-04-10")])
     assert _analyze(old, [], prescription=future_snapshot).prescription_assessment.status == "unavailable"
 
@@ -510,6 +511,188 @@ def test_v3_sources_have_no_writes_garmin_calls_or_rag():
                           "fetch_activity_details", "request_activity_details", "gccli",
                           "rag_engine", "datetime.now", "date.today"):
             assert forbidden not in source, (module.__name__, forbidden)
+
+
+# ── Physiological wiring through the loader (C352 correction) ──────────────
+# The Training V2 runtime supplies no declared FCmax and no LT1/LT2; the
+# loader receives the same declared inputs as build_runner_profile. These
+# tests are SYNTHETIC: they prove the wiring rules, not real Garmin data.
+
+
+def _db(current, history, *, phases=None, current_type=OUTDOOR):
+    workouts = [dict(item, data_source="garmin", external_id=item["id"]) for item in history + [current]]
+    activities = [_activity(item["id"], f"{item['date']}T07:00:00") for item in history]
+    current_activity = _activity(current["id"], f"{current['date']}T07:00:00", current_type)
+    if phases is not None:
+        current_activity["activity_details"] = {
+            "schema_version": ACTIVITY_PHASE_SCHEMA_VERSION, "status": "complete", "source": "garmin",
+            "endpoint": "typed-splits",
+            "phases": [dict(phase.model_dump(mode="json"), source="garmin") for phase in phases],
+        }
+    return SimpleNamespace(
+        workouts=_ReadOnlyCollection(workouts),
+        garmin_activities=_ReadOnlyCollection(activities + [current_activity]),
+        training_prescription_snapshots=_ReadOnlyCollection([]),
+    )
+
+
+def _load(db, **kwargs):
+    _, result = asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3(
+        db=db, user_id="user-a", workout_id="cur", language=kwargs.pop("language", "en"), **kwargs))
+    return result
+
+
+def _metrics(lt1=150, lt2=170, source="lab_test", on="2026-01-01", confidence="high", **extra):
+    out = {
+        "lt1": {"value_bpm": lt1, "source": source, "estimated_on": on, "confidence": confidence},
+        "lt2": {"value_bpm": lt2, "source": source, "estimated_on": on, "confidence": confidence},
+    }
+    out.update(extra)
+    return out
+
+
+def _sources(result):
+    return {item.data: item for item in result.intensity_assessment.physiological_sources}
+
+
+def test_loader_runtime_default_abstains_and_audits_every_source():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=140), _flat_history()))
+    ia = result.intensity_assessment
+    assert ia.position == "unknown" and ia.lt1 is None and ia.lt2 is None
+    assert ia.fcmax_bpm is None and ia.fcmax_source == "unavailable"
+    assert "personal_thresholds_not_persisted" in ia.limitations
+    sources = _sources(result)
+    assert set(sources) == {"fcmax_declared", "lt1", "lt2", "training_v2_zones"}
+    assert not any(item.usable_by_v3 for item in sources.values())
+    assert sources["training_v2_zones"].kind == "pace_based_not_hr"
+    assert sources["lt1"].reason == "personal_threshold_not_persisted"
+    assert result.session_classification.type == "unknown"
+    assert result.session_classification.decision_tier == "insufficient_data"
+
+
+def test_loader_declared_fcmax_follows_runner_profile_priority():
+    db = _db(_w("cur", CURRENT_DAY), _flat_history())
+    result = _load(db, physiological_metrics={"max_heart_rate": 192, "max_hr_declared_on": "2026-01-15"},
+                   user_profile={"max_hr": 185})
+    ia = result.intensity_assessment
+    assert ia.fcmax_bpm == 192 and ia.fcmax_source == "user_declared"
+    assert _sources(result)["fcmax_declared"].source == "runner_profile.physiological_metrics.max_heart_rate"
+    assert ia.observed_max_hr_bpm == 170  # observed maximum stays separate
+    from_profile = _load(db, user_profile={"max_hr": 185})
+    assert from_profile.intensity_assessment.fcmax_bpm == 185
+    assert "fcmax_declaration_date_unknown" in from_profile.intensity_assessment.limitations
+    later = _load(db, physiological_metrics={"max_hr": 192, "max_hr_declared_on": "2026-06-01"})
+    assert later.intensity_assessment.fcmax_bpm is None
+    assert later.intensity_assessment.rejected_thresholds["fcmax"] == "declared_after_session"
+
+
+def test_loader_observed_garmin_max_is_only_a_lower_bound():
+    result = _load(_db(_w("cur", CURRENT_DAY), _flat_history()))
+    ia = result.intensity_assessment
+    assert ia.observed_max_hr_bpm == 170 and ia.observed_max_hr_observation_count == 4
+    assert ia.fcmax_bpm is None and ia.fcmax_source == "unavailable"
+    assert ia.position == "unknown"  # no zone is derived from an observed maximum
+    assert "profile.observed_max_hr" in result.data_used and "profile.fcmax" not in result.data_used
+
+
+def test_loader_reliable_thresholds_place_footing_below_lt1():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=140), _flat_history()), physiological_metrics=_metrics())
+    ia = result.intensity_assessment
+    assert ia.position == "below_LT1" and ia.confidence == "medium"
+    assert ia.lt1.value_bpm == 150 and ia.lt1.source == "lab_test"
+    assert "average_hr_is_not_time_in_zone" in ia.limitations
+    assert _sources(result)["lt1"].usable_by_v3 and _sources(result)["lt1"].kind == "personal_measured"
+    cls = result.session_classification
+    assert cls.type == "easy_run_probable" and cls.decision_tier == "personal_thresholds"
+
+
+def test_loader_session_between_lt1_and_lt2():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=160, pace=5.2), _flat_history()), physiological_metrics=_metrics())
+    assert result.intensity_assessment.position == "between_LT1_LT2"
+    assert result.session_classification.type == "steady_run_probable"
+    assert result.session_classification.confidence == "low"
+
+
+@pytest.mark.parametrize("kwargs,reason", [
+    ({"source": "generic_formula"}, "source_not_personal_measurement:generic_formula"),
+    ({"source": "unknown"}, "source_not_personal_measurement:unknown"),
+    ({"confidence": "low"}, "confidence_insufficient:low"),
+    ({"on": None}, "estimate_date_unknown"),
+])
+def test_loader_generic_or_unreliable_thresholds_are_rejected(kwargs, reason):
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=140), _flat_history()), physiological_metrics=_metrics(**kwargs))
+    ia = result.intensity_assessment
+    assert ia.position == "unknown" and ia.lt1 is None and ia.lt2 is None
+    assert ia.rejected_thresholds["lt1"] == reason
+    assert result.session_classification.type == "unknown"
+
+
+def test_loader_generic_source_is_labelled_generic_not_personal():
+    result = _load(_db(_w("cur", CURRENT_DAY), _flat_history()),
+                   physiological_metrics=_metrics(source="generic_formula"))
+    assert _sources(result)["lt1"].kind == "generic" and not _sources(result)["lt1"].usable_by_v3
+
+
+def test_loader_thresholds_estimated_after_session_are_ignored():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=140), _flat_history()),
+                   physiological_metrics=_metrics(on="2026-06-01"))
+    ia = result.intensity_assessment
+    assert ia.position == "unknown"
+    assert ia.rejected_thresholds == {"lt1": "estimate_after_session", "lt2": "estimate_after_session"}
+
+
+def test_loader_intervals_from_garmin_phases_without_thresholds():
+    current = _w("cur", CURRENT_DAY, hr=160, pace=5.2, duration=45, continuous=False)
+    result = _load(_db(current, _flat_history(), phases=_interval_phases()))
+    cls = result.session_classification
+    assert cls.type == "intervals" and cls.decision_tier == "garmin_phases"
+    assert result.intensity_assessment.position == "unknown"
+
+
+def test_loader_session_without_splits_still_classified():
+    current = _w("cur", CURRENT_DAY, hr=140, km_splits=[], split_analysis={})
+    result = _load(_db(current, _flat_history()), physiological_metrics=_metrics())
+    assert "session.splits" not in result.data_used
+    assert result.session_classification.type == "easy_run_probable"
+    assert "no_splits_whole_session_averages_only" in result.session_classification.limitations
+
+
+def test_loader_slow_pace_alone_is_never_an_easy_run():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=140, pace=7.5), _flat_history()))
+    assert result.session_classification.type == "unknown"
+
+
+def test_loader_insufficient_history():
+    result = _load(_db(_w("cur", CURRENT_DAY, hr=140), _flat_history(n=1)), physiological_metrics=_metrics())
+    assert result.performance_trend.status == "insufficient_data"
+    assert result.historical_comparison.status != "comparable"
+    assert result.intensity_assessment.position == "below_LT1"
+
+
+def test_loader_without_any_reliable_physiological_data():
+    current = _w("cur", CURRENT_DAY, hr=None, max_hr=None)
+    history = [_w(f"h{i}", f"2026-04-{1 + i * 5:02d}", hr=None, max_hr=None) for i in range(2)]
+    result = _load(_db(current, history))
+    ia = result.intensity_assessment
+    assert ia.position == "unknown" and ia.observed_max_hr_bpm is None and ia.fcmax_bpm is None
+    assert result.session_classification.type == "unknown"
+    assert result.performance_trend.status == "insufficient_data"
+
+
+def test_loader_hr_zone_distribution_is_flagged_unverified():
+    current = _w("cur", CURRENT_DAY, effort_zone_distribution={"z1": 50, "z2": 50})
+    result = _load(_db(current, _flat_history()))
+    row = _sources(result)["workout_hr_zone_distribution"]
+    assert row.persisted and not row.usable_by_v3 and row.kind == "unverified"
+    assert result.intensity_assessment.position == "unknown"
+
+
+def test_loader_comparison_and_trend_unchanged_by_physiological_wiring():
+    db = _loader_db()
+    base = _load(db)
+    wired = _load(db, physiological_metrics=_metrics(lt1=150, lt2=170))
+    assert base.performance_trend.status == wired.performance_trend.status == "probable_improvement"
+    assert (base.historical_comparison.model_dump() == wired.historical_comparison.model_dump())
 
 
 # ── Non-regression: Workout Analysis V2 and Training V2 ─────────────────────

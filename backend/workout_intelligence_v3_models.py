@@ -57,21 +57,67 @@ class WIV3ThresholdEstimate(BaseModel):
 
 
 class WIV3FcMax(BaseModel):
+    """Declared physiological FCmax only (never derived from age or observations)."""
+
     model_config = ConfigDict(frozen=True)
 
     value_bpm: Optional[float] = None
-    source: Literal["user_declared", "observed_history", "unavailable"] = "unavailable"
+    source: Literal["user_declared", "unavailable"] = "unavailable"
+    declared_on: Optional[str] = None
+    provenance: Optional[str] = None
+    """Path of the canonical field the value was read from."""
+
+
+class WIV3ObservedMaxHr(BaseModel):
+    """Highest credible HR observed in strictly-prior activities.
+
+    A recorded maximum is a lower bound of the physiological FCmax: it is
+    never presented or used as a certain FCmax.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    value_bpm: Optional[float] = None
+    source: Literal["garmin_activities_strictly_prior", "unavailable"] = "unavailable"
+    kind: Literal["observed_maximum_lower_bound"] = "observed_maximum_lower_bound"
     observation_count: int = 0
+
+
+SourceKind = Literal[
+    "personal_declared", "personal_measured", "personal_device_estimate", "observed",
+    "generic", "pace_based_not_hr", "unverified", "unavailable",
+]
+
+
+class WIV3PhysiologicalSource(BaseModel):
+    """Audit row: what a physiological source really provides to V3."""
+
+    model_config = ConfigDict(frozen=True)
+
+    data: Literal[
+        "fcmax_declared", "observed_max_hr", "lt1", "lt2",
+        "training_v2_zones", "workout_hr_zone_distribution",
+    ]
+    source: str
+    unit: str
+    persisted: bool
+    usable_by_v3: bool
+    kind: SourceKind
+    valid_from: Optional[str] = None
+    reason: str
 
 
 class WIV3PhysiologicalProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     fcmax: WIV3FcMax = Field(default_factory=WIV3FcMax)
+    observed_max_hr: Optional[WIV3ObservedMaxHr] = None
+    """``None`` → computed by the extraction from strictly-prior history."""
     lt1: Optional[WIV3ThresholdEstimate] = None
     lt2: Optional[WIV3ThresholdEstimate] = None
     lt_source_status: Literal["provided", "not_persisted"] = "not_persisted"
     """``not_persisted``: RunIndex stores no personal LT1/LT2 today (documented blocker)."""
+    sources: List[WIV3PhysiologicalSource] = Field(default_factory=list)
 
 
 class WIV3HistoricalSession(BaseModel):
@@ -141,7 +187,11 @@ class WIV3IntensityAssessment(BaseModel):
     lt1: Optional[WIV3ThresholdUsed] = None
     lt2: Optional[WIV3ThresholdUsed] = None
     fcmax_bpm: Optional[float] = None
-    fcmax_source: str = "unavailable"
+    """Declared FCmax only; an observed maximum is reported separately."""
+    fcmax_source: Literal["user_declared", "unavailable"] = "unavailable"
+    observed_max_hr_bpm: Optional[float] = None
+    observed_max_hr_observation_count: int = 0
+    physiological_sources: List[WIV3PhysiologicalSource] = Field(default_factory=list)
     rejected_thresholds: Dict[str, str] = Field(default_factory=dict)
     confidence: Confidence = "none"
     limitations: List[str] = Field(default_factory=list)
@@ -153,6 +203,10 @@ class WIV3SessionClassification(BaseModel):
         "easy_run_probable", "steady_run_probable", "tempo_probable",
         "intervals", "long_run_probable", "unknown",
     ] = "unknown"
+    decision_tier: Literal[
+        "garmin_phases", "personal_thresholds", "individual_history", "insufficient_data",
+    ] = "insufficient_data"
+    """Highest evidence level of the hierarchy that decided the type."""
     confidence: Confidence = "none"
     evidence: Dict[str, float] = Field(default_factory=dict)
     rules: List[str] = Field(default_factory=list)
