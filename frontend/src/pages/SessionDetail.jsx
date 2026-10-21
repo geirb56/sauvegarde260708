@@ -57,6 +57,7 @@ export default function SessionDetail() {
   const { unitSystem } = useUnitSystem();
   const [session, setSession] = useState(null);
   const [analysis, setAnalysis] = useState(null);
+  const [analysisScope, setAnalysisScope] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -77,6 +78,7 @@ export default function SessionDetail() {
 
   useEffect(() => {
     let active = true;
+    setAnalysisScope(JSON.stringify([id, lang]));
     setAnalysis(null);
     if (!canAccessAnalysis) return () => { active = false; };
 
@@ -125,7 +127,7 @@ export default function SessionDetail() {
     );
   }
 
-  const analysisForRender = canAccessAnalysis ? analysis : null;
+  const analysisForRender = canAccessAnalysis && analysisScope === JSON.stringify([id, lang]) ? analysis : null;
   const coachConclusions = getCoachConclusions(analysisForRender);
   const classification = getSessionClassification(analysisForRender, t);
   const observation = getDistinctCoachObservation(analysisForRender);
@@ -142,7 +144,7 @@ export default function SessionDetail() {
   </>;
 
   return (
-    <div className="min-w-0 break-words p-4 pb-24 space-y-4" data-testid="session-detail-page">
+    <div className="max-w-3xl mx-auto min-w-0 break-words p-4 pb-24 space-y-4" data-testid="session-detail-page">
       <div className="space-y-3">
         <Link to="/sessions" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
           <ArrowLeft className="h-4 w-4" />

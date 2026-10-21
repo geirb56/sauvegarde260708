@@ -12,6 +12,7 @@ import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
 import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
+import { formatAnalysisNumber } from "@/lib/analysisFormat";
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
@@ -33,13 +34,13 @@ export default function DetailedAnalysis() {
   const [loadedWorkout, setWorkout] = useState(null);
   const [loading, setLoading] = useState(true);
   const [requestScope, setRequestScope] = useState(null);
-  const scope = `${id}:${lang}`;
+  const scope = JSON.stringify([id, lang]);
   const isCurrentRequest = requestScope === scope;
   const analysis = canAccessAnalysis && isCurrentRequest ? loadedAnalysis : null;
   const workout = canAccessAnalysis && isCurrentRequest ? loadedWorkout : null;
 
   useEffect(() => {
-    setRequestScope(`${id}:${lang}`);
+    setRequestScope(JSON.stringify([id, lang]));
     setAnalysis(null);
     setWorkout(null);
     if (!canAccessAnalysis) {
@@ -123,7 +124,7 @@ export default function DetailedAnalysis() {
         ? [t("workoutDetailExtended.averagePace"), formatPaceDisplay(pace)]
         : Number.isFinite(speed) && speed > 0 ? [t("workoutDetailExtended.averageSpeed"), formatSpeed(speed, { unitSystem: "metric", lang })] : null),
     Number.isFinite(heartRate) && heartRate > 0
-      ? [t("workoutDetailExtended.averageHeartRate"), `${heartRate} bpm`] : null,
+      ? [t("workoutDetailExtended.averageHeartRate"), `${formatAnalysisNumber(heartRate, lang, 1)} bpm`] : null,
   ].filter(Boolean);
   const classification = getSessionClassification(analysis, t);
   const coachConclusions = getCoachConclusions(analysis);
@@ -146,7 +147,7 @@ export default function DetailedAnalysis() {
   </>;
 
   return (
-    <div className="min-w-0 break-words p-4 pb-24" data-testid="detailed-analysis">
+    <div className="max-w-3xl mx-auto min-w-0 break-words p-4 pb-24" data-testid="detailed-analysis">
       <div className="flex items-center justify-between mb-3">
         <Link to={`/workout/${id}`} className="text-muted-foreground hover:text-foreground" aria-label={t("workout.back")}>
           <ArrowLeft className="w-5 h-5" />

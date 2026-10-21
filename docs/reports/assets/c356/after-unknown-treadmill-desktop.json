@@ -3,7 +3,9 @@
   "kind": "unknown-treadmill",
   "viewportName": "desktop",
   "fixture": "synthetic contract-based; not actual Garmin evidence",
-  "head": "ee0109efe6f614136bf7aee98e409b70d73858ef",
+  "head": "bb66a394d12e35eb442b7fb119bbdac597865eb4",
+  "workingTreeDirty": true,
+  "sourceNote": "Captured against the working tree; head is the commit present at capture time. Consult workingTreeDirty for uncommitted changes; the final report records the validated committed source.",
   "apiRequests": [
     "/api/auth/me",
     "/api/auth/me",
@@ -39,44 +41,92 @@
   "metrics": [
     {
       "pathname": "/workout/c356-unknown-treadmill",
+      "initialCoachBounds": {
+        "x": 352,
+        "y": 313.5,
+        "width": 736,
+        "height": 191.25
+      },
+      "initialScrollY": 0,
+      "postExpansionScrollY": 0,
+      "measurementScrollY": 0,
       "viewportWidth": 1440,
       "documentWidth": 1440,
       "horizontalOverflow": false,
       "heading": "Too little evidence to classify this treadmill session",
+      "coachBounds": {
+        "x": 352,
+        "y": 313.5,
+        "width": 736,
+        "height": 191.25
+      },
+      "detailsCount": 0,
       "headings": [
         "Session summary",
         "Synthetic · Treadmill",
         "Too little evidence to classify this treadmill session",
         "What the data shows"
       ],
-      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · Treadmill\n\nSun, Oct 18 · Run\n\nDuration\n30m\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nExplore session details\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · Treadmill\n\nSun, Oct 18 · Run\n\nDuration\n30m\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
     },
     {
       "pathname": "/sessions/c356-unknown-treadmill",
+      "initialCoachBounds": {
+        "x": 352,
+        "y": 191,
+        "width": 736,
+        "height": 191.25
+      },
+      "initialScrollY": 0,
+      "postExpansionScrollY": 0,
+      "measurementScrollY": 0,
       "viewportWidth": 1440,
       "documentWidth": 1440,
       "horizontalOverflow": false,
       "heading": "Too little evidence to classify this treadmill session",
+      "coachBounds": {
+        "x": 352,
+        "y": 191,
+        "width": 736,
+        "height": 191.25
+      },
+      "detailsCount": 0,
       "headings": [
         "Synthetic · Treadmill",
         "Too little evidence to classify this treadmill session",
         "What the data shows",
         "Metrics"
       ],
-      "bodyText": "Back to sessions\n\nRun\n\nSynthetic · Treadmill\n\nOctober 18, 2026 at 08:00 AM\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nExplore session details\nMETRICS\n\nDURATION\n\n30m\n\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+      "bodyText": "Back to sessions\n\nRun\n\nSynthetic · Treadmill\n\nOctober 18, 2026 at 08:00 AM\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nMETRICS\n\nDURATION\n\n30m\n\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
     },
     {
       "pathname": "/workout/c356-unknown-treadmill/analysis",
+      "initialCoachBounds": {
+        "x": 352,
+        "y": 220,
+        "width": 736,
+        "height": 191.25
+      },
+      "initialScrollY": 0,
+      "postExpansionScrollY": 0,
+      "measurementScrollY": 0,
       "viewportWidth": 1440,
       "documentWidth": 1440,
       "horizontalOverflow": false,
       "heading": "Too little evidence to classify this treadmill session",
+      "coachBounds": {
+        "x": 352,
+        "y": 220,
+        "width": 736,
+        "height": 191.25
+      },
+      "detailsCount": 0,
       "headings": [
         "Synthetic · Treadmill",
         "Too little evidence to classify this treadmill session",
         "What the data shows"
       ],
-      "bodyText": "DETAILED ANALYSIS\nSun, Oct 18\nSynthetic · Treadmill\nDuration\n30m\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nExplore session details\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+      "bodyText": "DETAILED ANALYSIS\nSun, Oct 18\nSynthetic · Treadmill\nDuration\n30m\n\nTHE COACH\n\nToo little evidence to classify this treadmill session\n\nOnly the thirty-minute duration is recorded in this synthetic example.\n\nThe session remains unclassified rather than being described as an easy run.\n\nDistance, pace and heart rate are unavailable; no intensity or progression can be inferred.\n\nWhat the data shows\nSession type\nUndetermined\nHistorical comparison\nInsufficient comparable history\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
     }
   ]
 }

@@ -61,6 +61,8 @@ for (const [viewportName, viewport] of Object.entries({
         ? [`/workout/${fixture.workout.id}`]
         : [`/workout/${fixture.workout.id}`, `/sessions/${fixture.workout.id}`, `/workout/${fixture.workout.id}/analysis`];
       for (const [index, pathname] of routes.entries()) {
+        let initialCoachBounds: { x: number; y: number; width: number; height: number } | null = null;
+        let initialScrollY: number | null = null;
         await page.goto(pathname);
         await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
         await expect.poll(() => apiRequests.filter(url => url.includes('/coach/workout-analysis/')).length).toBeGreaterThan(index);
@@ -72,6 +74,13 @@ for (const [viewportName, viewport] of Object.entries({
           await expect(coach).toBeVisible();
           await expect(coach.getByRole('heading', { level: 2 })).toBeVisible();
           await expect(coach.getByRole('heading', { level: 2 })).toHaveText(fixture.intelligence.narrative_coach_v3.headline);
+          await expect(coach.getByRole('heading', { level: 2 })).toBeInViewport();
+          const initial = await coach.evaluate(el => {
+            const rect = el.getBoundingClientRect();
+            return { bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, scrollY };
+          });
+          initialCoachBounds = initial.bounds;
+          initialScrollY = initial.scrollY;
           const evidence = page.getByTestId('workout-evidence');
           await expect(evidence).toBeVisible();
           const details = page.getByTestId('workout-analysis-details');
@@ -94,7 +103,10 @@ for (const [viewportName, viewport] of Object.entries({
             }
           }
         }
+        const postExpansionScrollY = await page.evaluate(() => scrollY);
+        await page.evaluate(() => scrollTo({ top: 0, behavior: 'instant' }));
         const layout = await page.evaluate(() => ({
+          measurementScrollY: scrollY,
           viewportWidth: innerWidth, documentWidth: document.documentElement.scrollWidth,
           horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
           heading: document.querySelector('[data-testid="narrative-coach"] h2')?.textContent || null,
@@ -106,8 +118,11 @@ for (const [viewportName, viewport] of Object.entries({
           headings: Array.from(document.querySelectorAll('h1,h2')).map(el => el.textContent),
           bodyText: document.body.innerText,
         }));
-        metrics.push({ pathname, ...layout });
+        metrics.push({ pathname, initialCoachBounds, initialScrollY, postExpansionScrollY, ...layout });
         expect(layout.horizontalOverflow).toBe(false);
+        if (stage === 'after') {
+          expect(layout.coachBounds?.width).toBeLessThanOrEqual(768);
+        }
         if (index === 0 && stage === 'before') {
           await page.screenshot({ path: path.join(assets, `${stage}-${kind}-${viewportName}.png`), fullPage: true, animations: 'disabled' });
         }
@@ -117,7 +132,7 @@ for (const [viewportName, viewport] of Object.entries({
         head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
         workingTreeDirty: execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim().length > 0,
         sourceNote: stage === 'after'
-          ? 'Captured against the working tree, including uncommitted C356 frontend changes; head is the baseline commit, not a committed after-code identifier.'
+          ? 'Captured against the working tree; head is the commit present at capture time. Consult workingTreeDirty for uncommitted changes; the final report records the validated committed source.'
           : 'Captured before C356 page integration; head identifies the baseline commit.',
         apiRequests, unexpectedApi, blockedExternal, errors, metrics,
       }, null, 2));

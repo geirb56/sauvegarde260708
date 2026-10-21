@@ -4,7 +4,8 @@
 
 - Base : `copilot/dev`, `ee0109efe6f614136bf7aee98e409b70d73858ef` (merge C355).
 - Branche de livraison : `copilot/c356-workout-analysis-ux-v3`.
-- HEAD du code validé et résultats définitifs : renseignés après les validations ci-dessous.
+- HEAD d'intégration soumis à la revue et à CodeQL : `bb66a394d12e35eb442b7fb119bbdac597865eb4`.
+- HEAD du code validé par les tests définitifs : renseigné après leur exécution.
 - Frontend uniquement, hors présent rapport et fixtures/tests de présentation.
 - Aucun changement des moteurs V2/V3, de prescription, des seuils, des abonnements ou des données.
 - Aucun accès MongoDB, appel Garmin/GCCLI, déploiement ou merge.
@@ -64,6 +65,8 @@ Chemins relatifs à la racine du dépôt :
 - `frontend/src/lib/{analysisFormat,i18n}.js`
 - `frontend/src/utils/units.js`
 - `frontend/src/__tests__/{analysis-format.test.js,workout-analysis-v3-pages.test.jsx}`
+- `frontend/src/__tests__/workout-analysis-v2-pages.test.jsx` : attentes adaptées uniquement
+  au nouvel appel V3 et aux séparateurs décimaux localisés ; assertions métier conservées.
 - `tests/e2e/c356-narrative-coach.spec.ts`
 - `tests/fixtures/c356-workouts.ts`
 - `docs/reports/assets/c356/*` : captures et mesures de navigateur.
@@ -91,8 +94,34 @@ Première validation des modifications partagées, avant intégration des pages 
 - `CI=true npm test -- --watchAll=false --forceExit --runInBand --runTestsByPath src/__tests__/analysis-format.test.js`
   depuis `frontend/` : **18 tests réussis**.
 
-Validation finale des trois pages, suite complète, build et contrôles automatisés :
-résultats à compléter après exécution.
+Validation de l'intégration, depuis `frontend/` :
+
+| Commande | Résultat |
+| --- | --- |
+| `CI=true npm test -- --watchAll=false --runInBand --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/workout-analysis-v3-pages.test.jsx` | **765/765 tests**, 2/2 suites |
+| `CI=true npm test -- --watchAll=false --forceExit --runInBand` | **1 392/1 392 tests**, 37/37 suites, 59,437 s |
+| `npm run build` | **Compilation de production réussie** |
+| `git diff --check` | Aucun problème d'espacement |
+
+Le fichier V3 contient **138 cas** : les trois pages en FR/EN/ES, fractionné avec/sans
+dispersion démontrée, footing probable et référence relative sans zone physiologique,
+type indéterminé, tendance fiable/faible confiance, historique insuffisant,
+narrative absente/incomplète/mauvaise langue, erreurs V2/V3 indépendantes, accès
+FREE/en chargement/TRIAL/PREMIUM/révoqué, absence de doublons, phases/splits accessibles,
+conservation des métriques et réponses tardives après navigation/changement de langue.
+Les tests numériques couvrent aussi les valeurs non finies, `null`, zéro et les phrases
+backend non retouchées. Le test de formatage a finalement **19 cas** dans la suite complète.
+
+Les premiers passages V2 après intégration ont révélé des attentes obsolètes de nombre
+d'appels et de séparateurs décimaux ; elles ont été adaptées aux seuls changements C356.
+La précision fixe existante des unités a été préservée. Aucun test sans rapport supprimé
+ni aucune assertion métier affaiblie.
+
+- `parallel_validation` sur `bb66a394d12e35eb442b7fb119bbdac597865eb4` :
+  **CodeQL JavaScript : 0 alerte**. L'outil de revue intégré est **indisponible**
+  (`autofind` absent) : son statut « Success » ne prouve pas une revue exécutée.
+  Revue indépendante du diff par agent read-only effectuée en complément :
+  **aucun problème significatif identifié**.
 
 ## 7. Validation visuelle
 
@@ -105,8 +134,22 @@ Les polices externes bloquées peuvent provoquer une police de repli dans les ca
 - Mobile : **390 × 844**.
 - Trois exemples : fractionné, footing probable, séance tapis indéterminée.
 - Avant : route `WorkoutDetail` ouverte pour chaque exemple et viewport.
-- Après : les trois routes doivent être réellement ouvertes et les disclosures actionnés
-  au clavier ; résultat final à compléter.
+- Après : les trois routes réellement ouvertes et les disclosures actionnés au clavier ;
+  **18 visites effectives**, titres Coach/preuves vérifiés, détails repliés
+  initialement et actionnables au clavier, aucune section de détails vide sur le tapis.
+
+Depuis `tests/` :
+
+- `C356_STAGE=before npx playwright test e2e/c356-narrative-coach.spec.ts --project=chromium --retries=0` :
+  **6/6 tests réussis** (30,4 s).
+- `C356_STAGE=after npx playwright test e2e/c356-narrative-coach.spec.ts --project=chromium --retries=0` :
+  **6/6 tests réussis** (dernier passage : 14,7 s), réexécutés après les ajustements
+  de largeur/détails et les gardes de contexte.
+- **12 PNG + 12 JSON**, aucun débordement horizontal, aucune erreur de page et aucun
+  endpoint API inattendu dans les passages enregistrés.
+- Titres Coach initialement dans le viewport sur les **18 visites** (`toBeInViewport`),
+  avant ouverture des détails et à défilement nul ; largeurs Coach : **736 px desktop /
+  358 px mobile**. Les mesures initiales sont distinctes des défilements dus au clavier.
 
 | Exemple | Avant desktop | Avant mobile | Après desktop | Après mobile |
 | --- | --- | --- | --- | --- |
@@ -118,6 +161,9 @@ Les fichiers JSON associés consignent routes, largeur, débordement, titres, te
 effectivement rendu, requêtes interceptées, erreurs et HEAD Git au moment du passage.
 Ils documentent une validation fonctionnelle/rendu navigateur, pas une appréciation
 graphique humaine exhaustive.
+Le navigateur de capture a réellement ouvert les pages. L'outil de consultation
+interactive des images était indisponible (« Transport closed ») : aucune approbation
+graphique humaine exhaustive n'est revendiquée. Les captures restent à examiner.
 
 ## 8. Problèmes backend restant à corriger — C357
 
@@ -143,4 +189,10 @@ graphique humaine exhaustive.
 
 ## 10. Verdict
 
-**En attente des validations finales.** Aucun merge ni déploiement demandé/exécuté.
+**GO conditionnel** pour revue de la PR brouillon : tests, build et contrôles de sécurité
+réussis. Conditions avant merge : revue humaine des captures, essai authentifié sur
+les séances Garmin réelles citées et acceptation des limites rédactionnelles C357.
+L'outil de revue intégré indisponible est explicitement compensé par une revue read-only
+indépendante, sans être présenté comme un succès de cet outil.
+
+**STOP : aucun merge ni déploiement exécuté.**

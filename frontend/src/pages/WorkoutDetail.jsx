@@ -86,6 +86,7 @@ export default function WorkoutDetail() {
   const [workoutLoading, setWorkoutLoading] = useState(true);
   const [workoutError, setWorkoutError] = useState(null);
   const [analysis, setAnalysis] = useState(null);
+  const [analysisScope, setAnalysisScope] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisError, setAnalysisError] = useState(false);
 
@@ -114,6 +115,7 @@ export default function WorkoutDetail() {
   }, [id]);
 
   useEffect(() => {
+    setAnalysisScope(JSON.stringify([id, lang]));
     setAnalysis(null);
     setAnalysisError(false);
     setAnalysisLoading(canAccessAnalysis);
@@ -172,7 +174,8 @@ export default function WorkoutDetail() {
     month: "short",
     day: "numeric",
   }) : t("workoutDetailExtended.dataUnavailable");
-  const analysisForRender = canAccessAnalysis && !analysisLoading && !analysisError ? analysis : null;
+  const analysisForRender = canAccessAnalysis && analysisScope === JSON.stringify([id, lang])
+    && !analysisLoading && !analysisError ? analysis : null;
   const physiology = analysisForRender?.physiology;
   const pacing = analysisForRender?.pacing;
   const isCycle = workout.type === "cycle";
