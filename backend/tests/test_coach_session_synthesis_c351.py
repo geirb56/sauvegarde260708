@@ -289,3 +289,34 @@ def test_single_continuous_phase_does_not_repackage_total_duration_as_repetition
     analysis = build_workout_analysis_v2(workout, [], phases=[phase])
     assert analysis.signals.session_structure.code == "continuous"
     assert analysis.session_synthesis.status == "insufficient"
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("context_only", [False, True])
+def test_rejected_repetition_interpretation_keeps_observations_and_traced_limit(language, context_only):
+    measured = phases()
+    for index, phase in enumerate(measured):
+        if phase.phase_type == "effort":
+            measured[index] = phase.model_copy(update={
+                "duration_s": 60 if index == 4 else 240,
+                "distance_m": 200 if index == 4 else 800,
+                "average_hr": None if context_only else phase.average_hr,
+            })
+    analysis = build_workout_analysis_v2(SESSIONS["2026-10-10"], [], language, measured)
+    assert analysis.coach_language.conclusions == []
+    assert analysis.coach_language.limitations == ["repetitions.insufficient_comparability"]
+    synthesis = analysis.session_synthesis
+    assert synthesis.status == "available"
+    assert all(item.kind == "observation" for item in items(analysis))
+    assert "fact.recoveries" in {item.code for item in items(analysis)}
+    # Dispersion remains in the phase section, not duplicated in the synthesis.
+    assert "fact.effort_dispersion" not in {item.code for item in items(analysis)}
+    assert analysis.phase_analysis.effort_regularity.partial_comparison
+    assert analysis.phase_analysis.effort_regularity.pace_dispersion_sec_per_km == 0
+    limit = synthesis.limitations[0]
+    assert limit.code == "synthesis.repetition_interpretation"
+    assert limit.source_paths == ["coach_language.limitations[0]"]
+    assert limit.text
+    assert WorkoutAnalysisV2Response.model_validate(analysis.model_dump()) == analysis
+    if context_only:
+        assert [item.code for item in items(analysis)] == ["fact.recoveries"]

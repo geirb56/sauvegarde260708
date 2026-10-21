@@ -88,7 +88,6 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
         "fact.pace_change": (25, "pacing"),
         "fact.negative_split": (26, "pacing"),
         "fact.effort_extremes": (35, "repetitions"),
-        "fact.effort_dispersion": (36, "repetitions"),
         "fact.effort_hr_evolution": (38, "cardio"),
     }
     for index, fact in enumerate(facts):
@@ -120,6 +119,23 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
             break
 
     limits = []
+    repetition_facts = any(item.code in {
+        "fact.repetitions", "fact.recoveries", "fact.effort_extremes", "fact.effort_hr_evolution",
+    } for item in selected)
+    if repetition_facts:
+        for index, reason in enumerate(coach_language.limitations):
+            if reason.startswith("repetitions."):
+                limits.append(SessionSynthesisLimit(
+                    code="synthesis.repetition_interpretation",
+                    text=_text(
+                        language,
+                        "L’interprétation de l’ensemble des répétitions est indisponible ; seules les observations mesurées sont décrites.",
+                        "Interpretation of the whole repetition series is unavailable; only measured observations are described.",
+                        "La interpretación del conjunto de repeticiones no está disponible; solo se describen las observaciones medidas.",
+                    ),
+                    source_paths=[f"coach_language.limitations[{index}]"],
+                ))
+                break
     historical = [item for item in selected if item.code.startswith("coach.history.")]
     if historical:
         limits.append(SessionSynthesisLimit(
@@ -149,7 +165,7 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
     return CoachSessionSynthesisV2(
         status="available" if selected else "insufficient",
         primary=selected[0] if selected else None,
-        supporting=selected[1:], limitations=limits,
+        supporting=selected[1:], limitations=limits[:2],
         abstention=None if selected else _text(
             language,
             "Au-delà des statistiques affichées, les données disponibles ne permettent pas de dégager une observation pertinente de cette séance.",

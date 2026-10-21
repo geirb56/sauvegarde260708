@@ -497,6 +497,44 @@ test.each(["fr", "en", "es"])("WorkoutDetail rejects old recorded totals alone i
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
 });
 
+test.each([
+  ["fr", "4 × 3 min de récupération observées.", "L’interprétation de l’ensemble des répétitions est indisponible ; seules les observations mesurées sont décrites."],
+  ["en", "4 × 3 min recoveries observed.", "Interpretation of the whole repetition series is unavailable; only measured observations are described."],
+  ["es", "4 × 3 min de recuperación observados.", "La interpretación del conjunto de repeticiones no está disponible; solo se describen las observaciones medidas."],
+])("WorkoutDetail preserves factual repetition fallback and its limitation without duplicate dispersion in %s", async (language, text, limitation) => {
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    phase_analysis: makeStructuredPhaseAnalysis(),
+    session_synthesis: sessionSynthesis({
+      primary: synthesisItem({
+        code: "fact.recoveries", text, kind: "observation",
+        evidence: { count: 4, duration_s: 180 },
+        source_paths: ["phase_analysis.recoveries"],
+      }),
+      supporting: [],
+      limitations: [{
+        code: "synthesis.repetition_interpretation", text: limitation,
+        source_paths: ["coach_language.limitations[0]"],
+      }],
+    }),
+    coach_language: { version: "v1", conclusions: [], limitations: ["repetitions.insufficient_comparability"] },
+    meaning: { ...analysis.meaning, factual_observations: [{
+      code: "fact.effort_dispersion", placement: "phases",
+      text: "Legacy dispersion narrative.", evidence: { pace_dispersion_sec_per_km: 7.7 },
+    }] },
+  } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  const section = await screen.findByTestId("session-synthesis");
+  expect(within(section).getByText(text)).toBeInTheDocument();
+  expect(screen.getAllByText(limitation)).toHaveLength(1);
+  expect(within(section).getByText(translations[language].workoutDetailExtended.synthesisObservation)).toBeInTheDocument();
+  expect(within(section).queryByText(translations[language].workoutDetailExtended.synthesisInterpretation)).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("effort-regularity")).toHaveLength(1);
+  expect(within(section).queryByTestId("effort-regularity")).not.toBeInTheDocument();
+  expect(screen.queryByText("Legacy dispersion narrative.")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
+});
+
 test.each(["fr", "en", "es"].flatMap((language) =>
   ["primary", "supporting"].map((position) => [language, position]),
 ))("WorkoutDetail drops mixed old totals in %s %s while preserving selected order and kind", async (language, position) => {
