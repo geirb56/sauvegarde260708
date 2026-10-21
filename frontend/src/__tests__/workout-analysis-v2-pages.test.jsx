@@ -319,8 +319,17 @@ const malformedSyntheses = [
   ["string evidence", sessionSynthesis({ primary: synthesisItem({ evidence: { value: "1" } }) })],
   ["missing sources", sessionSynthesis({ primary: synthesisItem({ source_paths: [] }) })],
   ["invalid sources", sessionSynthesis({ primary: synthesisItem({ source_paths: [null] }) })],
+  ["blank sources", sessionSynthesis({ primary: synthesisItem({ source_paths: [" "] }) })],
+  ["nonfinite sources", sessionSynthesis({ primary: synthesisItem({ source_paths: [Infinity] }) })],
+  ["NaN sources", sessionSynthesis({ primary: synthesisItem({ source_paths: [NaN] }) })],
+  ["mixed invalid sources", sessionSynthesis({ primary: synthesisItem({ source_paths: ["pacing.pace_drop_min_km", ""] }) })],
   ["blank code", sessionSynthesis({ primary: synthesisItem({ code: " " }) })],
   ["blank text", sessionSynthesis({ primary: synthesisItem({ text: " " }) })],
+  ["unknown primary kind", sessionSynthesis({ primary: synthesisItem({ kind: "conclusion" }) })],
+  ["null kind", sessionSynthesis({ primary: synthesisItem({ kind: null }) })],
+  ["unknown supporting kind", sessionSynthesis({ supporting: [
+    synthesisItem({ code: "other", text: "Unknown kind.", kind: "unsupported" }),
+  ] })],
   ["invalid replacements", sessionSynthesis({ primary: synthesisItem({ replaces_factual_codes: [2] }) })],
   ["missing replacements", sessionSynthesis({ primary: synthesisItem({ replaces_factual_codes: undefined }) })],
   ["invalid supporting", sessionSynthesis({ supporting: {} })],
@@ -348,6 +357,10 @@ test("session synthesis helper validates without ranking, mutating or padding ba
   expect(supplied.supporting.map((item) => item.code)).toEqual(["synthesis.z", "synthesis.a"]);
   const primaryOnly = sessionSynthesis({ supporting: [], limitations: [] });
   expect(getSessionSynthesis({ session_synthesis: primaryOnly })).toBe(primaryOnly);
+  for (const kind of ["observation", "interpretation"]) {
+    const withKind = sessionSynthesis({ primary: synthesisItem({ kind }) });
+    expect(getSessionSynthesis({ session_synthesis: withKind })).toBe(withKind);
+  }
   const limitationWithoutPaths = sessionSynthesis({
     limitations: [{ code: "limit", text: "Backend limitation without source paths.", source_paths: [] }],
   });
@@ -387,6 +400,8 @@ test.each([
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
   const section = await screen.findByTestId("session-synthesis");
   expect(within(section).getByRole("heading", { name: title })).toBeInTheDocument();
+  expect(within(section).queryByText(translations[language].workoutDetailExtended.synthesisObservation)).not.toBeInTheDocument();
+  expect(within(section).queryByText(translations[language].workoutDetailExtended.synthesisInterpretation)).not.toBeInTheDocument();
   expect(screen.getAllByText(text)).toHaveLength(1);
   expect(within(screen.getByTestId("synthesis-primary")).getByText(text).tagName).toBe("STRONG");
   const support = screen.getAllByTestId("synthesis-supporting");
@@ -421,12 +436,110 @@ test.each([
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
   expect(await screen.findByTestId("synthesis-abstention")).toHaveTextContent(abstention);
-  expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: title })).not.toBeInTheDocument();
+  expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
+  expect(screen.getByTestId("synthesis-abstention").tagName).toBe("P");
   ["synthesis-primary", "synthesis-supporting", "synthesis-limitations", "coach-language",
     "meaning-text", "advice-text", "analysis-fallback"].forEach((id) => {
     expect(screen.queryByTestId(id)).not.toBeInTheDocument();
   });
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
+});
+
+test.each(["fr", "en", "es"])("WorkoutDetail distinguishes supplied scientific levels in %s", async (language) => {
+  const labels = {
+    fr: ["Observation factuelle", "Interprétation validée", "Limites"],
+    en: ["Factual observation", "Validated interpretation", "Limitations"],
+    es: ["Observación factual", "Interpretación validada", "Limitaciones"],
+  }[language];
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    session_synthesis: sessionSynthesis({
+      primary: synthesisItem({ kind: "interpretation" }),
+      supporting: [
+        synthesisItem({ code: "fact", text: "A factual measurement.", kind: "observation" }),
+        synthesisItem({ code: "legacy", text: "Older untyped narrative." }),
+      ],
+    }),
+  } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  const section = await screen.findByTestId("session-synthesis");
+  expect(within(screen.getByTestId("synthesis-primary")).getByText(labels[1])).toBeInTheDocument();
+  const support = screen.getAllByTestId("synthesis-supporting");
+  expect(within(support[0]).getByText(labels[0])).toBeInTheDocument();
+  expect(support[1]).toHaveTextContent(/^Older untyped narrative\.$/);
+  expect(within(section).getByRole("heading", { name: labels[2] })).toBeInTheDocument();
+  expect(within(section).queryByText("Factual interpretation")).not.toBeInTheDocument();
+});
+
+test.each(["fr", "en", "es"])("WorkoutDetail rejects old recorded totals alone in %s without legacy duplication", async (language) => {
+  const totalsText = "Recorded raw totals: 8.44 km in 38 minutes.";
+  const totals = synthesisItem({ code: "synthesis.recorded_totals", text: totalsText });
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    session_synthesis: sessionSynthesis({
+      primary: totals, supporting: [],
+      limitations: [],
+    }),
+    coach_language: { version: "v1", conclusions: [coachConclusion({ text: totalsText })] },
+    meaning: { factual_observations: [
+      { code: "fact.totals", placement: "summary", text: totalsText, evidence: { distance: 8.44 } },
+    ] },
+  } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  expect(await screen.findByTestId("synthesis-abstention"))
+    .toHaveTextContent(translations[language].workoutDetailExtended.noReliableObservations);
+  expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: translations[language].workoutDetailExtended.sessionSynthesis })).not.toBeInTheDocument();
+  expect(screen.queryByText(totalsText)).not.toBeInTheDocument();
+  ["synthesis-primary", "synthesis-supporting", "coach-language", "meaning-text", "advice-text", "analysis-fallback"]
+    .forEach((id) => expect(screen.queryByTestId(id)).not.toBeInTheDocument());
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
+});
+
+test.each(["fr", "en", "es"].flatMap((language) =>
+  ["primary", "supporting"].map((position) => [language, position]),
+))("WorkoutDetail drops mixed old totals in %s %s while preserving selected order and kind", async (language, position) => {
+  const totals = synthesisItem({ code: "synthesis.recorded_totals", text: "Recorded raw totals: 8.44 km in 38 minutes." });
+  const first = synthesisItem({ kind: "interpretation", text: "Backend-authorized interpretation." });
+  const second = synthesisItem({ code: "second", kind: "observation", text: "Backend-selected factual observation." });
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    session_synthesis: sessionSynthesis({
+      primary: position === "primary" ? totals : first,
+      supporting: position === "primary" ? [first, second] : [totals, second],
+    }),
+    coach_language: { version: "v1", conclusions: [coachConclusion({ text: totals.text })] },
+  } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  const section = await screen.findByTestId("session-synthesis");
+  expect(within(screen.getByTestId("synthesis-primary")).getByText(first.text)).toBeInTheDocument();
+  expect(screen.getAllByTestId("synthesis-supporting")).toHaveLength(1);
+  expect(screen.getByTestId("synthesis-supporting")).toHaveTextContent(second.text);
+  expect(screen.getByTestId("synthesis-primary"))
+    .toHaveTextContent(translations[language].workoutDetailExtended.synthesisInterpretation);
+  expect(screen.getByTestId("synthesis-supporting"))
+    .toHaveTextContent(translations[language].workoutDetailExtended.synthesisObservation);
+  expect(within(section).queryByText(totals.text)).not.toBeInTheDocument();
+  expect(screen.queryByText(totals.text)).not.toBeInTheDocument();
+  expect(screen.queryByTestId("synthesis-abstention")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
+  expect(screen.getByTestId("synthesis-primary").compareDocumentPosition(screen.getByTestId("synthesis-supporting"))
+    & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("WorkoutDetail preserves backend limitations with compact insufficient abstention", async () => {
+  mockAxios({ analysisPayload: {
+    ...analysisMissingEvidence,
+    session_synthesis: sessionSynthesis({
+      status: "insufficient", primary: null, supporting: [], abstention: "Not enough evidence.",
+    }),
+  } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  expect(await screen.findByTestId("synthesis-abstention")).toHaveTextContent("Not enough evidence.");
+  expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
+  expect(screen.getByTestId("synthesis-limitations")).toHaveTextContent("Backend-supplied limitation.");
+  expect(screen.getByRole("heading", { name: "Limitations" })).toBeInTheDocument();
 });
 
 test.each(malformedSyntheses)("WorkoutDetail preserves legacy coach rendering for %s synthesis", async (_, supplied) => {

@@ -24,6 +24,7 @@ export const getSessionSynthesis = (analysis) => {
   const isPaths = (value) => Array.isArray(value) && value.length > 0 && value.every(isText);
   const isItem = (item) => isRecord(item)
     && isText(item.code) && isText(item.text)
+    && (item.kind === undefined || ["observation", "interpretation"].includes(item.kind))
     && isRecord(item.evidence) && Object.keys(item.evidence).length > 0
     && Object.values(item.evidence).every(Number.isFinite)
     && isPaths(item.source_paths)

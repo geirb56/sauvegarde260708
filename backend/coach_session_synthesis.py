@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 class SessionSynthesisItem(BaseModel):
     code: str
     text: str
+    kind: Literal["observation", "interpretation"] = "observation"
     evidence: Dict[str, float]
     source_paths: List[str] = Field(min_length=1)
     replaces_factual_codes: List[str] = Field(default_factory=list)
@@ -51,7 +52,7 @@ def _pace(minutes):
 def build_session_synthesis(coach_language, facts, contextual_facts, history_environment, language):
     """Select, never recalculate, scientific conclusions or comparability.
 
-    Contextual facts are built by V2 from its measured totals/phase statistics.
+    Contextual facts are built by V2 from its measured phase statistics.
     Legacy history facts are intentionally excluded: only the guarded Coach
     conclusion can authorize their use, including the precise environment gate.
     """
@@ -75,6 +76,7 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
             )
         candidates.append((conclusion.priority, conclusion.category, SessionSynthesisItem(
             code=conclusion.code, text=text, evidence=conclusion.evidence,
+            kind="interpretation" if conclusion.kind == "conclusion" else "observation",
             source_paths=[f"coach_language.conclusions[{index}]"],
             replaces_factual_codes=conclusion.replaces_factual_codes,
         )))
@@ -102,15 +104,13 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
         )))
 
     for priority, category, item in contextual_facts:
-        candidates.append((priority, category, item))
+        if item.code in {"fact.repetitions", "fact.recoveries"}:
+            candidates.append((priority, category, item))
     candidates.sort(key=lambda candidate: (candidate[0], candidate[2].code))
     selected = []
     categories, codes, texts = set(), set(), set()
     for _, category, item in candidates:
         if category in categories or item.code in codes or item.text in texts:
-            continue
-        # Recorded totals are a useful last resort, not padding after an analysis.
-        if category == "totals" and selected:
             continue
         selected.append(item)
         categories.add(category)
@@ -152,8 +152,8 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
         supporting=selected[1:], limitations=limits,
         abstention=None if selected else _text(
             language,
-            "Les données disponibles ne permettent pas de dégager une observation fiable de cette séance.",
-            "The available data do not support a reliable observation about this session.",
-            "Los datos disponibles no permiten extraer una observación fiable de esta sesión.",
+            "Au-delà des statistiques affichées, les données disponibles ne permettent pas de dégager une observation pertinente de cette séance.",
+            "Beyond the displayed statistics, the available data do not support a meaningful observation about this session.",
+            "Más allá de las estadísticas mostradas, los datos disponibles no permiten extraer una observación pertinente de esta sesión.",
         ),
     )

@@ -2164,15 +2164,15 @@ def _build_factual_observations(
     return facts
 
 
-def _synthesis_context(workout, phases, physiology, language):
-    """Expose recorded context without promoting totals to an execution judgment."""
+def _synthesis_context(phases, language):
+    """Expose recorded repetition context, never the already displayed totals."""
     candidates = []
     for rows, code, category, priority in (
         (phases.efforts, "fact.repetitions", "repetitions", 37),
         (phases.recoveries, "fact.recoveries", "recoveries", 39),
     ):
         duration = _equal_phase_duration(rows)
-        if duration is not None:
+        if duration is not None and len(rows) >= 2:
             candidates.append((priority, category, SessionSynthesisItem(
                 code=code, text=_template(
                     language, code, count=len(rows),
@@ -2181,27 +2181,6 @@ def _synthesis_context(workout, phases, physiology, language):
                 evidence={"count": len(rows), "duration_s": duration},
                 source_paths=[f"phase_analysis.{'efforts' if category == 'repetitions' else 'recoveries'}"],
             )))
-    distance = _usable_metric(workout, "distance_km")
-    duration = _usable_metric(workout, "duration_minutes")
-    evidence = {}
-    if distance is not None and duration is not None:
-        text = _template(language, "fact.distance_duration",
-                         distance=_fmt_distance(distance), duration=_fmt_duration(duration))
-        evidence = {"distance_km": distance, "duration_minutes": duration}
-    elif distance is not None:
-        text = _template(language, "fact.phase_distance", distance=_phase_number(distance, 2, language))
-        evidence = {"distance_km": distance}
-    elif duration is not None:
-        text = _template(language, "fact.duration_only", duration=_fmt_duration(duration))
-        evidence = {"duration_minutes": duration}
-    elif _valid_positive_number(physiology.avg_hr):
-        text = _template(language, "fact.hr_avg", avg_hr=physiology.avg_hr)
-        evidence = {"avg_heart_rate": physiology.avg_hr}
-    if evidence:
-        candidates.append((100, "totals", SessionSynthesisItem(
-            code="synthesis.recorded_totals", text=text, evidence=evidence,
-            source_paths=["summary", "physiology"],
-        )))
     return candidates
 
 
@@ -2275,7 +2254,7 @@ def build_workout_analysis_v2(
         coach_language=coach_language,
         session_synthesis=build_session_synthesis(
             coach_language, meaning.factual_observations,
-            _synthesis_context(workout, phase_analysis, physiology, language),
+            _synthesis_context(phase_analysis, language),
             history_environment, _lang(language),
         ),
     )

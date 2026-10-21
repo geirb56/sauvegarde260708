@@ -183,8 +183,16 @@ export default function WorkoutDetail() {
   const hasAnalysis = Boolean(analysisForRender);
   const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
   const synthesis = getSessionSynthesis(analysisForRender);
-  const synthesisSupport = synthesis?.supporting || [];
+  const synthesisItems = synthesis
+    ? [synthesis.primary, ...synthesis.supporting].filter((item) =>
+      item && !["synthesis.recorded_totals", "recorded_totals"].includes(item.code.trim()))
+    : [];
+  const [synthesisPrimary, ...synthesisSupport] = synthesisItems;
   const synthesisLimitations = synthesis?.limitations || [];
+  const hasAvailableSynthesis = synthesis?.status === "available" && synthesisItems.length > 0;
+  const synthesisLabel = (item) => item.kind
+    ? <span className="block text-xs text-muted-foreground">{t(`workoutDetailExtended.synthesis${item.kind === "interpretation" ? "Interpretation" : "Observation"}`)}</span>
+    : null;
   const coachConclusions = synthesis ? [] : getCoachConclusions(analysisForRender);
   const coachObservation = synthesis ? null : getDistinctCoachObservation(analysisForRender);
   const observations = synthesis ? [] : getAnalysisObservations(analysisForRender);
@@ -241,16 +249,28 @@ export default function WorkoutDetail() {
       </Card>
       </section>
 
-      {synthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
+      {hasAvailableSynthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
         <h2 id="session-synthesis-title" className="text-base font-semibold">{t("workoutDetailExtended.sessionSynthesis")}</h2>
-        {synthesis.status === "available" ? <>
-          <p className="text-sm leading-relaxed" data-testid="synthesis-primary"><strong>{synthesis.primary.text}</strong></p>
-          {synthesisSupport.map((item) => <p key={item.code} className="text-sm leading-relaxed" data-testid="synthesis-supporting">{item.text}</p>)}
-        </> : <p className="text-sm font-semibold leading-relaxed" data-testid="synthesis-abstention">{synthesis.abstention}</p>}
-        {synthesisLimitations.length > 0 && <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
-          {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
-        </ul>}
+        <p className="text-sm leading-relaxed" data-testid="synthesis-primary">{synthesisLabel(synthesisPrimary)}<strong>{synthesisPrimary.text}</strong></p>
+        {synthesisSupport.map((item) => <p key={item.code} className="text-sm leading-relaxed" data-testid="synthesis-supporting">{synthesisLabel(item)}{item.text}</p>)}
+        {synthesisLimitations.length > 0 && <div>
+          <h3 className="text-sm font-semibold">{t("workoutDetailExtended.synthesisLimitations")}</h3>
+          <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
+            {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
+          </ul>
+        </div>}
       </section>}
+      {synthesis && !hasAvailableSynthesis && <>
+        <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
+          {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
+        </p>
+        {synthesisLimitations.length > 0 && <div>
+          <h3 className="text-sm font-semibold">{t("workoutDetailExtended.synthesisLimitations")}</h3>
+          <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
+            {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
+          </ul>
+        </div>}
+      </>}
       {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}

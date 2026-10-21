@@ -9,7 +9,8 @@ import pytest
 from pydantic import ValidationError
 
 from activity_phases import ActivityPhase
-from coach_session_synthesis import SessionSynthesisItem
+from coach_session_synthesis import SessionSynthesisItem, build_session_synthesis
+from coach_language import CoachLanguageV1
 from workout_analysis_v2 import WorkoutAnalysisV2Response, build_workout_analysis_v2
 
 
@@ -57,6 +58,25 @@ def test_five_sessions_are_deterministic_traceable_and_compatible(date, language
     assert analysis.signals.intensity.available is False
     for item in rendered:
         assert item.source_paths and item.evidence
+        assert item.kind in {"observation", "interpretation"}
+        for path in item.source_paths:
+            if path.startswith("coach_language.conclusions["):
+                index = int(path.split("[")[1].rstrip("]"))
+                source = analysis.coach_language.conclusions[index]
+                assert item.evidence == source.evidence
+                assert item.kind == ("interpretation" if source.kind == "conclusion" else "observation")
+            elif path.startswith("meaning.factual_observations["):
+                index = int(path.split("[")[1].rstrip("]"))
+                source = analysis.meaning.factual_observations[index]
+                assert item.evidence == source.evidence
+                assert item.text == source.text
+                assert item.kind == "observation"
+            else:
+                assert path in {"phase_analysis.efforts", "phase_analysis.recoveries"}
+                rows = getattr(analysis.phase_analysis, path.split(".")[1])
+                assert item.evidence["count"] == len(rows)
+                assert item.evidence["duration_s"] == rows[0].duration_s
+                assert item.kind == "observation"
         assert all(math.isfinite(number) for number in item.evidence.values())
         # Only already computed observations, never an invented scientific conclusion.
         assert all(word not in item.text.lower() for word in (
@@ -65,6 +85,12 @@ def test_five_sessions_are_deterministic_traceable_and_compatible(date, language
             "cardiac efficiency", "efficacité cardiaque", "eficiencia cardíaca",
         ))
     old_payload = deepcopy(payload)
+    if old_payload["session_synthesis"]["primary"]:
+        old_payload["session_synthesis"]["primary"].pop("kind")
+    for item in old_payload["session_synthesis"]["supporting"]:
+        item.pop("kind")
+    old_analysis = WorkoutAnalysisV2Response.model_validate(old_payload)
+    assert all(item.kind == "observation" for item in items(old_analysis))
     del old_payload["session_synthesis"]
     assert WorkoutAnalysisV2Response.model_validate(old_payload).session_synthesis is None
 
@@ -75,6 +101,7 @@ def test_ordinary_unknown_structure_has_contextual_history_not_a_fitness_verdict
     primary = analysis.session_synthesis.primary
     assert not analysis.signals.session_structure.available
     assert primary.code == "coach.history.pace"
+    assert primary.kind == "observation"
     similar = analysis.comparison.similar
     assert primary.evidence["pace_sample_count"] == similar.pace_sample_count == 2
     # Reuse V2's two-decimal minute rounding, not a second historical calculation.
@@ -88,14 +115,15 @@ def test_ordinary_unknown_structure_has_contextual_history_not_a_fitness_verdict
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_05_10_and_26_09_only_report_known_totals_without_manufactured_history(language):
+def test_05_10_and_26_09_abstain_instead_of_repeating_displayed_totals(language):
     for date, distance in (("2026-10-05", 8.44), ("2026-09-26", 10.4)):
         analysis = analyze(date, language)
-        primary = analysis.session_synthesis.primary
-        assert primary.code == "synthesis.recorded_totals"
-        assert primary.evidence["distance_km"] == distance
+        assert SESSIONS[date]["distance_km"] == distance
+        assert analysis.session_synthesis.status == "insufficient"
+        assert analysis.session_synthesis.primary is None
         assert analysis.session_synthesis.supporting == []
-    assert "duration_minutes" not in analyze("2026-10-05").session_synthesis.primary.evidence
+        assert analysis.session_synthesis.limitations == []
+        assert analysis.session_synthesis.abstention
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -106,8 +134,10 @@ def test_intervals_prioritize_existing_repetition_judgment_and_recorded_recoveri
     assert selected[0].code == conclusion.code == "coach.repetitions.pace_hr"
     assert selected[0].text == conclusion.text
     assert selected[0].evidence == conclusion.evidence
+    assert selected[0].kind == ("interpretation" if conclusion.kind == "conclusion" else "observation")
     assert selected[1].code == "fact.recoveries"
     assert selected[1].evidence == {"count": 4, "duration_s": 180}
+    assert selected[1].kind == "observation"
     assert selected[0].evidence["heart_rate_change_bpm"] == 8
     assert "4 × 3 min" in selected[1].text
     assert not any(item.code in ("fact.effort_hr_evolution", "fact.effort_extremes",
@@ -157,6 +187,7 @@ def test_approved_execution_precedes_history_without_duplicate_pacing(language):
     assert analysis.session_synthesis.primary.evidence["second_half_pace_change_sec_per_km"] == 60
     assert "fact.pace_change" in analysis.session_synthesis.primary.replaces_factual_codes
     assert analysis.meaning.factual_observations  # Legacy facts are not removed.
+    assert analysis.session_synthesis.primary.kind == "interpretation"
 
 
 @pytest.mark.parametrize("number", [None, True, float("nan"), float("inf"), "0"])
@@ -172,6 +203,10 @@ def test_zero_is_not_missing_and_locales_are_distinct():
     assert item.evidence == {"change": 0}
     texts = [analyze("2026-10-12", language).session_synthesis.primary.text for language in LANGUAGES]
     assert len(set(texts)) == 3
+    assert item.kind == "observation"
+    legacy = item.model_dump()
+    legacy.pop("kind")
+    assert SessionSynthesisItem.model_validate(legacy).kind == "observation"
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -212,3 +247,45 @@ def test_rejected_pace_population_does_not_hide_independently_proven_hr(language
     assert primary.evidence["hr_sample_count"] == 2
     assert primary.evidence["baseline_heart_rate_bpm"] == 131.5
     assert primary.source_paths == ["coach_language.conclusions[0]"]
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("metrics", [
+    {"distance_km": 8.44}, {"duration_minutes": 42},
+    {"avg_pace_min_km": 7.2}, {"avg_heart_rate": 129},
+    {"distance_km": 10.4, "duration_minutes": 68.3,
+     "avg_pace_min_km": 6.6, "avg_heart_rate": 134},
+])
+def test_metrics_alone_never_become_a_synthesis(language, metrics):
+    analysis = build_workout_analysis_v2(
+        dict(id="synthetic-totals-only", type="run", date="2026-10-05", **metrics), [], language,
+    )
+    assert analysis.session_synthesis.status == "insufficient"
+    assert items(analysis) == []
+    assert analysis.session_synthesis.abstention
+
+
+def test_removed_totals_cannot_be_reintroduced_by_context_candidates():
+    totals = SessionSynthesisItem(code="synthesis.recorded_totals", text="8.44 km",
+                                 evidence={"distance_km": 8.44}, source_paths=["summary"])
+    synthesis = build_session_synthesis(
+        CoachLanguageV1(), [], [(100, "totals", totals)], {}, "en",
+    )
+    assert synthesis.status == "insufficient"
+    assert synthesis.primary is None
+
+
+def test_item_kind_cannot_claim_an_unsupported_training_judgment():
+    with pytest.raises(ValidationError):
+        SessionSynthesisItem(code="test", text="test", kind="training_judgment",
+                             evidence={"count": 4}, source_paths=["phase_analysis.efforts"])
+
+
+def test_single_continuous_phase_does_not_repackage_total_duration_as_repetitions():
+    workout = dict(id="synthetic-single-phase", type="run", date="2026-10-05",
+                   distance_km=8, duration_minutes=48, avg_pace_min_km=6)
+    phase = ActivityPhase(order=0, phase_type="effort", source="synthetic",
+                          duration_s=2880, distance_m=8000)
+    analysis = build_workout_analysis_v2(workout, [], phases=[phase])
+    assert analysis.signals.session_structure.code == "continuous"
+    assert analysis.session_synthesis.status == "insufficient"
