@@ -567,6 +567,7 @@ def test_canonical_signal_handoff_keeps_exact_serialized_api_fields():
     assert set(payload) == {
         "version", "workout", "summary", "signals", "physiology", "pacing", "comparison",
         "meaning", "advice", "evidence", "limitations", "phase_analysis", "coach_language",
+        "session_synthesis",
     }
     assert set(payload["signals"]["session_structure"]) == {
         "available", "code", "text", "reason_unavailable",

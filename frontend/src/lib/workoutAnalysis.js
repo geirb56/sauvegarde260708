@@ -17,6 +17,43 @@ export const hasCoachObservation = (analysis) =>
   && typeof analysis.advice.text === "string"
   && analysis.advice.text.trim().length > 0;
 
+export const getSessionSynthesis = (analysis) => {
+  const synthesis = analysis?.session_synthesis;
+  const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const isText = (value) => typeof value === "string" && value.trim().length > 0;
+  const isPaths = (value) => Array.isArray(value) && value.length > 0 && value.every(isText);
+  const isItem = (item) => isRecord(item)
+    && isText(item.code) && isText(item.text)
+    && (item.kind === undefined || ["observation", "interpretation"].includes(item.kind))
+    && isRecord(item.evidence) && Object.keys(item.evidence).length > 0
+    && Object.values(item.evidence).every(Number.isFinite)
+    && isPaths(item.source_paths)
+    && Array.isArray(item.replaces_factual_codes) && item.replaces_factual_codes.every(isText);
+  if (!isRecord(synthesis) || synthesis.version !== "v2"
+    || !["available", "insufficient"].includes(synthesis.status)
+    || !Array.isArray(synthesis.supporting) || synthesis.supporting.length > 2
+    || !synthesis.supporting.every(isItem)
+    || !Array.isArray(synthesis.limitations)
+    || !synthesis.limitations.every((item) => isRecord(item)
+      && isText(item.code) && isText(item.text)
+      && Array.isArray(item.source_paths) && item.source_paths.every(isText))) return null;
+  if (synthesis.status === "available") {
+    if (!isItem(synthesis.primary) || synthesis.abstention !== null) return null;
+  } else if (synthesis.primary !== null || synthesis.supporting.length > 0 || !isText(synthesis.abstention)) {
+    return null;
+  }
+  const items = [
+    ...(synthesis.primary ? [synthesis.primary] : []),
+    ...synthesis.supporting,
+    ...synthesis.limitations,
+  ];
+  const codes = items.map((item) => item.code.trim());
+  const texts = items.map((item) => item.text.trim());
+  if (new Set(codes).size !== codes.length || new Set(texts).size !== texts.length
+    || (synthesis.abstention !== null && texts.includes(synthesis.abstention.trim()))) return null;
+  return synthesis;
+};
+
 export const getCoachConclusions = (analysis) => {
   if (analysis?.coach_language?.version !== "v1"
     || !Array.isArray(analysis.coach_language.conclusions)) return [];

@@ -537,11 +537,16 @@ def _history_choice(workout, similar, session_structure, environment=None):
             scopes[metric] = "strong"
         elif comparability in {"strong", "distance_only"}:
             scopes[metric] = "distance_only"
+    admissible = []
     for scope in ("strong", "distance_only"):
         for metric in ("pace", "hr"):
             if scopes.get(metric) == scope and _history_metric_admissible(workout, similar, metric):
-                return metric, scope
-    return None
+                admissible.append((metric, scope))
+    # Keep a usable metric when the independent population of the preferred
+    # metric lacks environmental proof. Missing types retain the legacy output;
+    # Session Synthesis additionally requires this proof for every history item.
+    proven = [choice for choice in admissible if environment.get(choice[0]) == "same_known"]
+    return (proven or admissible)[0] if admissible else None
 
 
 def build_coach_language(workout, phase_analysis, comparison, cohort, basis, comparable, language="en",

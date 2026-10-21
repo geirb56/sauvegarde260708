@@ -8,7 +8,7 @@ import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotic
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getSessionSynthesis } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
@@ -182,10 +182,21 @@ export default function WorkoutDetail() {
   const hasWorkoutPace = hasPositiveFiniteMetric(workout.avg_pace_min_km);
   const hasAnalysis = Boolean(analysisForRender);
   const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
-  const coachConclusions = getCoachConclusions(analysisForRender);
-  const coachObservation = getDistinctCoachObservation(analysisForRender);
-  const observations = getAnalysisObservations(analysisForRender);
-  const fallback = getAnalysisFallback(analysisForRender, t);
+  const synthesis = getSessionSynthesis(analysisForRender);
+  const synthesisItems = synthesis
+    ? [synthesis.primary, ...synthesis.supporting].filter((item) =>
+      item && !["synthesis.recorded_totals", "recorded_totals"].includes(item.code.trim()))
+    : [];
+  const [synthesisPrimary, ...synthesisSupport] = synthesisItems;
+  const synthesisLimitations = synthesis?.limitations || [];
+  const hasAvailableSynthesis = synthesis?.status === "available" && synthesisItems.length > 0;
+  const synthesisLabel = (item) => item.kind
+    ? <span className="block text-xs text-muted-foreground">{t(`workoutDetailExtended.synthesis${item.kind === "interpretation" ? "Interpretation" : "Observation"}`)}</span>
+    : null;
+  const coachConclusions = synthesis ? [] : getCoachConclusions(analysisForRender);
+  const coachObservation = synthesis ? null : getDistinctCoachObservation(analysisForRender);
+  const observations = synthesis ? [] : getAnalysisObservations(analysisForRender);
+  const fallback = synthesis ? null : getAnalysisFallback(analysisForRender, t);
   const classification = getSessionClassification(analysisForRender, t);
   const intensity = analysisForRender?.signals?.intensity;
 
@@ -238,6 +249,28 @@ export default function WorkoutDetail() {
       </Card>
       </section>
 
+      {hasAvailableSynthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
+        <h2 id="session-synthesis-title" className="text-base font-semibold">{t("workoutDetailExtended.sessionSynthesis")}</h2>
+        <p className="text-sm leading-relaxed" data-testid="synthesis-primary">{synthesisLabel(synthesisPrimary)}<strong>{synthesisPrimary.text}</strong></p>
+        {synthesisSupport.map((item) => <p key={item.code} className="text-sm leading-relaxed" data-testid="synthesis-supporting">{synthesisLabel(item)}{item.text}</p>)}
+        {synthesisLimitations.length > 0 && <div>
+          <h3 className="text-sm font-semibold">{t("workoutDetailExtended.synthesisLimitations")}</h3>
+          <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
+            {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
+          </ul>
+        </div>}
+      </section>}
+      {synthesis && !hasAvailableSynthesis && <>
+        <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
+          {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
+        </p>
+        {synthesisLimitations.length > 0 && <div>
+          <h3 className="text-sm font-semibold">{t("workoutDetailExtended.synthesisLimitations")}</h3>
+          <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
+            {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
+          </ul>
+        </div>}
+      </>}
       {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
