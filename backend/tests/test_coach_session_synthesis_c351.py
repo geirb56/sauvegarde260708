@@ -189,3 +189,26 @@ def test_hr_only_history_keeps_its_own_population_and_explicit_scope(language):
         "synthesis.history_descriptive", "synthesis.hr_observation",
     ]
     assert "127" in primary.text and "131.5" in primary.text
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("unproven_type", [None, "treadmill_running"])
+def test_rejected_pace_population_does_not_hide_independently_proven_hr(language, unproven_type):
+    current = {**SESSIONS["2026-10-12"], "session_structure": "continuous", "is_race": False}
+    history = [{**SESSIONS[day], "session_structure": "continuous", "is_race": False}
+               for day in ("2026-09-26", "2026-10-05")]
+    # An additional, explicitly synthetic pace-only reference contaminates only
+    # the pace environment. Its missing HR must not invalidate the HR population.
+    history.append({**history[0], "id": "synthetic-pace-only", "date": "2026-10-01",
+                    "avg_heart_rate": None})
+    types = {row["id"]: "running" for row in [current, *history[:2]]}
+    if unproven_type:
+        types[history[2]["id"]] = unproven_type
+    analysis = build_workout_analysis_v2(current, history, language, activity_types=types)
+    assert analysis.comparison.similar.pace_sample_count == 3
+    assert analysis.comparison.similar.hr_sample_count == 2
+    primary = analysis.session_synthesis.primary
+    assert primary.code == "coach.history.hr"
+    assert primary.evidence["hr_sample_count"] == 2
+    assert primary.evidence["baseline_heart_rate_bpm"] == 131.5
+    assert primary.source_paths == ["coach_language.conclusions[0]"]
