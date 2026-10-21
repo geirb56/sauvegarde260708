@@ -646,3 +646,82 @@ def test_cache_only_phase_loader_does_not_enqueue_or_fetch_provider_data():
     assert "request_activity_details" not in source
     assert "fetch_activity_details" not in source
     assert "get_provider_for_user" not in source
+
+
+# ── C354: Garmin historical phase normalization on read ──────────────────────
+from activity_phases import GARMIN_NATIVE_PHASE_TYPES  # noqa: E402
+from garmin.data_layer import normalize_typed_splits  # noqa: E402
+from workout_analysis_v2_service import _cached_activity_phases  # noqa: E402
+
+
+def _row(order, native_type, phase_type, duration=180, **extra):
+    row = {
+        "order": order, "native_type": native_type, "phase_type": phase_type,
+        "duration_s": duration, "distance_m": None, "average_speed_mps": None,
+        "average_hr": None, "max_hr": None, "min_hr": None, "source": "garmin",
+    }
+    row.update(extra)
+    return row
+
+
+def _activity_with(rows):
+    return {"activity_details": _cached_details(rows)}
+
+
+def test_c354_historical_interval_rest_persisted_unknown_is_read_as_recovery():
+    rows = [_row(0, "INTERVAL_REST", "unknown", 180)]
+    activity = _activity_with(rows)
+    phases = _cached_activity_phases(activity)
+    assert [phase.model_dump() for phase in phases] == [{
+        "order": 0, "native_type": "INTERVAL_REST", "phase_type": "recovery",
+        "duration_s": 180, "distance_m": None, "average_speed_mps": None,
+        "average_hr": None, "max_hr": None, "min_hr": None, "source": "garmin",
+    }]
+    # The persisted document is never rewritten.
+    assert activity["activity_details"]["phases"][0]["phase_type"] == "unknown"
+
+
+@pytest.mark.parametrize("native_type,phase_type", sorted(GARMIN_NATIVE_PHASE_TYPES.items()))
+def test_c354_already_normalized_phases_are_unchanged(native_type, phase_type):
+    row = _row(0, native_type, phase_type, 240, distance_m=800, average_speed_mps=3.3,
+               average_hr=150, max_hr=160, min_hr=140)
+    (phase,) = _cached_activity_phases(_activity_with([row]))
+    assert phase.model_dump() == row
+
+
+def test_c354_shared_mapping_matches_import_normalization():
+    expected = {
+        "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery", "INTERVAL_REST": "recovery",
+        "INTERVAL_WARMUP": "warmup", "INTERVAL_COOLDOWN": "cooldown",
+    }
+    assert GARMIN_NATIVE_PHASE_TYPES == expected
+    imported = normalize_typed_splits({"splits": [{"type": key} for key in expected]})
+    assert [row["phase_type"] for row in imported] == list(expected.values())
+
+
+@pytest.mark.parametrize("native_type", [None, "INTERVAL_OTHER", "interval_rest", "RUN", ""])
+@pytest.mark.parametrize("persisted", ["unknown", "effort", "recovery", "warmup", "cooldown"])
+def test_c354_missing_or_unknown_native_type_keeps_persisted_phase_type(native_type, persisted):
+    (phase,) = _cached_activity_phases(_activity_with([_row(0, native_type, persisted)]))
+    assert phase.phase_type == persisted
+    assert phase.native_type == native_type
+
+
+def test_c354_invalid_persisted_phase_type_is_still_rejected_even_with_known_native_type():
+    assert _cached_activity_phases(_activity_with([_row(0, "INTERVAL_REST", "rest")])) is None
+
+
+def test_c354_scoped_v2_loader_recognizes_historical_rest_recoveries():
+    rows = [_row(0, "INTERVAL_WARMUP", "warmup", 300)]
+    for index, duration in enumerate((72, 180, 180, 180, 247, 60)):
+        rows.append(_row(len(rows), "INTERVAL_ACTIVE", "effort", duration))
+        if index < 5:
+            rows.append(_row(len(rows), "INTERVAL_REST", "unknown", 180))
+    db = _service_db(cached_details=_cached_details(rows))
+    _, analysis = _run(load_scoped_workout_analysis_v2(
+        db=db, user_id="user-a", workout_id="garmin-synthetic-activity", language="en",
+    ))
+    pa = analysis.phase_analysis
+    assert len(pa.phases) == 12 and len(pa.efforts) == 6 and len(pa.recoveries) == 5
+    assert [p.duration_s for p in pa.phases] == [row["duration_s"] for row in rows]
+    assert analysis.signals.session_structure.code == "intervals"

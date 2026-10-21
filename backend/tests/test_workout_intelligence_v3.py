@@ -1023,3 +1023,52 @@ def test_v3_api_endpoint_is_additive():
         with pytest.raises(HTTPException) as missing:
             asyncio.run(server.get_workout_intelligence_v3("nope", "en", {"id": "user-a"}))
     assert missing.value.status_code == 404
+
+
+# ── C354: historical INTERVAL_REST persisted as "unknown" (19 Sept shape) ────
+# SYNTHETIC reconstruction of the stored structure: 1 warm-up, 6 active
+# phases, 5 INTERVAL_REST phases persisted before #353 as "unknown".
+
+
+def _c354_historical_rows():
+    rows = [{"order": 0, "native_type": "INTERVAL_WARMUP", "phase_type": "warmup", "duration_s": 300}]
+    for index, duration in enumerate((72, 180, 180, 180, 247, 60)):
+        rows.append({"order": len(rows), "native_type": "INTERVAL_ACTIVE", "phase_type": "effort",
+                     "duration_s": duration})
+        if index < 5:
+            rows.append({"order": len(rows), "native_type": "INTERVAL_REST", "phase_type": "unknown",
+                         "duration_s": 180})
+    for row in rows:
+        row.update({"distance_m": None, "average_speed_mps": None, "average_hr": None,
+                    "max_hr": None, "min_hr": None, "source": "garmin"})
+    return rows
+
+
+def test_c354_historical_rest_phases_reach_v2_and_v3_through_cached_reader():
+    rows = _c354_historical_rows()
+    current = _w("cur", CURRENT_DAY, hr=139, pace=6 + 38 / 60, distance=5.63,
+                 duration=sum(row["duration_s"] for row in rows) / 60, max_hr=None, continuous=False)
+    db = _db(current, _flat_history(), phases=[])
+    current_activity = next(doc for doc in db.garmin_activities.docs if doc["external_id"] == "cur")
+    current_activity["activity_details"]["phases"] = rows
+
+    phases = wiv3_service._cached_activity_phases(current_activity)
+    assert [p.order for p in phases] == list(range(12))
+    assert [p.duration_s for p in phases] == [row["duration_s"] for row in rows]
+    assert sum(p.phase_type == "recovery" for p in phases) == 5
+    assert all(row["phase_type"] != "recovery" for row in rows)  # stored rows untouched
+
+    workout, result = asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3(
+        db=db, user_id="user-a", workout_id="cur", language="en"))
+    assert workout["id"] == "cur"
+    v2 = build_workout_analysis_v2(current, [], phases=phases)
+    assert len(v2.phase_analysis.phases) == 12
+    assert len(v2.phase_analysis.efforts) == 6
+    assert len(v2.phase_analysis.recoveries) == 5
+    assert v2.signals.session_structure.code == "intervals"
+    cls = result.session_classification
+    assert cls.type == "intervals"
+    assert cls.evidence == {"effort_count": 6.0, "recovery_count": 5.0}
+    # No pace on efforts → regularity unavailable → medium (never forced to high).
+    assert cls.confidence == "medium"
+    assert result.coach_assessment.diagnosis.code == "diagnosis.intervals"
