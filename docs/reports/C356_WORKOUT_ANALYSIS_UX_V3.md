@@ -5,9 +5,11 @@
 - Base : `copilot/dev`, `ee0109efe6f614136bf7aee98e409b70d73858ef` (merge C355).
 - Branche de livraison : `copilot/c356-workout-analysis-ux-v3`.
 - HEAD d'intégration soumis à la revue et à CodeQL : `bb66a394d12e35eb442b7fb119bbdac597865eb4`.
-- HEAD du code validé par les tests définitifs : `a06fa80dd97df1cba00d100b70e1cde3cad9fbdf`
+- HEAD du code livré : `584fd8f403481de0ce4b518abf3c9f48763b4982`
   (même arbre frontend que les tests finaux ; les commits de rapport ultérieurs ne
   modifient pas ce code).
+- Suite complète et build finaux validés sur
+  `584fd8f403481de0ce4b518abf3c9f48763b4982`, y compris la correction du libellé d'erreur.
 - Frontend uniquement, hors présent rapport et fixtures/tests de présentation.
 - Aucun changement des moteurs V2/V3, de prescription, des seuils, des abonnements ou des données.
 - Aucun accès MongoDB, appel Garmin/GCCLI, déploiement ou merge.
@@ -101,9 +103,16 @@ Validation de l'intégration, depuis `frontend/` :
 | Commande | Résultat |
 | --- | --- |
 | `CI=true npm test -- --watchAll=false --runInBand --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/workout-analysis-v3-pages.test.jsx` | **765/765 tests**, 2/2 suites |
-| `CI=true npm test -- --watchAll=false --forceExit --runInBand` | **1 392/1 392 tests**, 37/37 suites ; dernier passage sur le code `a06fa80` : 68,794 s |
+| `CI=true npm test -- --watchAll=false --forceExit --runInBand` | **1 392/1 392 tests**, 37/37 suites ; dernier passage sur le code `584fd8f` : 70,224 s |
 | `npm run build` | **Compilation de production réussie** |
 | `git diff --check` | Aucun problème d'espacement |
+
+Après la dernière correction de libellé (séance connue, analyse indisponible et non
+« séance introuvable »), les deux suites V2/V3 ont été réexécutées :
+**765/765 tests réussis**, 2/2 suites (12,654 s). Les deux attentes directement liées
+à ce libellé ont été adaptées ; le véritable état « séance introuvable » est inchangé.
+La suite complète et le build ont ensuite été relancés sur ce même code final :
+**37/37 suites, 1 392/1 392 tests et compilation réussis**.
 
 Le fichier V3 contient **138 cas** : les trois pages en FR/EN/ES, fractionné avec/sans
 dispersion démontrée, footing probable et référence relative sans zone physiologique,
@@ -125,6 +134,11 @@ ni aucune assertion métier affaiblie.
   (`autofind` absent) : son statut « Success » ne prouve pas une revue exécutée.
   Revue indépendante du diff par agent read-only effectuée en complément :
   **aucun problème significatif identifié**.
+- Dernier appel `parallel_validation` sur `584fd8f403481de0ce4b518abf3c9f48763b4982` :
+  **CodeQL a expiré** ; aucun résultat final de scan n'est revendiqué pour ce SHA.
+  Les deux scans précédents restent à **0 alerte**. L'outil demande de ne pas réessayer
+  dans cette session. Le seul delta applicatif depuis le dernier scan réussi est le
+  libellé localisé de l'erreur d'analyse ; validation CodeQL finale à obtenir avant merge.
 - Scans de secrets des sources modifiées, tests, rapport et mesures JSON :
   **aucun secret détecté**.
 
@@ -194,9 +208,10 @@ graphique humaine exhaustive n'est revendiquée. Les captures restent à examine
 
 ## 10. Verdict
 
-**GO conditionnel** pour revue de la PR brouillon : tests, build et contrôles de sécurité
-réussis. Conditions avant merge : revue humaine des captures, essai authentifié sur
-les séances Garmin réelles citées et acceptation des limites rédactionnelles C357.
+**GO conditionnel** pour revue de la PR brouillon : tests et build réussis, scans de
+secrets négatifs et deux scans CodeQL précédents sans alerte. Conditions avant merge :
+résultat CodeQL final après expiration du dernier passage, revue humaine des captures,
+essai authentifié sur les séances Garmin réelles citées et acceptation des limites C357.
 L'outil de revue intégré indisponible est explicitement compensé par une revue read-only
 indépendante, sans être présenté comme un succès de cet outil.
 
