@@ -23,6 +23,7 @@ import logging
 from typing import Any, Optional
 
 from garmin.domain_adapter import garmin_local_start_time
+from narrative_coach_v3_models import NarrativeCoachV3
 from training_v2.prescription_snapshot import PrescriptionSnapshot
 from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
@@ -77,6 +78,29 @@ async def load_scoped_workout_intelligence_v3(
     physiological_metrics: Optional[dict] = None,
     user_profile: Optional[dict] = None,
 ) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3]]]:
+    result = await _load_scoped_workout_intelligence_v3(
+        db=db, user_id=user_id, workout_id=workout_id, language=language,
+        physiological_metrics=physiological_metrics, user_profile=user_profile,
+    )
+    return result[:2] if result is not None else None
+
+
+async def load_scoped_workout_intelligence_v3_with_narrative(
+    *, db: Any, user_id: str, workout_id: str, language: str,
+) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3]]:
+    """Reuse the same scoped evidence load; narrative failures cannot hide facts."""
+    return await _load_scoped_workout_intelligence_v3(
+        db=db, user_id=user_id, workout_id=workout_id, language=language,
+        include_narrative=True,
+    )
+
+
+async def _load_scoped_workout_intelligence_v3(
+    *, db: Any, user_id: str, workout_id: str, language: str,
+    physiological_metrics: Optional[dict] = None,
+    user_profile: Optional[dict] = None,
+    include_narrative: bool = False,
+) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3]]:
     workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if workout is None:
         return None
@@ -95,6 +119,7 @@ async def load_scoped_workout_intelligence_v3(
                 local_start = garmin_local_start_time(activity_doc)
                 local_date = local_start[:10] if local_start and len(local_start) >= 10 else None
 
+    v2_analysis = None
     try:
         lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
             workout.get("date", ""), days=SIMILAR_HISTORY_WINDOW_DAYS,
@@ -148,4 +173,26 @@ async def load_scoped_workout_intelligence_v3(
     except Exception:
         logger.exception("Workout Intelligence V3 unavailable for workout_id=%s", workout_id)
         intelligence = None
-    return workout, intelligence
+    narrative = NarrativeCoachV3(language=language if language in {"fr", "en", "es"} else "en")
+    if include_narrative and intelligence is not None:
+        try:
+            from narrative_coach_v3 import generate_narrative_coach_v3
+
+            narrative = await generate_narrative_coach_v3(
+                intelligence, language,
+                phase_analysis=v2_analysis.phase_analysis if v2_analysis is not None else None,
+                coach_language=v2_analysis.coach_language if v2_analysis is not None else None,
+            )
+        except Exception:
+            logger.exception("Narrative coach unavailable; factual V3 preserved")
+            try:
+                from narrative_coach_v3 import deterministic_fallback
+
+                narrative = deterministic_fallback(
+                    intelligence, language,
+                    phase_analysis=v2_analysis.phase_analysis if v2_analysis is not None else None,
+                    coach_language=v2_analysis.coach_language if v2_analysis is not None else None,
+                )
+            except Exception:
+                logger.exception("Narrative fallback unavailable; factual V3 preserved")
+    return workout, intelligence, narrative
