@@ -1,0 +1,66 @@
+{
+  "provenance": {
+    "classification": "Repository-grounded synthetic fixtures, NOT Mongo/Garmin runtime validation.",
+    "base": "67083369b22adec6d77adafbeb9fd5996424f068",
+    "2026-10-05": "Distance/date from C351 request; pace and HR from test_historical_comparability_c349b.py::test_runtime_like_footings_without_metadata_have_explicit_scope. Duration, phases and splits unknown, intentionally omitted.",
+    "2026-09-26": "Distance/date from C351 request; duration, pace and HR copied from synthetic garmin_activities prior-0926 in test_coach_context_v2.py::test_selected_workout_recent_history_uses_strict_prior_timestamp_cutoff. No empirical provenance claimed.",
+    "2026-10-12": "Distance/date from C351 request; remaining measured inputs copied from test_descriptive_history_c350.py::current. No phases, no inferred continuous structure.",
+    "2026-10-10": "4 x 4 min from C351 request; workout and effort/recovery inputs copied from test_workout_analysis_v2_unified.py::reference_workout/reference_phases, explicitly synthetic.",
+    "2026-10-19": "Date/treadmill/limited-data from C351 request. No verified real distance, duration, pace or HR available: omitted instead of borrowing C350's synthetic 5 km/35 min.",
+    "activity_types": "Explicit synthetic comparability inputs for tests only, not assertions about live Garmin documents.",
+    "history": "Only earlier fixtures from this file are supplied. Missing metrics stay missing; no extra historical references are fabricated."
+  },
+  "sessions": [
+    {
+      "id": "c351-0926",
+      "name": "26/09/2026",
+      "date": "2026-09-26",
+      "type": "run",
+      "distance_km": 10.4,
+      "duration_minutes": 68.33333333333333,
+      "avg_pace_min_km": 6.6,
+      "avg_heart_rate": 134
+    },
+    {
+      "id": "c351-1005",
+      "name": "05/10/2026",
+      "date": "2026-10-05",
+      "type": "run",
+      "distance_km": 8.44,
+      "avg_pace_min_km": 7.183333333333334,
+      "avg_heart_rate": 129
+    },
+    {
+      "id": "c351-1010",
+      "name": "10/10/2026",
+      "date": "2026-10-10",
+      "type": "run",
+      "distance_km": 14.26,
+      "duration_minutes": 80,
+      "max_heart_rate": 175
+    },
+    {
+      "id": "c351-1012",
+      "name": "12/10/2026",
+      "date": "2026-10-12",
+      "type": "run",
+      "distance_km": 9.33,
+      "duration_minutes": 68.6,
+      "avg_pace_min_km": 7.35,
+      "avg_heart_rate": 127
+    },
+    {
+      "id": "c351-1019",
+      "name": "19/10/2026",
+      "date": "2026-10-19",
+      "type": "run"
+    }
+  ],
+  "interval_efforts": [
+    {"duration_s": 240, "distance_m": 832.07, "average_hr": 151},
+    {"duration_s": 240, "distance_m": 851.11, "average_hr": 157},
+    {"duration_s": 240, "distance_m": 885.81, "average_hr": 159},
+    {"duration_s": 240, "distance_m": 825.41, "average_hr": 159}
+  ],
+  "interval_recovery": {"duration_s": 180, "distance_m": 400, "average_hr": 140}
+}

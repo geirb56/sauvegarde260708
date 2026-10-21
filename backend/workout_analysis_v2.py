@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from activity_phases import ActivityPhase
 from coach_language import CoachLanguageV1, build_coach_language
+from coach_session_synthesis import (
+    CoachSessionSynthesisV2, SessionSynthesisItem, build_session_synthesis,
+)
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
@@ -245,6 +248,7 @@ class WorkoutAnalysisV2Response(BaseModel):
     limitations: List[AnalysisText] = Field(default_factory=list)
     phase_analysis: WorkoutAnalysisPhaseAnalysis = Field(default_factory=WorkoutAnalysisPhaseAnalysis)
     coach_language: Optional[CoachLanguageV1] = None
+    session_synthesis: Optional[CoachSessionSynthesisV2] = None
 
     @field_validator("meaning", mode="before")
     @classmethod
@@ -1955,6 +1959,14 @@ def _phase_number(value: float, digits: int, language: str) -> str:
     return formatted.replace(".", ",") if _lang(language) in {"fr", "es"} else formatted
 
 
+def _equal_phase_duration(rows):
+    durations = [phase.duration_s for phase in rows]
+    if durations and all(_valid_positive_number(value) for value in durations):
+        if all(math.isclose(value, durations[0], abs_tol=1) for value in durations):
+            return durations[0]
+    return None
+
+
 def _phase_observations(
     phases: WorkoutAnalysisPhaseAnalysis, structure: WorkoutAnalysisSignal, language: str,
 ) -> Dict[str, List[str]]:
@@ -1970,12 +1982,11 @@ def _phase_observations(
     for rows, key in (
         (phases.efforts, "fact.repetitions"), (phases.recoveries, "fact.recoveries"),
     ):
-        durations = [phase.duration_s for phase in rows]
-        if durations and all(_valid_positive_number(value) for value in durations):
-            if all(math.isclose(value, durations[0], abs_tol=1) for value in durations):
-                duration_facts.append(_template(
-                    language, key, count=len(rows), duration=_phase_number(durations[0] / 60, 2, language),
-                ))
+        duration = _equal_phase_duration(rows)
+        if duration is not None:
+            duration_facts.append(_template(
+                language, key, count=len(rows), duration=_phase_number(duration / 60, 2, language),
+            ))
     if phases.efforts or phases.recoveries:
         if len(duration_facts) < bool(phases.efforts) + bool(phases.recoveries):
             essential.append(_template(
@@ -2153,6 +2164,47 @@ def _build_factual_observations(
     return facts
 
 
+def _synthesis_context(workout, phases, physiology, language):
+    """Expose recorded context without promoting totals to an execution judgment."""
+    candidates = []
+    for rows, code, category, priority in (
+        (phases.efforts, "fact.repetitions", "repetitions", 37),
+        (phases.recoveries, "fact.recoveries", "recoveries", 39),
+    ):
+        duration = _equal_phase_duration(rows)
+        if duration is not None:
+            candidates.append((priority, category, SessionSynthesisItem(
+                code=code, text=_template(
+                    language, code, count=len(rows),
+                    duration=_phase_number(duration / 60, 2, language),
+                ),
+                evidence={"count": len(rows), "duration_s": duration},
+                source_paths=[f"phase_analysis.{'efforts' if category == 'repetitions' else 'recoveries'}"],
+            )))
+    distance = _usable_metric(workout, "distance_km")
+    duration = _usable_metric(workout, "duration_minutes")
+    evidence = {}
+    if distance is not None and duration is not None:
+        text = _template(language, "fact.distance_duration",
+                         distance=_fmt_distance(distance), duration=_fmt_duration(duration))
+        evidence = {"distance_km": distance, "duration_minutes": duration}
+    elif distance is not None:
+        text = _template(language, "fact.phase_distance", distance=_phase_number(distance, 2, language))
+        evidence = {"distance_km": distance}
+    elif duration is not None:
+        text = _template(language, "fact.duration_only", duration=_fmt_duration(duration))
+        evidence = {"duration_minutes": duration}
+    elif _valid_positive_number(physiology.avg_hr):
+        text = _template(language, "fact.hr_avg", avg_hr=physiology.avg_hr)
+        evidence = {"avg_heart_rate": physiology.avg_hr}
+    if evidence:
+        candidates.append((100, "totals", SessionSynthesisItem(
+            code="synthesis.recorded_totals", text=text, evidence=evidence,
+            source_paths=["summary", "physiology"],
+        )))
+    return candidates
+
+
 def build_workout_analysis_v2(
     workout: dict,
     historical_workouts: List[dict],
@@ -2196,6 +2248,13 @@ def build_workout_analysis_v2(
             for phase in phase_analysis.phases
         ),
     )
+    history_environment = _history_environment(workout, historical_workouts, activity_types)
+    coach_language = build_coach_language(
+        workout, phase_analysis, comparison, *_effort_comparison_cohort(phase_analysis.efforts),
+        _efforts_comparable, _lang(language),
+        session_structure=signals.session_structure,
+        history_environment=history_environment,
+    )
     return WorkoutAnalysisV2Response(
         workout=WorkoutAnalysisWorkout(
             id=workout.get("id", ""),
@@ -2213,10 +2272,10 @@ def build_workout_analysis_v2(
         evidence=evidence,
         limitations=_build_limitations(workout, signals, comparison, evidence, language, phase_analysis),
         phase_analysis=phase_analysis,
-        coach_language=build_coach_language(
-            workout, phase_analysis, comparison, *_effort_comparison_cohort(phase_analysis.efforts),
-            _efforts_comparable, _lang(language),
-            session_structure=signals.session_structure,
-            history_environment=_history_environment(workout, historical_workouts, activity_types),
+        coach_language=coach_language,
+        session_synthesis=build_session_synthesis(
+            coach_language, meaning.factual_observations,
+            _synthesis_context(workout, phase_analysis, physiology, language),
+            history_environment, _lang(language),
         ),
     )
