@@ -198,6 +198,7 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
         raise ValueError("Unsupported typed-splits payload")
     phase_types = {
         "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery",
+        "INTERVAL_REST": "recovery",
         "INTERVAL_WARMUP": "warmup", "INTERVAL_COOLDOWN": "cooldown",
     }
 

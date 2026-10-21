@@ -17,6 +17,7 @@ import pytest
 import workout_intelligence_v3 as wiv3
 import workout_intelligence_v3_service as wiv3_service
 from activity_phases import ACTIVITY_PHASE_SCHEMA_VERSION, ActivityPhase
+from garmin.data_layer import normalize_typed_splits
 from training_v2.prescription_snapshot import PrescriptionSnapshot, is_snapshot_authoritative
 from workout_analysis_v2 import WorkoutAnalysisV2Response, build_workout_analysis_v2
 from workout_intelligence_v3 import (
@@ -170,6 +171,37 @@ def test_intervals_identified_from_reliable_garmin_phases():
     assert result.historical_comparison.status == "not_applicable"
     assert result.performance_trend.status == "insufficient_data"
     assert result.coach_assessment.diagnosis.code == "diagnosis.intervals"
+
+
+@pytest.mark.parametrize("recovery_type", ["INTERVAL_REST", "INTERVAL_RECOVERY"])
+@pytest.mark.parametrize("effort_speed,confidence", [(None, "medium"), (4.0, "high")])
+def test_synthetic_garmin_intervals_through_normalization_v2_and_v3(
+    recovery_type, effort_speed, confidence,
+):
+    rows = [{"type": "INTERVAL_WARMUP", "duration": 300}]
+    for duration in (72, 180, 180, 180, 247):
+        rows.extend([
+            {"type": "INTERVAL_ACTIVE", "duration": duration, "averageSpeed": effort_speed},
+            {"type": recovery_type, "duration": 180},
+        ])
+    rows.append({"type": "INTERVAL_COOLDOWN", "duration": 210})
+    phases = [ActivityPhase(**phase) for phase in normalize_typed_splits({"splits": rows})]
+    current = _w(
+        "synthetic-garmin-intervals", CURRENT_DAY, hr=139, pace=6 + 38 / 60,
+        duration=sum(row["duration"] for row in rows) / 60, distance=5.63,
+        max_hr=None, continuous=False,
+    )
+    v2 = build_workout_analysis_v2(current, [], phases=phases)
+    assert len(v2.phase_analysis.phases) == 12
+    assert len(v2.phase_analysis.efforts) == 5
+    assert len(v2.phase_analysis.recoveries) == 5
+    assert [phase.duration_s for phase in v2.phase_analysis.recoveries] == [180] * 5
+    assert v2.signals.session_structure.code == "intervals"
+    data = extract_workout_intelligence_input(current, [], v2_analysis=v2)
+    result = build_workout_intelligence_v3(data)
+    assert result.session_classification.type == "intervals"
+    assert result.session_classification.confidence == confidence
+    assert result.session_classification.evidence == {"effort_count": 5.0, "recovery_count": 5.0}
 
 
 # 6 ─ Improved pace at comparable HR over several admissible sessions

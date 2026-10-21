@@ -53,6 +53,33 @@ def test_synthetic_parsing_preserves_order_native_types_and_available_metrics():
     assert all(p["source"] == "garmin" for p in phases)
 
 
+@pytest.mark.parametrize("native_type,phase_type", [
+    ("INTERVAL_REST", "recovery"),
+    ("INTERVAL_RECOVERY", "recovery"),
+    ("INTERVAL_ACTIVE", "effort"),
+    ("INTERVAL_WARMUP", "warmup"),
+    ("INTERVAL_COOLDOWN", "cooldown"),
+    ("UNRECOGNIZED", "unknown"),
+])
+def test_typed_split_phase_mapping(native_type, phase_type):
+    phase = normalize_typed_splits({"splits": [{"type": native_type}]})[0]
+    assert phase["phase_type"] == phase_type
+    assert phase["native_type"] == native_type
+
+
+@pytest.mark.parametrize("metrics", [
+    {},
+    {"duration": 180, "distance": 0, "averageSpeed": 0,
+     "averageHR": 139, "maxHR": 145, "minHR": 130},
+])
+def test_interval_rest_matches_recovery_without_changing_native_type(metrics):
+    rest = normalize_typed_splits({"splits": [{"type": "INTERVAL_REST", **metrics}]})[0]
+    recovery = normalize_typed_splits({"splits": [{"type": "INTERVAL_RECOVERY", **metrics}]})[0]
+    assert rest["native_type"] == "INTERVAL_REST"
+    assert recovery["native_type"] == "INTERVAL_RECOVERY"
+    assert {**rest, "native_type": recovery["native_type"]} == recovery
+
+
 @pytest.mark.parametrize("value", [None, True, "240", -1, float("inf"), float("nan"), 10 ** 1000])
 def test_missing_or_invalid_measurements_are_not_fabricated(value):
     phase = normalize_typed_splits({"splits": [{"type": "INTERVAL_ACTIVE", "duration": value}]})[0]
