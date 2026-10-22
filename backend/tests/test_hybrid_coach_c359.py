@@ -162,12 +162,17 @@ async def _paraphrase(system, prompt, user, context_type):
     main = next((key for key in (
         "interval.count", "session.long", "trend.probable_improvement",
         "trend.stable", "trend.possible_decline", "session.unknown",
-        "session.kind", "intensity.position", "intensity.hr",
+        "session.kind", "intensity.position", "intensity.hr", "prescription.review",
     ) if key in by_id), None)
-    supporting = ["intensity.position"] if main in {
-        "session.long", "session.kind", "trend.probable_improvement",
-        "trend.stable", "trend.possible_decline",
-    } and "intensity.position" in by_id else []
+    if main.startswith("trend."):
+        supporting = [
+            fact_id for fact_id in ("session.kind", "intensity.position")
+            if fact_id in by_id
+        ]
+    else:
+        supporting = ["intensity.position"] if main in {
+            "session.long", "session.kind",
+        } and "intensity.position" in by_id else []
     selected = [by_id[key] for key in [main, *supporting]]
     detail = {1: "concise", 2: "balanced", 3: "detailed"}[len(selected)]
     return json.dumps({
@@ -460,7 +465,7 @@ def test_valid_plan_renders_locally_without_accepting_provider_prose():
     claims = hybrid.render_validated_plan(validated, _facts(v3))
     assert len(claims) == 1
     assert claims[0].text.startswith(fact.assertion)
-    assert "La régularité ne peut donc pas être jugée." in claims[0].text
+    assert "sa régularité ne peut pas être jugée." in claims[0].text
     assert "régulières" not in claims[0].text
 
 

@@ -45,8 +45,8 @@ _LIMIT_TEXT = {
         "low_confidence": "La classification reste incertaine.",
         "relative_effort_not_physiological_intensity": "Cette classification est relative à ton historique, pas à une intensité physiologique.",
         "average_not_whole_effort": "Cette moyenne ne décrit pas chaque moment de l'effort.",
-        "no_time_in_zones": "Elle n'indique pas le temps passé dans les zones.",
-        "no_physiological_cause": "Elle n'en établit pas la cause.",
+        "no_time_in_zones": "Elle ne renseigne pas le temps passé dans les zones.",
+        "no_physiological_cause": "Elle n'explique pas pourquoi ta FC moyenne était à ce niveau.",
         "no_physiological_zone": "Cette moyenne seule ne permet pas d'établir une zone physiologique.",
         "unknown_not_easy": "Un type inconnu ne signifie pas que la séance était facile.",
         "missing_average_hr": "Aucune fréquence cardiaque moyenne n'est disponible.",
@@ -66,7 +66,7 @@ _LIMIT_TEXT = {
         "relative_effort_not_physiological_intensity": "This classification is relative to your history, not physiological intensity.",
         "average_not_whole_effort": "This average does not describe every part of the effort.",
         "no_time_in_zones": "It does not show time spent in zones.",
-        "no_physiological_cause": "It does not establish a cause.",
+        "no_physiological_cause": "It does not explain why your average HR was at that level.",
         "no_physiological_zone": "Average HR alone cannot establish a physiological zone.",
         "unknown_not_easy": "An unknown type does not mean the session was easy.",
         "missing_average_hr": "No average heart rate is available.",
@@ -86,7 +86,7 @@ _LIMIT_TEXT = {
         "relative_effort_not_physiological_intensity": "Esta clasificación es relativa a tu historial, no a la intensidad fisiológica.",
         "average_not_whole_effort": "Esta media no describe cada momento del esfuerzo.",
         "no_time_in_zones": "No indica el tiempo pasado en las zonas.",
-        "no_physiological_cause": "No establece la causa.",
+        "no_physiological_cause": "No explica por qué tu FC media estuvo en ese nivel.",
         "no_physiological_zone": "La FC media por sí sola no permite establecer una zona fisiológica.",
         "unknown_not_easy": "Un tipo desconocido no significa que la sesión fuera fácil.",
         "missing_average_hr": "No hay una frecuencia cardíaca media disponible.",
@@ -250,9 +250,9 @@ def build_admissible_facts(
             ["no_repetition_durations", "regularity_verdict_unavailable"], 100,
             ["session_classification.type", "session_classification.confidence",
              "session_classification.evidence.effort_count", "session_classification.evidence.recovery_count"],
-            tr(f"Garmin a enregistré {e} phases d'effort et {r} phases de récupération.",
-               f"Garmin recorded {e} effort phases and {r} recovery phases.",
-               f"Garmin registró {e} fases de esfuerzo y {r} fases de recuperación."))
+            tr(f"Garmin a enregistré une séance fractionnée avec {e} phases d'effort et {r} phases de récupération.",
+               f"Garmin recorded an interval session with {e} effort phases and {r} recovery phases.",
+               f"Garmin registró una sesión de intervalos con {e} fases de esfuerzo y {r} fases de recuperación."))
     elif allowed_classification and cls.type == "long_run_probable":
         duration = cls.evidence.get("duration_minutes")
         usual = cls.evidence.get("habitual_duration_minutes")
@@ -267,19 +267,29 @@ def build_admissible_facts(
                 ["session_classification.type", "session_classification.confidence",
                  "session_classification.evidence.duration_minutes",
                  "session_classification.evidence.habitual_duration_minutes"],
-                tr(f"Sortie longue probable : {num(duration)} min, contre tes {num(usual)} min habituelles.",
-                   f"Probable long run: {num(duration)} min versus your usual {num(usual)} min.",
-                   f"Tirada larga probable: {num(duration)} min, frente a tus {num(usual)} min habituales.") + caveat)
+                tr(f"Ta sortie est probablement longue : {num(duration)} min, contre {num(usual)} min habituellement.",
+                   f"At {num(duration)} min versus your usual {num(usual)} min, this was probably a long run.",
+                   f"Con {num(duration)} min frente a tus {num(usual)} min habituales, probablemente fue una tirada larga.") + caveat)
     elif allowed_classification and cls.type in {"easy_run_probable", "steady_run_probable", "tempo_probable"}:
-        label = {
-            "easy_run_probable": tr("footing facile", "easy run", "carrera fácil"),
-            "steady_run_probable": tr("sortie soutenue", "steady run", "carrera sostenida"),
-            "tempo_probable": tr("tempo", "tempo run", "carrera tempo"),
+        assertion = {
+            "easy_run_probable": tr(
+                "Tu as probablement fait un footing facile.",
+                "This was probably an easy run.",
+                "Probablemente fue una carrera fácil.",
+            ),
+            "steady_run_probable": tr(
+                "Ta séance ressemble probablement à une sortie soutenue.",
+                "This was probably a steady run.",
+                "Probablemente fue una carrera sostenida.",
+            ),
+            "tempo_probable": tr(
+                "Ça ressemble probablement à une séance tempo.",
+                "This was probably a tempo run.",
+                "Probablemente fue una sesión tempo.",
+            ),
         }[cls.type]
         uncertain = cls.confidence in {"low", "none"}
         history_qualification = history_classification
-        uncertainty = tr("; le type reste incertain", "; the type remains uncertain",
-                         "; el tipo sigue siendo incierto") if uncertain else ""
         relative_effort = tr(
             "; cette classification est relative à ton historique, pas à une intensité physiologique",
             "; this classification is relative to your history, not physiological intensity",
@@ -290,12 +300,15 @@ def build_admissible_facts(
         if history_qualification:
             conditions.append("history_authorized")
             limits.append("relative_effort_not_physiological_intensity")
+        if uncertain:
+            assertion += tr(" Le type reste incertain.", " The type remains uncertain.",
+                            " El tipo sigue siendo incierto.")
+        if history_qualification:
+            assertion += relative_effort
         add("session.kind", {"classification": cls.type}, {}, "probable_session_type",
             cls.confidence, conditions, limits, 45,
             ["session_classification.type", "session_classification.confidence"],
-            tr(f"Type probable de ta séance : {label}{uncertainty}{relative_effort}.",
-               f"Your probable session type: {label}{uncertainty}{relative_effort}.",
-               f"Tipo probable de tu sesión: {label}{uncertainty}{relative_effort}."))
+            assertion)
 
     hr = intensity.hr_used_bpm
     if _finite(hr):
@@ -522,6 +535,24 @@ _LIMITS_ALREADY_IN_ASSERTIONS = {
     "prescription.review": {"no_new_prescription"},
 }
 
+_COMBINED_LIMIT_TEXT = {
+    ("no_repetition_durations", "regularity_verdict_unavailable"): {
+        "fr": "La durée de chaque répétition n'est pas disponible, donc sa régularité ne peut pas être jugée.",
+        "en": "Individual repetition durations are unavailable, so their regularity cannot be judged.",
+        "es": "No están disponibles las duraciones de cada repetición, así que no se puede juzgar su regularidad.",
+    },
+    ("no_time_in_zones", "no_physiological_cause"): {
+        "fr": "Elle ne renseigne ni le temps passé dans les zones ni la raison de cette moyenne.",
+        "en": "It shows neither time spent in zones nor why the average was at that level.",
+        "es": "No indica ni el tiempo en las zonas ni por qué la media estuvo en ese nivel.",
+    },
+    ("no_cause", "terrain_weather_not_controlled"): {
+        "fr": "La cause n'est pas établie et les effets du terrain ou de la météo ne sont pas isolés.",
+        "en": "The cause is not established, and terrain or weather effects are not isolated.",
+        "es": "No se establece la causa ni se aíslan los efectos del terreno o del tiempo.",
+    },
+}
+
 
 def render_validated_plan(
     plan: dict, facts: tuple[AdmissibleFact, ...], *, language: str = "fr",
@@ -534,12 +565,14 @@ def render_validated_plan(
     for position, fact_id in enumerate(ids):
         fact = index[fact_id]
         text = fact.assertion
-        already_stated = _LIMITS_ALREADY_IN_ASSERTIONS.get(fact_id, set())
-        clauses = [
-            _LIMIT_TEXT[lang][limit]
-            for limit in plan["required_limit_ids"][fact_id]
-            if limit not in already_stated
-        ]
+        remaining = set(plan["required_limit_ids"][fact_id])
+        remaining.difference_update(_LIMITS_ALREADY_IN_ASSERTIONS.get(fact_id, set()))
+        clauses = []
+        for limit_group, translations in _COMBINED_LIMIT_TEXT.items():
+            if set(limit_group).issubset(remaining):
+                clauses.append(translations[lang])
+                remaining.difference_update(limit_group)
+        clauses.extend(_LIMIT_TEXT[lang][limit] for limit in sorted(remaining))
         if clauses:
             text = text.rstrip() + " " + " ".join(clauses)
         if position:
