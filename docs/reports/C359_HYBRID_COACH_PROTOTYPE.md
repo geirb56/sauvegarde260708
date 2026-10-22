@@ -1105,7 +1105,7 @@ sourcées. Le prototype n'autorise pas à déclarer ces critères satisfaits.
 Itération de la PR **#360** uniquement, branche existante
 `copilot/c359-recovery`, base `copilot/dev`
 (`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD du code C360 évalué :
-`1ea72b1bd35698a1348947bb0e04a149fd7bfa48`. Cette référence désigne le code ;
+`bc7c63970a742b3623a6f58843dfdfd6d5b8efd7`. Cette référence désigne le code ;
 le commit documentaire final est ultérieur. Flag `C359_HYBRID_COACH_ENABLED`
 désactivé par défaut. Aucun branchement d'interface ou de route, aucun changement
 V2/V3, accès Garmin/GCCLI, écriture MongoDB, séance réelle, déploiement ou merge.
@@ -1310,8 +1310,8 @@ modification de dépendances du dépôt. Commandes lancées depuis
 
 | Vérification | Résultat |
 | --- | --- |
-| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q -o addopts=''` | **49 réussis** |
-| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py -q -o addopts=''` | **369 réussis**, 6 avertissements de dépréciation lors de l'import API |
+| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q -o addopts=''` | **50 réussis** |
+| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py -q -o addopts=''` | **370 réussis**, 6 avertissements de dépréciation lors de l'import API |
 | `python -m py_compile backend/hybrid_coach_c359.py backend/llm_coach.py backend/tests/test_hybrid_coach_c359.py` | réussi |
 | `git diff --check` | réussi |
 
@@ -1339,5 +1339,5 @@ fournisseur n'est invoqué.
 non démontré. Verdict global : HOLD** jusqu'à une évaluation de générations
 réelles isolées, sans données personnelles/secrets, puis audit C360 demandé.
 Le SHA du code validé est
-`1ea72b1bd35698a1348947bb0e04a149fd7bfa48`; ce rapport sera ensuite livré dans
+`bc7c63970a742b3623a6f58843dfdfd6d5b8efd7`; ce rapport sera ensuite livré dans
 un commit documentaire. Aucun merge ni déploiement n'est effectué.
