@@ -182,6 +182,10 @@ def _writer_text(packet, language="fr"):
                 f" Ta FC moyenne de {number(hr['average_hr'])} bpm se situe {relation}, "
                 "mais elle ne décrit pas tout l'effort ni le temps passé dans les zones."
             )
+            text += (
+                " Cette comparaison situe la durée dans ton historique, sans prétendre décrire "
+                "à elle seule tout le contenu de la sortie."
+            )
         return text
     if "session.kind" in by_id:
         fact = by_id["session.kind"]
@@ -202,6 +206,10 @@ def _writer_text(packet, language="fr"):
                 f" Ta FC moyenne de {number(vals['average_hr'])} bpm, {relation}, va dans le même "
                 "sens comme repère descriptif. Une moyenne ne décrit pas chaque moment de l'effort "
                 "ni le temps passé dans les zones ; elle ne résume donc pas toute la sortie."
+            )
+            phrase += (
+                " La classification reste au conditionnel, et la FC ajoute un repère distinct "
+                "sans décrire les variations d'un bout à l'autre."
             )
         if "relative_effort_not_physiological_intensity" in fact["required_limits"]:
             phrase += " Cette lecture est relative à ton historique, pas à une intensité physiologique."
@@ -249,7 +257,7 @@ def _provider(text_factory=_writer_text, *, permissions=hybrid.HybridPermissions
         packet = json.loads(prompt)
         assert "facts" in packet and "source_paths" not in prompt
         assert all("assertion" not in fact for fact in packet["facts"])
-        return text_factory(packet, language), True, {"duration_sec": 0.25}
+        return text_factory(packet, language), True, {}
     return provider
 
 
@@ -278,6 +286,12 @@ def comparison_outputs():
             "accepted_text": result.text,
             "mode": result.mode,
             "reason": result.reason,
+            "rejection_reason": None if result.mode == "generated_narrative" else result.reason,
+            "qualitative_evaluation": {
+                "relevance": "the sample prioritizes an admissible session-specific observation",
+                "naturalness": "handwritten mock text; not a model-generation assessment",
+                "scientific_fidelity": "heuristics passed; semantic fidelity remains unproven",
+            },
             "provider_duration_sec": result.provider_duration_sec,
         })
     return outputs
@@ -295,7 +309,7 @@ def test_seven_synthetic_fixtures_accept_natural_original_prose(name, monkeypatc
     assert result.verification_scope == "heuristic_risk_checks"
     assert result.provider_attempted and result.transport_kind == "injected"
     assert result.claims == [] and result.checks
-    assert result.provider_duration_sec == 0.25 and result.cost is None
+    assert result.provider_duration_sec is None and result.cost is None
     assert result.elapsed_ms >= 0 and v3.model_dump() == before
     assert result.text and 8 <= len(result.text.split()) <= 150
     if name == "intervals_4x4":
@@ -313,7 +327,7 @@ def test_seven_fixture_comparison_records_full_contract(monkeypatch):
         assert item["narrative_v3"] and item["llm_proposed"]
         assert item["accepted_text"] == item["llm_proposed"]
         assert item["mode"] == "generated_narrative"
-        assert item["provider_duration_sec"] == 0.25
+        assert item["provider_duration_sec"] is None
 
 
 @pytest.mark.parametrize("classification", ["easy_run_probable", "steady_run_probable"])
@@ -498,6 +512,41 @@ def test_default_adapter_uses_c360_limit_without_changing_chat_default(monkeypat
     assert calls == [{"sanitize_errors": True, "response_max_chars": 2400}]
     assert llm_coach._clean_response("x" * 800) == "x" * 700
     assert llm_coach._clean_response("x" * 800, max_chars=2400) == "x" * 800
+
+
+def test_shared_adapter_marks_context_specific_truncation(monkeypatch):
+    import llm_coach
+    monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "sk-emergent-test")
+    emergent = ModuleType("emergentintegrations")
+    emergent.__path__ = []
+    llm = ModuleType("emergentintegrations.llm")
+    llm.__path__ = []
+    chat = ModuleType("emergentintegrations.llm.chat")
+
+    class LongResponseChat:
+        def __init__(self, **kwargs):
+            pass
+
+        def with_model(self, *args):
+            return self
+
+        async def send_message(self, message):
+            return "x" * 2500
+
+    chat.LlmChat = LongResponseChat
+    chat.UserMessage = lambda **kwargs: object()
+    monkeypatch.setitem(sys.modules, "emergentintegrations", emergent)
+    monkeypatch.setitem(sys.modules, "emergentintegrations.llm", llm)
+    monkeypatch.setitem(sys.modules, "emergentintegrations.llm.chat", chat)
+    response, success, metadata = asyncio.run(llm_coach._call_gpt(
+        "system", "prompt", "anonymous", "c359_hybrid",
+        sanitize_errors=True, response_max_chars=2400,
+    ))
+    assert success and len(response) == 2400 and metadata["response_truncated"]
+    response, success, metadata = asyncio.run(llm_coach._call_gpt(
+        "system", "prompt", "anonymous", "chat",
+    ))
+    assert success and len(response) == 700 and metadata["response_truncated"]
 
 
 def test_default_adapter_missing_key_has_no_placeholder_latency(monkeypatch):
