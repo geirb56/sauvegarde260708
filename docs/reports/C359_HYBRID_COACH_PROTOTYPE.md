@@ -1,10 +1,11 @@
-# C360 — Narrative Planning & Controlled Rendering
+# Itération C360 antérieure — Narrative Planning & Controlled Rendering
 
 ## Portée et décision
 
-Cette section est le rapport courant pour la PR **#360**, branche existante
-`copilot/c359-recovery`, base `copilot/dev`. Elle supersède les verdicts C359
-historiques ci-dessous sans les réécrire. HEAD final du code C360 évalué :
+Cette section documente l'itération C360 précédente ; le compte-rendu courant
+« C360 — Evidence-Grounded LLM Coach » se trouve à la fin du fichier. Les
+constats antérieurs restent des instantanés historiques. HEAD du code évalué
+pour cette ancienne itération :
 `7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`.
 
 ### Architecture avant / après
@@ -1096,3 +1097,239 @@ et latence fournisseur, admission éventuelle de connaissances historiquement
 sourcées. Le prototype n'autorise pas à déclarer ces critères satisfaits.
 
 </details>
+
+## C360 — Evidence-Grounded LLM Coach
+
+### Portée et décision
+
+Itération de la PR **#360** uniquement, branche existante
+`copilot/c359-recovery`, base `copilot/dev`
+(`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD du code C360 évalué :
+`04637a3b47ba4b17401ba57ab0971d240e49b246`. Cette référence désigne le code ;
+le commit documentaire final est ultérieur. Flag `C359_HYBRID_COACH_ENABLED`
+désactivé par défaut. Aucun branchement d'interface ou de route, aucun changement
+V2/V3, accès Garmin/GCCLI, écriture MongoDB, séance réelle, déploiement ou merge.
+
+**GO technique limité au contrat et aux contrôles testés ; GO produit : HOLD.**
+Le texte libre simulé est accepté et les attaques testées sont rejetées, mais
+aucune génération réelle n'a eu lieu : naturel, pertinence, taux de rejet, coût
+et latence du modèle ne sont donc pas démontrés. Ce prototype ne doit pas être
+activé en production sur cette preuve.
+
+### Architecture avant / après
+
+| Couche | Itération précédente de C360 | C360 — Evidence-Grounded LLM Coach |
+| --- | --- | --- |
+| Autorité scientifique | Workout Intelligence V3 | Workout Intelligence V3, inchangé : classification, intensité, répétitions, tendance, prescription, confiance |
+| Entrée du LLM | Evidence Pack filtré | Evidence Pack filtré, sans assertion en prose ni provenance locale |
+| Contrat de sortie | Plan d'IDs obligatoire puis rendu local | Prose originale libre dans la langue demandée |
+| Contrôle | Validation stricte des IDs puis rendu contrôlé | Heuristiques format/longueur, valeurs/unités, catégories sensibles, réserves et contradictions ; repli déterministe en cas de doute |
+| Autres Coachs | Transport existant, limite de nettoyage 700 caractères | Même comportement par défaut ; option C360 isolée à 2400 caractères et indicateur explicite de troncature |
+
+`build_admissible_facts()` et les contrôles d'accès sont conservés. Le paquet
+transmis au fournisseur ne contient que les faits admis, valeurs/unités,
+conclusion autorisée, confiance, conditions d'usage et limites indispensables.
+Les identifiants de séance, dates, chemins de source, assertions textuelles V3,
+diagnostics libres et preuves non autorisées restent locaux. Les comparaisons
+historiques, prescriptions et classifications dérivées de l'historique restent
+conditionnées par les permissions explicites.
+
+Le contrat final obligatoire de plan d'IDs, son parseur/validateur, les grammaires
+de rendu local et les textes de clauses prédéfinis ont été supprimés. La sélection
+déterministe conservée sert uniquement de fallback. Il n'y a ni second moteur
+scientifique, ni RAG/connaissance externe, ni nouvelle dépendance.
+
+### Prompt C360
+
+Le prompt V1 historique `SYSTEM_PROMPT_SEANCE` (retrouvé dans l'audit C359)
+privilégiait une réaction naturelle, un point concret, une explication simple,
+un ton positif et un enseignement utile en quelques phrases. C360 en reprend
+l'esprit sans restaurer ses heuristiques ou conseils non sourcés. La suggestion
+historique de conseiller la prochaine sortie est volontairement exclue : une
+prescription n'est permise que par l'autorité canonique.
+
+Prompt système effectivement transmis :
+
+> You are a running coach responding naturally to the workout described only by the authorized evidence pack in the user message. Write an original, useful analysis in the requested language; in French, address the runner as tu. React to a concrete session observation, explain why it matters simply, and use a positive but unforced tone. When evidence is rich, aim for 60–110 words; use fewer when it is limited. Use one natural paragraph unless another structure genuinely helps. Select and prioritize compatible facts yourself, and preserve the essential qualifications attached to them. Only V3-authorized facts and conclusions are scientific authority. Do not invent or recalculate values; infer no LT1/LT2 from average HR, repetition regularity, progression from one workout, fatigue causes, or a new prescription. A history-relative classification is not physiological intensity. Never claim a conclusion excluded by permissions. No RAG or outside knowledge. Return only the analysis prose, without headings, IDs, JSON, or a generic sign-off.
+
+Le message utilisateur est uniquement le JSON de l'Evidence Pack (dont la langue).
+Il ne comporte aucune donnée d'identité.
+
+### Validation après génération et limites
+
+La réponse est admise uniquement si elle est textuelle, non vide, comprise entre
+8 et 150 mots et 2400 caractères, sans format structuré interdit. Les nombres
+doivent apparaître dans les preuves admises ; les unités sont vérifiées contre
+les unités associées, et les valeurs de FC moyenne ainsi que les positions
+LT1/LT2 détectées sont comparées à V3. Les heuristiques refusent aussi les
+conclusions physiologiques sans fait admis, une régularité non établie, une
+tendance sans historique autorisé, une attribution causale et une prescription
+inventées. Lorsque la formulation dépend d'un fait concerné, elles vérifient les
+réserves obligatoires, dont l'incertitude, le caractère relatif à l'historique,
+les limites des moyennes, l'absence de régularité, la prudence sur la tendance
+et le maintien de la prescription.
+
+Une réponse rejetée, tronquée, en erreur ou en timeout garde le fallback
+déterministe construit à partir des seuls faits autorisés. Une durée fournisseur
+n'est copiée que sur un appel réussi et les valeurs mesurées à zéro restent
+valides. Les erreurs fournisseur de ce transport C360 sont journalisées sans
+leur texte d'exception. `_call_gpt` conserve le nettoyage à 700 caractères pour
+les appels existants ; C360 lui passe explicitement 2400 et vérifie
+`response_truncated`. Le test adapte les deux chemins.
+
+Ces contrôles sont des filtres heuristiques, **pas une validation sémantique**.
+Ils ne peuvent pas reconnaître toutes les paraphrases, raisonnements trompeurs,
+contradictions exprimées sans marqueur ni causalités déguisées ; des faits exacts
+peuvent aussi être assemblés de façon incohérente. Le prompt et les tests
+réduisent des risques identifiés, sans prouver toute la prose. Le modèle peut
+encore produire une réponse générique, maladroite ou factuellement erronée non
+couverte par les motifs détectés. Le fallback demeure nécessaire.
+
+### Sept comparaisons synthétiques
+
+Les sept fixtures sont synthétiques. Dans chaque ligne de preuves, `ID: valeurs
+(unités), conclusion autorisée, confiance, conditions, limites obligatoires`
+représente le paquet complet transmis au LLM. Le texte « proposé » est une
+proposition **écrite dans le test et renvoyée par un transport simulé**, jamais
+une sortie de modèle. `Accepté` reproduit exactement ce texte après contrôles.
+La réserve « rejet » indique `aucun` pour ces sept propositions. Appréciations
+qualitatives sont illustratives, non une évaluation aveugle du produit.
+
+#### 1. Footing facile
+
+- Evidence Pack : `session.kind`: `easy_run_probable`, conclusion `probable_session_type`, confiance moyenne, condition `v3_classification`, limite `probable_not_certain` ; `intensity.position`: FC moyenne 140 bpm, LT1 150 bpm, LT2 170 bpm, position `below_LT1`, conclusion `average_hr_threshold_position`, confiance moyenne, condition `reliable_v3_personal_thresholds`, limites `average_not_whole_effort`, `no_time_in_zones`, `no_physiological_cause`.
+- Narrative V3 : « Probablement un footing facile. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. »
+- Proposition mock : « Tu as probablement fait un footing facile, d'après les critères disponibles. Ta FC moyenne de 140 bpm, sous LT1, va dans le même sens comme repère descriptif. Une moyenne ne décrit pas chaque moment de l'effort ni le temps passé dans les zones ; elle ne résume donc pas toute la sortie. La classification reste au conditionnel, et la FC ajoute un repère distinct sans décrire les variations d'un bout à l'autre. »
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — relie type probable et moyenne observée ; naturel — lecture plausible du mock, non jugée sur génération ; fidélité — réserves et valeurs passent les heuristiques, sens global non prouvé.
+
+#### 2. Sortie longue
+
+- Evidence Pack : `session.long`: durée 100 min, habituelle 50 min, conclusion `probable_long_duration_comparison`, confiance moyenne, conditions `history_authorized` et `v3_classification`, limites `probable_not_certain` et `duration_not_effort` ; `intensity.position`: 140/150/170 bpm, `below_LT1`, conclusion `average_hr_threshold_position`, confiance moyenne, condition `reliable_v3_personal_thresholds`, limites `average_not_whole_effort`, `no_time_in_zones`, `no_physiological_cause`.
+- Narrative V3 : « Probablement une sortie longue. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. »
+- Proposition mock : « Ta sortie a probablement été longue : 100 min, contre 50 min habituellement. Cet écart est le fait marquant par rapport à ton repère récent. Sa durée seule ne permet pas de déterminer l'intensité. Ta FC moyenne de 140 bpm se situe sous LT1, mais elle ne décrit pas tout l'effort ni le temps passé dans les zones. Cette comparaison situe la durée dans ton historique, sans prétendre décrire à elle seule tout le contenu de la sortie. »
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — la comparaison temporelle est mise en avant ; naturel — synthèse du mock sans conseil ajouté ; fidélité — distinction durée/intensité et limites de FC conservées par les contrôles heuristiques.
+
+#### 3. Séance fractionnée — 4 efforts / 3 récupérations
+
+- Evidence Pack : `interval.count`: 4 efforts, 3 récupérations, conclusion `recorded_intervals_without_regularity`, confiance moyenne, condition `garmin_phases`, limites `no_repetition_durations` et `regularity_verdict_unavailable` ; `intensity.position`: 160/150/170 bpm, position `between_LT1_LT2`, conclusion `average_hr_threshold_position`, confiance moyenne, condition `reliable_v3_personal_thresholds`, limites `average_not_whole_effort`, `no_time_in_zones`, `no_physiological_cause`.
+- Narrative V3 : « Une séance fractionnée. Garmin a enregistré 4 phases d'effort et 3 phases de récupération. La comparaison disponible ne permet pas d'établir la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières. La conformité à la prescription reste indéterminée. »
+- Proposition mock : « Garmin a relevé 4 phases d'effort et 3 phases de récupération : la structure est le point marquant. Les durées de chaque répétition ne sont pas disponibles, donc leur régularité ne peut pas être jugée. Ta FC moyenne de 160 bpm se situe entre LT1 et LT2, mais elle ne décrit pas tout l'effort ni le temps passé dans les zones. On peut décrire l'organisation enregistrée, pas l'homogénéité des efforts. »
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — pointe la structure réellement enregistrée ; naturel — prose plus directe dans le mock ; fidélité — aucune durée par répétition ni régularité n'est inventée, mais les heuristiques ne prouvent pas la cohérence sémantique totale.
+
+#### 4. Données insuffisantes
+
+- Evidence Pack : `session.unknown`: type `unknown`, `average_hr_available=0`, conclusion `session_type_unproven`, confiance nulle, condition `v3_classification`, limite `unknown_not_easy`.
+- Narrative V3 : « Type de séance incertain. Les données disponibles ne permettent pas d'identifier le type de séance de façon fiable. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits ni LT1 fiable, les moyennes de séance ne permettent pas de confirmer une zone physiologique. La conformité à la prescription reste indéterminée. »
+- Proposition mock : « Le type de ta séance reste incertain avec les informations disponibles. Aucune FC moyenne n'est disponible pour compléter cette lecture, alors mieux vaut ne pas conclure sur l'intensité ou l'objectif de la sortie. »
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — explique directement l'abstention et la FC manquante ; naturel — réponse courte, cohérente avec la preuve pauvre ; fidélité — ne transforme pas l'inconnu en séance facile.
+
+#### 5. Tapis roulant
+
+- Evidence Pack : identique au footing facile : `session.kind` probable, confiance moyenne, condition V3, réserve de probabilité ; FC moyenne 140 bpm sous LT1 150 bpm, seuil LT2 170 bpm, limites moyenne/temps en zones/causalité.
+- Narrative V3 : même texte que le footing facile (voir cas 1). Le paquet filtré ne contient pas un fait narratif « tapis roulant », donc aucun texte ne le prétend.
+- Proposition mock : même texte que le footing facile (voir cas 1).
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — reprend ce que le paquet autorise, pas le contexte du tapis ; naturel — identique au cas 1 ; fidélité — aucune différence propre au tapis n'est inventée. Cette identité est une limite d'information, non une preuve de personnalisation.
+
+#### 6. Historique comparable
+
+- Evidence Pack : `session.kind`: footing probable, confiance moyenne, condition V3 ; `intensity.position`: FC moyenne 140 bpm, LT1 150, LT2 170, sous LT1 ; `trend.probable_improvement`: 6 observations, variation médiane −24 s/km, 92 jours, conclusion `qualified_historical_trend`, confiance moyenne, conditions `history_authorized`, `v3_trend_only`, `v3_sensitivity_agrees`, `v3_confirmed_variation`, limites `not_proof_of_fitness`, `no_cause`, `terrain_weather_not_controlled`.
+- Narrative V3 : « Probablement un footing facile. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton allure médiane est plus rapide de 24 s/km à fréquence cardiaque comparable sur 6 observations sur 92 jours : un signe encourageant d'amélioration probable, pas une preuve de gain de forme. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. »
+- Proposition mock : « Ton historique suggère une amélioration probable : 6 observations sur 92 jours montrent une variation médiane d'allure de -24 s/km. C'est un signal cohérent dans l'historique, pas une preuve de changement de forme à lui seul. La tendance mérite d'être lue comme telle, sans lui attribuer de cause : les effets du terrain et de la météo ne sont pas isolés. »
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — donne la priorité à la tendance historique admise ; naturel — enseignement court, mais encore illustratif ; fidélité — chiffre, signe, période et réserve passent les contrôles, sans preuve sémantique complète.
+
+#### 7. FC moyenne sans seuil physiologique fiable
+
+- Evidence Pack : `intensity.hr`: FC moyenne 140 bpm, conclusion `descriptive_average_hr_only`, confiance nulle, condition `session_average_only`, limites `no_physiological_zone` et `average_not_whole_effort` ; `session.unknown`: type `unknown`, FC moyenne disponible, conclusion `session_type_unproven`, confiance nulle, condition V3.
+- Narrative V3 : « Type de séance incertain. Les données disponibles ne permettent pas d'identifier le type de séance de façon fiable. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits ni LT1 fiable, les moyennes de séance ne permettent pas de confirmer une zone physiologique. La conformité à la prescription reste indéterminée. »
+- Proposition mock : « Ta FC moyenne enregistrée est de 140 bpm, mais le type de séance reste incertain avec les éléments dont on dispose. Cette moyenne est un repère descriptif, pas une intensité physiologique : elle ne suffit pas à établir une zone et ne décrit pas toute la séance. On peut rester sur ces observations sans deviner l'objectif ou la difficulté de la sortie. »
+- Accepté : texte proposé, inchangé. Rejet : aucun.
+- Évaluation : pertinence — exploite la seule mesure physiologique admise ; naturel — évite une classification inventée ; fidélité — la réserve sur l'absence de seuil est explicite et vérifiée par motif.
+
+### Cas de reformulation et adversariaux
+
+Les paraphrases acceptées FR/EN/ES expriment la même comparaison de FC moyenne,
+la position sous LT1 et les réserves sur l'effort et le temps en zones sans
+reprendre l'assertion locale à l'identique. Attaques synthétiques vérifiées :
+
+| Proposition | Résultat |
+| --- | --- |
+| FC moyenne inventée à `999 bpm` | rejet `unsupported_numeric_value` |
+| `LT2` affirmé sans preuve de seuil | rejet `unauthorized_physiological_conclusion` |
+| `140 min` à la place d'une mesure bpm | rejet `unsupported_numeric_unit_or_value` |
+| FC moyenne annoncée à 150 bpm alors que V3 vaut 140 | rejet `contradictory_average_hr` |
+| moyenne 140 bpm dite au-dessus de LT2 alors que V3 dit sous LT1 | rejet `contradictory_threshold_position` |
+| répétitions déclarées régulières | rejet `unsupported_regularity_claim` |
+| progression affirmée sans tendance autorisée | rejet `unauthorized_trend_claim` |
+| cause de FC attribuée à la fatigue | rejet `unauthorized_causality` |
+| séance prescrite pour le lendemain | rejet `unauthorized_prescription` |
+| réserve de régularité, de FC moyenne ou de tendance omise | rejet `missing_regularity_limit`, `missing_average_effort_limit` ou `missing_trend_limit` |
+| tendance historique quand l'historique n'est pas autorisé | Evidence Pack vide de tendance, réponse rejetée |
+| timeout, titre Markdown, réponse trop longue, fournisseur absent | fallback déterministe conservé |
+
+Cette couverture cible les attaques connues et des paraphrases positives ; elle
+ne constitue pas un benchmark exhaustif des formulations du modèle.
+
+### Vérification du fournisseur, coût et latence
+
+Le transport existant est le `llm_coach._call_gpt` utilisant Emergent LLM Key
+et le modèle configuré. Son nettoyage historique à 700 caractères convient aux
+messages existants, mais pas au prompt d'analyse libre. C360 emploie le même
+transport explicitement à 2400 caractères ; la valeur par défaut des autres
+Coach reste à 700, vérifiée par test. Une réponse tronquée est signalée par
+l'adaptateur puis rejetée au lieu d'être traitée comme complète. Le chemin
+absence de clé ne rapporte pas la durée placeholder de zéro ; un zéro réellement
+mesuré sur une réponse réussie est conservé.
+
+Aucun appel réel n'a été tenté : aucune clé n'a été utilisée, aucune séance ou
+donnée personnelle transmise, et le transport de test est simulé. Les tests
+simulés ne mesurent pas le modèle. **Coût fournisseur : non mesuré. Latence
+fournisseur : non mesurée. Taux de réponses acceptées réelles et fréquence de
+fallback réels : non mesurés.** La durée synthétique n'est pas publiée comme
+latence ; les appels simulés sans métadonnée laissent `provider_duration_sec`
+à `None`.
+
+### Tests exécutés
+
+Environnement Python de test isolé sous `/tmp/c360-validation-venv`, sans
+modification de dépendances du dépôt. Commandes lancées depuis
+`/home/runner/work/sauvegarde260708/sauvegarde260708/backend` :
+
+| Vérification | Résultat |
+| --- | --- |
+| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q -o addopts=''` | **47 réussis** |
+| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py -q -o addopts=''` | **367 réussis**, 6 avertissements de dépréciation préexistants lors de l'import API |
+| `python -m py_compile backend/hybrid_coach_c359.py backend/llm_coach.py backend/tests/test_hybrid_coach_c359.py` | réussi |
+| `git diff --check` | réussi |
+
+Le périmètre de tests synthétiques couvre le contrat libre, les sept fixtures,
+paraphrases FR/EN/ES, les permissions, les attaques listées, les réserves,
+le fallback, l'absence de mutation V3, l'absence de branchement production,
+le logging sanitizé et les limites 700/2400 du transport simulé. Aucun vrai
+fournisseur n'est invoqué.
+
+### Risques résiduels et verdict
+
+- Les vérifications en prose libre sont heuristiques et dépendantes de motifs ;
+  elles ne prouvent pas la vérité sémantique et peuvent laisser passer une
+  paraphrase trompeuse ou rejeter une formulation correcte.
+- La qualité conversationnelle n'a pas été observée sur des réponses du modèle.
+  Les sept propositions du tableau sont des textes de test fabriqués ; elles
+  démontrent que le contrat autorise des paraphrases au lieu d'exiger une égalité
+  littérale, pas que le modèle les produit ni qu'elles améliorent V3.
+- Le fournisseur peut manquer, tronquer ou produire une réponse générique ;
+  le fallback déterministe est conservé. Aucun gain produit n'est revendiqué.
+- Les autorités scientifiques V3, calculs V2/V3, droits, routes, UI,
+  persistance et activation restent inchangés ; flag OFF.
+
+**GO technique : oui, pour l'essai isolé et les cas testés seulement. GO produit :
+non démontré. Verdict global : HOLD** jusqu'à une évaluation de générations
+réelles isolées, sans données personnelles/secrets, puis audit C360 demandé.
+Le SHA d'audit du code avant ce commit documentaire est
+`04637a3b47ba4b17401ba57ab0971d240e49b246`; aucun merge ni déploiement n'est
+effectué.

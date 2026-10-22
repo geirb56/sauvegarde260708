@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 import math
 import os
 import re
-import json
 from time import perf_counter
 from typing import Literal, Optional
 
@@ -418,9 +418,6 @@ _SENSITIVE_PATTERNS = {
         r"\b(?:lt\s*[12]|thresholds?|threshold zone|zone\s*[123]|zona\s*[123]|"
         r"seuils?|zona fisiol[oó]gica|zones? physiologiques?)\b", re.I,
     ),
-    "regularity": re.compile(
-        r"\b(?:regularity|regular|régularité|régulières?|regularidad|regulares?)\b", re.I,
-    ),
     "trend": re.compile(
         r"\b(?:progress(?:ion|ed|ing)?|improv(?:e|ement|ing)|declin(?:e|ed)|"
         r"progrès|progression|amélior(?:ation|e)|baisse|progreso|mejora|descenso)\b", re.I,
@@ -439,6 +436,7 @@ _SENSITIVE_PATTERNS = {
 }
 _POSITIVE_REGULARITY = re.compile(
     r"\b(?:regular intervals|regular repetitions|regularly paced|"
+    r"repetitions (?:are|look) regular|intervals (?:are|were|look) regular|"
     r"regularity (?:is|looks) (?:good|high|consistent)|"
     r"régulières|régulièrement|régularité (?:est|semble) (?:bonne|excellente|constante)|"
     r"repeticiones regulares|intervalos regulares|regularidad (?:es|parece) (?:buena|constante))\b",
@@ -450,6 +448,29 @@ _THRESHOLD_POSITIONS = {
         r"\b(?:between LT1 and LT2|entre LT1 et LT2|entre LT1 y LT2)\b", re.I,
     ),
     "above_LT2": re.compile(r"\b(?:above LT2|au-dessus de LT2|por encima de LT2)\b", re.I),
+}
+_NUMBERED_ZONE = re.compile(r"\b(?:zone|zona)\s*[1-5]\b", re.I)
+_CLASSIFICATION_CLAIM = re.compile(
+    r"\b(?:easy(?: run| pace)?|steady run|tempo run|footing facile|facile|"
+    r"sortie soutenue|séance tempo|soutenue|carrera fácil|fácil|"
+    r"carrera sostenida|sesión tempo)\b", re.I,
+)
+_TREND_QUALIFICATIONS = {
+    "trend.probable_improvement": {
+        "fr": re.compile(r"\b(?:amélioration|progression) probable\b", re.I),
+        "en": re.compile(r"\b(?:probable|likely) improvement\b|\bimprovement is (?:probable|likely)\b", re.I),
+        "es": re.compile(r"\b(?:mejora|progreso) probable\b", re.I),
+    },
+    "trend.possible_decline": {
+        "fr": re.compile(r"\b(?:baisse|déclin) possible\b", re.I),
+        "en": re.compile(r"\bpossible decline\b|\bdecline is possible\b", re.I),
+        "es": re.compile(r"\b(?:descenso|bajada) posible\b", re.I),
+    },
+    "trend.stable": {
+        "fr": re.compile(r"\btendance stable\b", re.I),
+        "en": re.compile(r"\bstable trend\b", re.I),
+        "es": re.compile(r"\btendencia estable\b", re.I),
+    },
 }
 _NEGATED = {
     "fr": ("ne peut pas", "ne permet pas", "n'est pas", "pas une preuve",
@@ -545,9 +566,11 @@ def validate_generated_narrative(
     words = re.findall(r"\b[\wÀ-ÿ'-]+\b", candidate)
     if len(words) < 8 or len(words) > 150:
         return False, "word_count", []
-    if candidate.startswith(("#", "-", "*")) or "```" in candidate:
+    if candidate.startswith(("#", "-", "*", "{", "[")) or "```" in candidate:
         return False, "response_format", []
     lang = _language(language)
+    if _NUMBERED_ZONE.search(candidate):
+        return False, "unsupported_physiological_zone", []
     authorized = _authorized_numbers(facts)
     for number in _NUMBER_RE.findall(candidate):
         if float(number.replace(",", ".")) not in authorized:
@@ -614,10 +637,7 @@ def validate_generated_narrative(
         and "relative_effort_not_physiological_intensity" in fact.important_limits
         for fact in facts
     )
-    classification_claim = _has_unqualified(re.compile(
-        r"\b(?:easy run|steady run|tempo run|footing facile|sortie soutenue|"
-        r"séance tempo|carrera fácil|carrera sostenida|sesión tempo)\b", re.I,
-    ), lowered, lang)
+    classification_claim = _has_unqualified(_CLASSIFICATION_CLAIM, lowered, lang)
     if relative and classification_claim:
         if not all(phrase in lowered for phrase in _REQUIRED_PHRASES[
             "relative_effort_not_physiological_intensity"
@@ -644,7 +664,9 @@ def validate_generated_narrative(
             return False, "missing_duration_limit", checks
         checks.append("duration_limits")
     intensity_claim = has_intensity_position and bool(re.search(
-        r"\b(?:lt\s*[12]|threshold|seuil|umbral|zone|zona|sous|below|por debajo)\b",
+        r"\b(?:lt\s*[12]|threshold|seuil|umbral|zone|zona|sous|below|por debajo|"
+        r"fc moyenne|fréquence cardiaque|average hr|mean heart rate|fc media|"
+        r"frecuencia cardíaca media)\b",
         lowered, re.I,
     )) or has_intensity_hr and bool(re.search(
         r"\b(?:fc moyenne|fréquence cardiaque|average hr|mean heart rate|fc media|"
@@ -671,6 +693,10 @@ def validate_generated_narrative(
     if any(f.id.startswith("trend.") for f in facts) and _has_unqualified(
         _SENSITIVE_PATTERNS["trend"], lowered, lang,
     ):
+        trend_fact = next(fact for fact in facts if fact.id.startswith("trend."))
+        trend_qualification = _TREND_QUALIFICATIONS.get(trend_fact.id, {}).get(lang)
+        if trend_qualification is None or not trend_qualification.search(candidate):
+            return False, "missing_trend_qualification", checks
         if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["not_proof_of_fitness"][lang]):
             return False, "missing_trend_limit", checks
         checks.append("trend_limit")

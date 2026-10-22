@@ -453,6 +453,29 @@ def test_threshold_position_contradiction_is_rejected():
     assert not valid and reason == "contradictory_threshold_position"
 
 
+def test_numbered_training_zone_is_not_inferred_from_threshold_position():
+    facts = _facts()
+    candidate = (
+        "Ta FC moyenne est de 140 bpm en zone 2, mais elle ne décrit pas tout l'effort "
+        "ni le temps passé dans les zones."
+    )
+    valid, reason, _ = hybrid.validate_generated_narrative(candidate, facts)
+    assert not valid and reason == "unsupported_physiological_zone"
+
+
+def test_trend_must_keep_its_canonical_probability_qualification():
+    facts = _facts(
+        synthetic_case("comparable_history"),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    candidate = (
+        "Ton historique montre une amélioration certaine sur 6 observations en 92 jours, "
+        "avec une variation médiane de -24 s/km, mais ce n'est pas une preuve de forme."
+    )
+    valid, reason, _ = hybrid.validate_generated_narrative(candidate, facts)
+    assert not valid and reason == "missing_trend_qualification"
+
+
 def test_entitlements_and_flag_precede_provider(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     called = False
