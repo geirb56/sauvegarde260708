@@ -827,3 +827,92 @@ def test_authorized_deviation_remains_relevant_without_internal_labels():
         ],
     }
     assert _validate(payload, v3, permissions=permissions)
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("mutation", [
+    "unconfirmed", "sensitive", "missing_sensitivity", "sensitive_limit",
+    "unknown_structure", "missing_span", "zero_span",
+])
+def test_trend_claim_cannot_override_corroborating_v3_fields(language, mutation, monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    permissions = hybrid.HybridPermissions(history=True)
+    v3 = synthetic_case("comparable_history")
+    fact = next(f for f in _facts(v3, permissions=permissions, language=language)
+                if f.id == "trend.probable_improvement")
+    payload = literal_payload([fact])
+    assert _validate(payload, v3, permissions=permissions, language=language)
+    if mutation == "unconfirmed":
+        v3.performance_trend.variation_confirmed = False
+    elif mutation == "sensitive":
+        v3.performance_trend.sensitivity[0].status = "insufficient_data"
+    elif mutation == "missing_sensitivity":
+        v3.performance_trend.sensitivity = []
+    elif mutation == "sensitive_limit":
+        v3.performance_trend.limitations.append("status_sensitive_to_criteria")
+    elif mutation == "unknown_structure":
+        v3.performance_trend.limitations.append("reference_structure_unknown")
+    elif mutation == "missing_span":
+        v3.performance_trend.span_days = None
+    else:
+        v3.performance_trend.span_days = 0
+    before = deepcopy(v3.model_dump())
+    assert _validate(payload, v3, permissions=permissions, language=language) is None
+    assert not any(f.id.startswith("trend.") for f in _facts(
+        v3, permissions=permissions, language=language,
+    ))
+
+    async def provider(*args):
+        return json.dumps(payload, ensure_ascii=False), True, {}
+
+    result = _run(v3, permissions=permissions, language=language, transport=provider)
+    assert result.mode == "deterministic_fallback" and result.verdict == "HOLD"
+    assert not any(c.id.startswith("trend.") for c in result.claims)
+    assert v3.model_dump() == before
+
+
+@pytest.mark.parametrize("status,delta,confirmed", [
+    ("probable_improvement", -24, True),
+    ("possible_decline", 24, True),
+    ("stable", 0, False),
+])
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_corroborated_trend_admission_does_not_recalculate_science(status, delta, confirmed, language):
+    v3 = synthetic_case("comparable_history")
+    trend = v3.performance_trend
+    trend.status, trend.median_change_sec_per_km, trend.variation_confirmed = status, delta, confirmed
+    for row in trend.sensitivity:
+        row.status = status
+    before = deepcopy(v3.model_dump())
+    permissions = hybrid.HybridPermissions(history=True)
+    fact = next(f for f in _facts(v3, permissions=permissions, language=language)
+                if f.id == "trend." + status)
+    assert "terrain_weather_not_controlled" in fact.important_limits
+    assert "performance_trend.variation_confirmed" in fact.source_paths
+    assert "performance_trend.sensitivity.0.status" in fact.source_paths
+    assert _validate(literal_payload([fact]), v3, permissions=permissions, language=language)
+    trend.variation_confirmed = not confirmed
+    assert _validate(literal_payload([fact]), v3, permissions=permissions, language=language) is None
+    trend.variation_confirmed = confirmed
+    assert v3.model_dump() == before
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("name", CASES)
+def test_seven_fixtures_in_each_language_preserve_evidence_and_hold(name, language, monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    v3 = synthetic_case(name)
+    before = deepcopy(v3.model_dump())
+    permissions = hybrid.HybridPermissions(history=True, prescription=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    assert facts and all(_validate(
+        literal_payload([fact]), v3, permissions=permissions, language=language,
+    ) for fact in facts)
+    result = _run(v3, language=language, permissions=permissions, transport=_paraphrase)
+    assert result.mode == "deterministic_fallback"
+    assert result.reason == "semantic_verification_unavailable" and result.verdict == "HOLD"
+    assert result.cost is None and result.provider_duration_sec is None
+    assert v3.model_dump() == before
+    for claim in result.claims:
+        for ref in claim.evidence_refs:
+            _resolve(v3, ref)

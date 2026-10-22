@@ -24,7 +24,7 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
 TIMEOUT_SECONDS = 8.0
 MAX_RESPONSE_CHARS = 700
-VERSION = "c359-selected-facts-hold-2"
+VERSION = "c359-selected-facts-hold-3"
 
 
 @dataclass(frozen=True)
@@ -260,8 +260,19 @@ def build_admissible_facts(
                else f"Tu FC media es de {num(hr)} lpm; el tipo de tu sesión sigue siendo incierto."))
 
     trend = intelligence.performance_trend
+    directional_trend = trend.status in {"probable_improvement", "possible_decline"}
+    corroborated_trend = (
+        bool(trend.sensitivity)
+        and all(row.status == trend.status for row in trend.sensitivity)
+        and trend.variation_confirmed is directional_trend
+        and not any(limit in trend.limitations for limit in (
+            "status_sensitive_to_criteria", "reference_structure_unknown",
+        ))
+    )
     if (history and trend.confidence in {"medium", "high"}
+            and corroborated_trend
             and _count(trend.observation_count) and trend.observation_count > 0
+            and _count(trend.span_days) and trend.span_days > 0
             and _finite(trend.median_change_sec_per_km)
             and trend.status in {"probable_improvement", "stable", "possible_decline"}
             and (trend.status != "probable_improvement" or trend.median_change_sec_per_km < 0)
@@ -270,7 +281,9 @@ def build_admissible_facts(
         values = {"status": trend.status, "observations": n, "median_change": delta}
         units = {"observations": "count", "median_change": "s/km"}
         refs = ["performance_trend.status", "performance_trend.confidence",
-                "performance_trend.observation_count", "performance_trend.median_change_sec_per_km"]
+                "performance_trend.observation_count", "performance_trend.median_change_sec_per_km",
+                "performance_trend.variation_confirmed", "performance_trend.limitations",
+                *[f"performance_trend.sensitivity.{i}.status" for i in range(len(trend.sensitivity))]]
         span = ""
         if _count(trend.span_days):
             values["span"] = trend.span_days
@@ -283,7 +296,9 @@ def build_admissible_facts(
             "possible_decline": tr("baisse possible", "possible decline", "descenso posible"),
         }[trend.status]
         add("trend." + trend.status, values, units, "qualified_historical_trend", trend.confidence,
-            ["history_authorized", "v3_trend_only"], ["not_proof_of_fitness", "no_cause"], 90, refs,
+            ["history_authorized", "v3_trend_only", "v3_sensitivity_agrees",
+             "v3_confirmed_variation" if directional_trend else "v3_stable_assessment"],
+            ["not_proof_of_fitness", "no_cause", "terrain_weather_not_controlled"], 90, refs,
             tr(f"Ton historique suggère une {label} : {n} observations{span}, variation d'allure médiane de {num(delta)} s/km (récente moins ancienne) ; ce n'est pas une preuve de changement de forme.",
                f"Your history suggests {label}: {n} observations{span}, median pace change {num(delta)} s/km (later minus earlier); not proof of a fitness change.",
                f"Tu historial sugiere {label}: {n} observaciones{span}, cambio de ritmo mediano de {num(delta)} s/km (reciente menos antiguo); no es una prueba de cambio de forma."))
