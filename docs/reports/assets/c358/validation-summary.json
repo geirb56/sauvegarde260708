@@ -4,8 +4,8 @@
   "serverCommand": "cd frontend && HOST=127.0.0.1 PORT=3000 BROWSER=none WDS_SOCKET_HOST=localhost npm start",
   "origin": "http://localhost:3000",
   "browser": "/opt/google/chrome/chrome",
-  "suiteStartTime": "2026-10-22T07:17:33.150Z",
-  "durationMs": 210305.371,
+  "suiteStartTime": "2026-10-22T07:23:22.887Z",
+  "durationMs": 211706.202,
   "passed": 133,
   "failed": 0,
   "skipped": 0,
@@ -18,14 +18,27 @@
     "removedC358Directories": 132,
     "removedFiles": 134,
     "remainingTestsTestResultsEntries": 0,
-    "indexChanges": "None made by visual-c358; parent owns removing previously staged transient paths.",
+    "indexChanges": "Only eight staged C358 generated-artifact paths were unstaged under the final explicit authorization; no source/report/other index paths were touched.",
+    "concurrentCommitCleanup": "Four automatic screenshots were committed by the parent during this run and are now deleted from the working tree. Parent must commit these deletions; tests/test-results has no remaining files.",
+    "trackedTransientPathsDeleted": [
+      "tests/test-results/c358-consistency-loading-S-7f907-Detail-desktop-fr-immediate-chromium/test-finished-1.png",
+      "tests/test-results/c358-consistency-loading-S-baa06-outDetail-desktop-fr-absent-chromium/test-finished-1.png",
+      "tests/test-results/c358-consistency-loading-S-c4bdf-utDetail-desktop-fr-delayed-chromium/test-finished-1.png",
+      "tests/test-results/c358-consistency-loading-S-f9544-utDetail-desktop-fr-http500-chromium/test-finished-1.png"
+    ],
     "attachmentNote": "Raw runner JSON retains attachment paths from execution. Those automatic screenshots were transient and removed; the 30 persistent PNGs listed here remain available."
   },
   "pngCaptures": 30,
-  "base": "c263d318dd72fef6b3e19c2130ef8868d48ccfea",
-  "head": "c263d318dd72fef6b3e19c2130ef8868d48ccfea",
+  "base": "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
+  "head": "122b89906fa0f10457a7fc2d021a6eee0e3d5e35",
+  "captureHeads": [
+    "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
+    "122b89906fa0f10457a7fc2d021a6eee0e3d5e35"
+  ],
   "baseNote": "HEAD at suite module load. The shallow clone has no origin/copilot/dev ref; this is not a claimed integration-branch merge base.",
   "workingTreeDirty": true,
+  "captureWorkingTreeDirtyStates": [false, true],
+  "captureSourceNote": "Parent commits advanced during this final run. Per-case records preserve the exact observed head and dirty flag. All ten source SHA256 values remained identical across all 132 cases and matched the working tree after completion; no tested source changed.",
   "routes": ["WorkoutDetail", "SessionDetail", "DetailedAnalysis"],
   "viewports": {
     "desktop": {"width": 1920, "height": 1080},
@@ -40,7 +53,7 @@
     "coverage": "All three languages and both viewports. V3 HTTP500 must render its localized unavailable status while V2 remains gated; factual HR stays visible and no analysis-not-found or legacy conclusion may appear. Releasing V2 yields the supported fallback."
   },
   "delayedCases": 18,
-  "observedPendingDurationMs": {"minimum": 2610, "maximum": 2926},
+  "observedPendingDurationMs": {"minimum": 2607, "maximum": 2937},
   "horizontalOverflowStates": 0,
   "pageErrors": [],
   "unexpectedApiRequests": [],
@@ -130,6 +143,13 @@
     },
     {
       "suiteStartTime": "2026-10-22T07:17:33.150Z",
+      "passed": 133,
+      "failed": 0,
+      "retries": 0,
+      "supersededReason": "Parent explicitly requested one consolidated final run after frontend freeze; no fixture or production source changes were necessary."
+    },
+    {
+      "suiteStartTime": "2026-10-22T07:23:22.887Z",
       "passed": 133,
       "failed": 0,
       "retries": 0,
