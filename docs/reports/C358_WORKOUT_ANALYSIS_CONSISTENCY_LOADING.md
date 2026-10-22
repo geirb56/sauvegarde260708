@@ -470,7 +470,7 @@ section 11.
 ```text
 cd tests
 ./node_modules/.bin/playwright test e2e/c358-consistency-loading.spec.ts --retries=0
-133 passed, 0 failed, 0 skipped, 0 flaky (210,31 secondes)
+133 passed, 0 failed, 0 skipped, 0 flaky (3,5 minutes)
 ```
 
 Soit les 126 combinaisons de la matrice, une vérification arithmétique et six
@@ -528,8 +528,10 @@ Exemples comparatifs :
 - Revue indépendante en lecture seule : le défaut V2 prématuré a été corrigé,
   puis aucun autre problème significatif signalé.
 - Validation parallèle Code Review/CodeQL demandée après publication des
-  changements ; résultat final ajouté à la livraison, sans présumer ici
-  qu'un outil indisponible aurait effectué une revue.
+  changements : l'outil a refusé l'exécution faute de budget de temps restant,
+  avec consigne de ne pas le relancer. **Aucun résultat CodeQL final n'est
+  revendiqué sur ce HEAD.** Le contrôle automatisé reste à effectuer avant
+  toute décision de merge ; la revue indépendante ci-dessus a bien été faite.
 
 **Risques résiduels :**
 
@@ -549,7 +551,7 @@ Exemples comparatifs :
    et aucun déploiement ne sont effectués.
 
 **Verdict : GO conditionnel pour audit humain de la PR #358 en brouillon**,
-avec contrôle de sécurité final et acceptation explicite des échecs V2
+avec contrôle automatisé de sécurité encore requis et acceptation explicite des échecs V2
 préexistants. Les deux corrections applicatives sont livrées, sur preuves
 synthétiques déclarées, sans changer les formules ni les contrats. Le HOLD
 historique des sections 1 à 10 est levé par l'autorisation de reprise.

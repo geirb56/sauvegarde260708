@@ -2,7 +2,7 @@
   "provenance": "SYNTHETIC intercepted API responses in the actual locally served React app; not actual Garmin observations.",
   "base": "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
   "baseNote": "C358_BASE_SHA if supplied, otherwise HEAD at suite module load; not an inferred integration-branch merge base.",
-  "head": "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
+  "head": "122b89906fa0f10457a7fc2d021a6eee0e3d5e35",
   "workingTreeDirty": true,
   "sourceHashes": {
     "tests/e2e/c358-consistency-loading.spec.ts": "deda7ae75f2c8f3c1a2f2bf23aaaa0b6a260e21de920dd537b0f5b68f6fc22e5",
@@ -42,7 +42,7 @@
   },
   "partialSyntheticStd": null,
   "partialNote": null,
-  "v3PendingDurationMs": 2926,
+  "v3PendingDurationMs": 2922,
   "captures": [
     "WorkoutDetail-desktop-en-delayed-initial.png",
     "WorkoutDetail-desktop-en-delayed-local-placeholder.png",
