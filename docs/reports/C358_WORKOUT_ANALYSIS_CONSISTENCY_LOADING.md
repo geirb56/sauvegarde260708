@@ -739,3 +739,94 @@ Les limitations synthétiques, la revue humaine des images et les trois
 échecs historiques restent explicitement déclarés. PR #358 conservée en
 brouillon ; aucun nouvel accès Garmin/GCCLI, aucune écriture MongoDB, aucun
 merge ni déploiement. **STOP après livraison, en attente de l'audit utilisateur.**
+
+## 20. Revalidation finale du nettoyage — 22 octobre 2026
+
+Cette section complète, sans les remplacer, les résultats historiques ci-dessus.
+Le nettoyage demandé était déjà publié à l'ouverture de cette session :
+aucun second retrait d'artefact ni changement applicatif n'a été nécessaire.
+Seul ce rapport est actualisé dans le nouveau commit de livraison.
+
+- Base exacte de la PR : `copilot/dev`,
+  `bdb67314b3bb16ae166dc1e91f3ba11039d9b616`.
+- HEAD effectivement revalidé :
+  `6671eec206f22b2a4874a0e5a0fe0315e379817f`, arbre propre pendant les tests.
+- HEAD avant nettoyage :
+  `5de2d651b91aafa39037d1aa7b30a10ec34b3842`.
+- Nouveau SHA documentaire final : communiqué dans la PR après création du
+  commit ; aucune auto-référence de SHA dans son propre contenu.
+
+### Inventaire et volumes revérifiés
+
+L'inventaire du §19 est confirmé par les objets Git : **182 → 21 fichiers**
+dans le diff PR, **166 → 4 preuves**, **162 retraits** exclusivement dans
+`docs/reports/assets/c358/` (133 JSON, dont le JSON brut du runner, 27 PNG,
+2 journaux). Les familles exhaustives de noms supprimés et la liste des
+fichiers conservés restent au §19.
+
+Avant nettoyage : **18 953 lignes ajoutées, 101 supprimées** ; au HEAD revalidé :
+**1 811 lignes ajoutées, 101 supprimées**. Le contenu non compressé des fichiers
+nouvellement ajoutés à la PR passe de **3 211 351 à 337 820 octets** à ces deux
+HEAD ; les quatre preuves occupent toujours **267 397 octets**, contre
+**3 151 202** avant nettoyage. Le complément documentaire présent augmente
+uniquement le volume du rapport ; les totaux du nouveau HEAD sont indiqués dans
+le commentaire final de livraison.
+
+Comparaison complète avec le HEAD avant nettoyage : **aucune différence**
+dans `backend/`, `frontend/` et `tests/fixtures/`. Dans le test Playwright,
+seule la destination des sorties a changé, comme décrit au §19 ; aucune
+assertion ni aucun scénario supprimé. Les corrections C358, les formules,
+contrats API, traductions, gating et états de chargement sont donc préservés.
+Les quatre liens locaux du rapport et les trois références de captures du
+manifeste sont résolus ; aucune dépendance vers une preuve supprimée.
+
+### Exécutions de cette session, distinctes des captures conservées
+
+Commandes identiques à celles du §19, avec un environnement Python isolé
+activé pour `python -m pytest` et `C358_BASE_SHA` fixé à la base exacte
+ci-dessus pour Playwright. Aucune dépendance du dépôt ni aucun lockfile modifié.
+Le runner Playwright installé depuis la plage existante est **1.64.1**.
+
+| Contrôle | Résultat réellement obtenu dans cette session |
+|---|---|
+| Frontend C358, trois suites | **946 réussites**, 47,483 s |
+| Backend ciblé | **750 réussites**, 7 avertissements, 6,76 s |
+| Backend étendu | **1 346 réussites, 3 échecs historiques**, 14 avertissements, 9,32 s |
+| Playwright C358, sans retry | **133 réussites**, 0 échec/skip/flaky, 322,132 s |
+| Build frontend | **Compilation réussie** ; avertissement Browserslist ancien |
+| CodeQL de cette session | **Python terminé : 0 alerte ; JavaScript non terminé (expiration du délai global)** |
+
+Les premiers essais backend ont échoué dans le clone frais faute de
+dépendances de test/import (`fastapi`, `httpx`, plugin asyncio, support
+cryptographique RSA, `redis`). Ces prérequis existants ont été restaurés dans
+l'environnement isolé, sans correction de source ni suppression de test.
+Les relances complètes ci-dessus ont ensuite retrouvé exactement les résultats
+attendus. Les seuls échecs restants sont les trois variantes EN/FR/ES
+`test_comparable_history_stays_separate_and_metrics_are_unchanged`, avec le
+même écart de code `meaning` documenté au §19 ; aucun nouvel échec applicatif.
+
+Les empreintes des **820 fichiers suivis** ont été comparées avant et après
+toutes les exécutions : **aucune modification**. Les **296 fichiers générés**
+sous `tests/test-results/`, dont 132 JSON par scénario et 30 PNG, sont tous
+ignorés ; aucun nouveau fichier non ignoré ni fichier suivi recréé. Le manifeste
+et les trois PNG conservés restent les preuves historiques, pas des captures
+de cette nouvelle exécution. Les API du navigateur sont interceptées ;
+aucun appel Garmin/GCCLI ni aucune écriture MongoDB effectué.
+
+### Revue, sécurité et verdict actuel
+
+La validation parallèle a été demandée sur le HEAD revalidé : son analyse
+Python est terminée sans alerte, mais son délai global a interrompu la suite
+avant un résultat JavaScript. **Aucun succès CodeQL multilangage complet
+n'est revendiqué pour cette session** ; le résultat historique du §19 ne
+remplace pas ce résultat partiel. Le validateur a expressément demandé de ne
+pas relancer après expiration ; aucune nouvelle tentative effectuée.
+
+Le module automatique de revue est indisponible (modèle absent), malgré son
+en-tête « succès ». Une revue indépendante en lecture seule du diff de
+nettoyage a terminé **sans problème significatif**.
+
+**Verdict actuel : HOLD pour le merge** — résultat CodeQL JavaScript incomplet
+et audit utilisateur attendu. Le nettoyage et les tests obligatoires sont
+confirmés, sans nouvel échec fonctionnel. PR #358 conservée en brouillon,
+aucune nouvelle PR, aucun merge ni déploiement. **STOP après livraison.**
