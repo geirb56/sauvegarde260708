@@ -1,3 +1,313 @@
+# C360 — Narrative Planning & Controlled Rendering
+
+## Portée et décision
+
+Cette section est le rapport courant pour la PR **#360**, branche existante
+`copilot/c359-recovery`, base `copilot/dev`. Elle supersède les verdicts C359
+historiques ci-dessous sans les réécrire. HEAD du code évalué :
+`8cae06c3c387de446fe019a62d108a2863e67f7e` ; le commit documentaire qui ajoute
+cette section est postérieur et ne modifie pas ce code.
+
+### Architecture avant / après
+
+| | Avant C360 | Après C360 |
+| --- | --- | --- |
+| Entrée fournisseur | Evidence Pack V3 structuré | Même Evidence Pack filtré par droits, sans assertion en prose ni source-path |
+| Contrat | Synthèse libre accompagnée de déclarations de preuves, puis comparaison littérale du texte | Plan JSON sans prose : ID principal, IDs secondaires ordonnés, conclusions autorisées, limites essentielles et niveau de détail |
+| Contrôle | Comparer chaque phrase générée à une assertion exacte ; rejet des paraphrases | Reconstruire les faits/droits, vérifier tous les IDs, conclusions et limites, refuser doublons/incompatibilités et niveau incohérent |
+| Rédaction | Repli déterministe si le texte libre ne pouvait pas être prouvé | Rendu local contrôlé depuis les assertions V3 et des clauses de limite localisées ; le fournisseur ne fournit aucun texte affiché |
+| Science / produit | HOLD | Autorités et permissions inchangées ; le plan est techniquement vérifiable, mais une vraie génération rédactionnelle et un gain produit ne sont pas démontrés : **HOLD** |
+
+### Contrat du plan narratif
+
+Un unique appel fournisseur demande exclusivement un objet de ce type :
+
+```json
+{
+  "main_fact_id": "interval.count",
+  "supporting_fact_ids": [],
+  "conclusion_ids": {
+    "interval.count": "recorded_intervals_without_regularity"
+  },
+  "required_limit_ids": {
+    "interval.count": [
+      "no_repetition_durations",
+      "regularity_verdict_unavailable"
+    ]
+  },
+  "detail_level": "concise"
+}
+```
+
+Le serveur reconstruit les faits admissibles à partir de V3 et des permissions.
+Le plan doit sélectionner entre un et trois faits distincts ; le nombre doit
+respecter `concise` (1), `balanced` (jusqu'à 2) ou `detailed` (jusqu'à 3). Le
+premier est l'observation principale ; l'ordre des IDs secondaires est conservé.
+Chaque conclusion doit être exactement celle du fait. Toutes les limites
+essentielles doivent être présentes ; des limites supplémentaires ne sont
+acceptées que si elles appartiennent au fait. Le fait inconnu, une référence
+historique non autorisée, un ID de conclusion absent/incorrect, une limite
+essentielle omise, un doublon, une combinaison redondante ou une clé de prose
+libre invalide le plan.
+
+Étape A sélectionne et hiérarchise ; Étape B est un rendu local à partir de
+phrases factuelles canonisées et de clauses de sécurité contrôlées. Il n'y a pas
+de seconde génération libre ni de juge LLM. Cette frontière permet de vérifier
+le contrat sans interpréter du texte, mais **ne permet pas au LLM d'écrire une
+prose originale**. La flexibilité observée vient du plan (focus, ordre, faits
+secondaires, détail), et non d'une validation sémantique d'un texte libre.
+
+### Exemple complet — séance fractionnée
+
+Faits admissibles (les champs privés, sources et textes arbitraires ne sont pas
+transmis) :
+
+- `interval.count`: efforts `4`, récupérations `3`; conclusion
+  `recorded_intervals_without_regularity`; limites requises
+  `no_repetition_durations`, `regularity_verdict_unavailable`.
+- `intensity.position`: FC moyenne `160 bpm`, seuils personnels `LT1=150`,
+  `LT2=170`, position `between_LT1_LT2`; conclusion
+  `average_hr_threshold_position`; limites requises
+  `average_not_whole_effort`, `no_time_in_zones`, `no_physiological_cause`.
+
+Plan sélectionné : celui de l'exemple JSON ci-dessus. Il choisit le nombre
+d'efforts/récupérations comme observation principale, n'ajoute pas la moyenne
+cardiaque hors sujet et demande une réponse concise.
+
+Texte C360 effectivement accepté :
+
+> Garmin a enregistré une séance fractionnée avec 4 phases d'effort et 3 phases de récupération. La durée de chaque répétition n'est pas disponible, donc sa régularité ne peut pas être jugée.
+
+Narrative V3 de référence, sur la même fixture :
+
+> Une séance fractionnée. Garmin a enregistré 4 phases d'effort et 3 phases de récupération. La comparaison disponible ne permet pas d'établir la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières. La conformité à la prescription reste indéterminée.
+
+Le rendu C360 nomme la séance et lie explicitement l'absence de durée au
+non-jugement de la régularité ; il ne transforme pas l'absence de preuve en
+irrégularité. V3 est plus fluide sur la réserve, tandis que C360 est plus
+spécifique sur la limite des durées. Aucun texte d'un vrai LLM n'a été évalué.
+
+### Sept comparaisons V3 / C360
+
+Les faits ci-dessous sont **tous** ceux du paquet autorisé pour le cas. `valeurs
+→ conclusion [limites essentielles]` les résume sans chemins de source. Les
+plans et textes proviennent du transport planificateur **simulé**, puis du
+rendu local effectivement accepté ; ils ne sont pas des sorties d'un fournisseur.
+Les références V3 sont les rendus déterministes `deterministic_fallback` avec
+les mêmes autorisations histoire/prescription. Les fixtures et sorties sont
+synthétiques.
+
+#### 1. Footing facile (`easy`)
+
+- Faits : `session.kind` `{classification: easy_run_probable}` →
+  `probable_session_type` [`probable_not_certain`]; `intensity.position`
+  `{average_hr: 140, lt1: 150, lt2: 170, position: below_LT1}` →
+  `average_hr_threshold_position` [`average_not_whole_effort`,
+  `no_time_in_zones`, `no_physiological_cause`].
+- Plan : principal `session.kind`; secondaire `intensity.position`;
+  conclusions correspondantes; limites requises ci-dessus; `balanced`.
+- C360 accepté : « Tu as probablement fait un footing facile. En complément,
+  ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort.
+  Elle ne renseigne ni le temps passé dans les zones ni la raison de cette
+  moyenne. »
+- Narrative V3 : « Probablement un footing facile. Ta fréquence cardiaque
+  moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton
+  historique comparable ne permet pas encore de savoir avec confiance si tu
+  progresses ou si tes performances baissent. Sans splits, la FC moyenne ne
+  décrit pas le temps passé dans chaque zone. La conformité à la prescription
+  reste indéterminée. »
+- Comparaison : même fait principal et personnalisation cardiaque ; C360 est
+  beaucoup plus court et omet les réserves d'historique/prescription sans objet.
+  Sa phrase de limite reste un ajout explicatif local, pas une rédaction LLM.
+
+#### 2. Sortie longue (`long`)
+
+- Faits : `session.long` `{duration: 100 min, usual_duration: 50 min}` →
+  `probable_long_duration_comparison` [`probable_not_certain`,
+  `duration_not_effort`]; `intensity.position` `{average_hr: 140, lt1: 150,
+  lt2: 170, position: below_LT1}` → `average_hr_threshold_position`
+  [`average_not_whole_effort`, `no_time_in_zones`, `no_physiological_cause`].
+- Plan : principal `session.long`; secondaire `intensity.position`;
+  conclusions et limites requises correspondantes; `balanced`.
+- C360 accepté : « Ta sortie est probablement longue : 100 min, contre 50 min
+  habituellement. La durée ne permet pas à elle seule d'estimer l'intensité.
+  En complément, ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas
+  tout l'effort. Elle ne renseigne ni le temps passé dans les zones ni la raison
+  de cette moyenne. »
+- Narrative V3 : « Probablement une sortie longue. Ta fréquence cardiaque
+  moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton
+  historique comparable ne permet pas encore de savoir avec confiance si tu
+  progresses ou si tes performances baissent. Sans splits, la FC moyenne ne
+  décrit pas le temps passé dans chaque zone. La conformité à la prescription
+  reste indéterminée. »
+- Comparaison : C360 expose la particularité 100/50 déjà calculée par V3 et
+  rappelle que durée n'est pas intensité ; V3 ne montre pas la comparaison
+  habituelle. La seconde réserve cardiaque rend toutefois C360 moins concise
+  qu'elle pourrait l'être.
+
+#### 3. Fractionné (`intervals_4x4`)
+
+- Faits : `interval.count` `{efforts: 4, recoveries: 3}` →
+  `recorded_intervals_without_regularity` [`no_repetition_durations`,
+  `regularity_verdict_unavailable`]; `intensity.position` `{average_hr: 160,
+  lt1: 150, lt2: 170, position: between_LT1_LT2}` →
+  `average_hr_threshold_position` [`average_not_whole_effort`, `no_time_in_zones`,
+  `no_physiological_cause`].
+- Plan : principal `interval.count`; aucun secondaire; conclusion et deux
+  limites requises correspondantes; `concise`.
+- C360 accepté : « Garmin a enregistré une séance fractionnée avec 4 phases
+  d'effort et 3 phases de récupération. La durée de chaque répétition n'est pas
+  disponible, donc sa régularité ne peut pas être jugée. »
+- Narrative V3 : « Une séance fractionnée. Garmin a enregistré 4 phases
+  d'effort et 3 phases de récupération. La comparaison disponible ne permet
+  pas d'établir la régularité des répétitions ; cela ne signifie pas qu'elles
+  étaient irrégulières. La conformité à la prescription reste indéterminée. »
+- Comparaison : C360 lie concrètement les deux limites et évite tout jugement
+  d'irrégularité ; V3 formule plus explicitement que l'absence de preuve ne
+  signifie pas des répétitions irrégulières. Aucune durée « 4 minutes » n'est
+  inventée à partir du nom de la fixture.
+
+#### 4. Données peu documentées (`sparse`)
+
+- Faits : `session.unknown` `{classification: unknown,
+  average_hr_available: 0}` → `session_type_unproven`
+  [`unknown_not_easy`].
+- Plan : principal `session.unknown`; aucun secondaire; limite requise;
+  `concise`.
+- C360 accepté : « Le type de ta séance reste incertain ; aucune FC moyenne
+  n'est disponible. Un type inconnu ne signifie pas que la séance était facile. »
+- Narrative V3 : « Type de séance incertain. Les données disponibles ne
+  permettent pas d'identifier le type de séance de façon fiable. Ton historique
+  comparable ne permet pas encore de savoir avec confiance si tu progresses ou
+  si tes performances baissent. Sans splits ni LT1 fiable, les moyennes de
+  séance ne permettent pas de confirmer une zone physiologique. La conformité à
+  la prescription reste indéterminée. »
+- Comparaison : C360 évite les réserves génériques et ne transforme pas les
+  données absentes en séance facile. V3 fournit une explication plus complète
+  du manque d'information ; le gain d'utilité n'est donc pas univoque.
+
+#### 5. Tapis roulant (`treadmill`)
+
+- Faits : `session.kind` `{classification: easy_run_probable}` →
+  `probable_session_type` [`probable_not_certain`]; `intensity.position`
+  `{average_hr: 140, lt1: 150, lt2: 170, position: below_LT1}` →
+  `average_hr_threshold_position` [`average_not_whole_effort`,
+  `no_time_in_zones`, `no_physiological_cause`].
+- Plan : principal `session.kind`; secondaire `intensity.position`;
+  conclusions et limites requises correspondantes; `balanced`.
+- C360 accepté : « Tu as probablement fait un footing facile. En complément,
+  ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort.
+  Elle ne renseigne ni le temps passé dans les zones ni la raison de cette
+  moyenne. »
+- Narrative V3 : identique au texte de la fixture `easy`.
+- Comparaison : C360 ne produit aucune particularité tapis ; le seul fait tapis
+  disponible n'autorise pas une comparaison historique ici. Cette fixture ne
+  démontre donc pas de personnalisation spécifique au tapis.
+
+#### 6. Historique comparable (`comparable_history`)
+
+- Faits : `session.kind` `{classification: easy_run_probable}` →
+  `probable_session_type` [`probable_not_certain`]; `intensity.position`
+  `{average_hr: 140, lt1: 150, lt2: 170, position: below_LT1}` →
+  `average_hr_threshold_position` [`average_not_whole_effort`, `no_time_in_zones`,
+  `no_physiological_cause`]; `trend.probable_improvement`
+  `{observations: 6, median_change: -24 s/km, span: 92 days}` →
+  `qualified_historical_trend` [`not_proof_of_fitness`, `no_cause`,
+  `terrain_weather_not_controlled`].
+- Plan : principal `trend.probable_improvement`; secondaires, dans l'ordre,
+  `session.kind`, `intensity.position`; conclusions et limites requises
+  correspondantes; `detailed`.
+- C360 accepté : « Ton historique suggère une amélioration probable : 6
+  observations sur 92 jours, variation d'allure médiane de −24 s/km (récente
+  moins ancienne) ; ce n'est pas une preuve de changement de forme. La cause
+  n'est pas établie et les effets du terrain ou de la météo ne sont pas isolés.
+  En complément, tu as probablement fait un footing facile. Autre repère utile :
+  ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort.
+  Elle ne renseigne ni le temps passé dans les zones ni la raison de cette
+  moyenne. »
+- Narrative V3 : « Probablement un footing facile. Ta fréquence cardiaque
+  moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton allure
+  médiane est plus rapide de 24 s/km à fréquence cardiaque comparable sur 6
+  observations sur 92 jours : un signe encourageant d'amélioration probable,
+  pas une preuve de gain de forme. Sans splits, la FC moyenne ne décrit pas le
+  temps passé dans chaque zone. La conformité à la prescription reste
+  indéterminée. »
+- Comparaison : le plan place la tendance en tête et conserve sa qualification,
+  puis ajoute type et FC. La formulation C360 devient toutefois longue et
+  accumule des réserves ; V3 est plus fluide et personnalise aussi l'allure
+  comparable. C360 n'établit pas qu'il soit plus agréable ou utile.
+
+#### 7. Physiologie insuffisante (`no_physiology`)
+
+- Faits : `intensity.hr` `{average_hr: 140}` →
+  `descriptive_average_hr_only` [`no_physiological_zone`,
+  `average_not_whole_effort`]; `session.unknown` `{classification: unknown,
+  average_hr_available: 1, average_hr: 140}` → `session_type_unproven`
+  [`unknown_not_easy`].
+- Plan : principal `session.unknown`; aucun secondaire; limite requise;
+  `concise`.
+- C360 accepté : « Ta FC moyenne est de 140 bpm ; le type de ta séance reste
+  incertain. Un type inconnu ne signifie pas que la séance était facile. »
+- Narrative V3 : « Type de séance incertain. Les données disponibles ne
+  permettent pas d'identifier le type de séance de façon fiable. Ton historique
+  comparable ne permet pas encore de savoir avec confiance si tu progresses ou
+  si tes performances baissent. Sans splits ni LT1 fiable, les moyennes de
+  séance ne permettent pas de confirmer une zone physiologique. La conformité à
+  la prescription reste indéterminée. »
+- Comparaison : C360 conserve la moyenne disponible et refuse d'en faire une
+  zone ou une intensité. Il est plus court, mais V3 explicite mieux pourquoi
+  la physiologie n'est pas interprétable.
+
+### Évaluation transversale
+
+| Critère | Observation sur les sorties acceptées |
+| --- | --- |
+| Pertinence du fait principal | Le plan simulé met en tête durée ou tendance quand elles existent ; il garde le décompte comme fait central du fractionné. |
+| Personnalisation | Le 100/50 min et le −24 s/km sont exposés. Le cas tapis reste identique au footing facile ; aucune spécialisation supplémentaire n'est démontrée. |
+| Clarté / naturel | Les sorties courtes sont lisibles. La sortie historique ressemble encore à un assemblage de phrases canoniques, et certaines explications sont plus sèches que V3. |
+| Répétitions | L'historique générique et la conformité indisponible sont omis. En contrepartie, plusieurs limites d'intensité peuvent s'accumuler dans la sortie détaillée. |
+| Utilité | Le plan peut sélectionner et ordonner des informations utiles sans recopier systématiquement tous les faits. Les résultats synthétiques ne démontrent pas une utilité supérieure dans tous les cas. |
+| Fidélité scientifique | Seuls les faits, conclusions et limites reconstruits localement sont rendus. Pas de zone depuis la FC moyenne seule, de régularité depuis des comptes, de durée depuis le nom de fixture, de causalité ou de prescription nouvelle. |
+
+Le planificateur des comparaisons est un **mock déterministe** écrit pour les
+fixtures, et le rendu est local ; ces résultats évaluent le contrat et ses textes
+de sortie, **pas la qualité d'un véritable LLM**. Le plan peut être édité par un
+fournisseur réel lorsqu'il est explicitement activé, mais aucun appel fournisseur
+réel n'a eu lieu. Comme le texte affiché est construit localement, C360 ne
+démontre pas une rédaction naturelle par LLM.
+
+### Tests, sécurité et verdict
+
+Tests ciblés existants et adaptés : `164 passed` pour
+`backend/tests/test_hybrid_coach_c359.py`, incluant plans valides et invalides,
+ID/conclusion inconnus, fait non autorisé, limite essentielle omise, ordre,
+doublon/répétition, prose libre rejetée, timeout, JSON invalide, repli, accès,
+flag, transport/latence et FR/EN/ES. La même suite couvre les sept fixtures
+synthétiques ; aucune séance réelle n'a été utilisée. `py_compile`,
+`git diff --check` et Flake8 ciblé (`E9,F63,F7,F82`) réussissent.
+
+Limites : les faits V3 restent la seule autorité et ne sont pas recalculés ;
+la validation du plan ne prouve pas que les entrées V3 sont vraies, ne garantit
+pas la qualité éditoriale et ne vérifie aucun texte fournisseur puisque celui-ci
+est refusé. Les clauses localisées constituent du rendu contrôlé, non un
+vérificateur sémantique universel. Aucune écriture MongoDB, opération Garmin /
+GCCLI, route, branchement production, déploiement ou merge n'a été effectué.
+Le feature flag `C359_HYBRID_COACH_ENABLED` reste **OFF par défaut**.
+
+- **GO technique :** contrat ID-only fail-closed et rendu local implémentés ;
+  tests ciblés verts.
+- **GO produit : non.** Aucun fournisseur réel, panel de qualité ou avantage
+  constant sur Narrative V3 n'a été démontré.
+- **Verdict global : HOLD.** Cette architecture contrôlée débloque une sélection
+  narrative structurée, mais pas une rédaction libre sûre et une qualité
+  supérieure vérifiée. Attendre l'audit C360 ; ne pas activer ni intégrer.
+
+Base : `copilot/dev` (`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD du code
+testé : à estampiller après le commit du code. Suite ciblée :
+`/tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q --tb=short`
+depuis `backend/` — **164 passed**. HEAD final après commit documentaire sera
+consigné dans le message de livraison.
+
 # C359 — Coach hybride V1/V3, prototype contrôlé
 
 ## Revalidation de livraison — 22 octobre 2026 — HOLD maintenu

@@ -480,6 +480,10 @@ def validate_narrative_plan(
     facts = build_admissible_facts(
         intelligence, access=access, permissions=permissions, language=language,
     )
+    return _validate_narrative_plan_payload(payload, facts)
+
+
+def _validate_narrative_plan_payload(payload: object, facts: tuple[AdmissibleFact, ...]) -> Optional[dict]:
     index = {fact.id: fact for fact in facts}
     if type(payload) is not dict or set(payload) != {
         "main_fact_id", "supporting_fact_ids", "conclusion_ids",
@@ -666,12 +670,13 @@ async def generate_hybrid_coach(
                 result.reason = "transport_response_limit"
             else:
                 payload = json.loads(text, object_pairs_hook=_unique_object)
-                plan = validate_narrative_plan(
-                    payload, intelligence, access=access, permissions=permissions, language=language,
+                render_facts = build_admissible_facts(
+                    intelligence, access=access, permissions=permissions, language=language,
                 )
+                plan = _validate_narrative_plan_payload(payload, render_facts)
                 if plan is not None:
                     result.narrative_plan = plan
-                    result.claims = render_validated_plan(plan, facts, language=language)
+                    result.claims = render_validated_plan(plan, render_facts, language=language)
                     result.text = _render(result.claims)
                     result.mode = "planned_synthesis"
                     result.reason = "validated_narrative_plan"

@@ -825,6 +825,23 @@ def test_plan_validation_and_rendering_rebuild_authority_from_current_v3():
     assert _validate(payload, v3) is not None
 
 
+def test_provider_wait_does_not_render_stale_facts(monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    v3 = synthetic_case()
+    fact = next(f for f in _facts(v3) if f.id == "intensity.position")
+    plan = literal_payload([fact])
+
+    async def mutate_during_provider(*args):
+        response = json.dumps(plan)
+        v3.intensity_assessment.hr_used_bpm = 141
+        return response, True, {}
+
+    result = _run(v3, transport=mutate_during_provider)
+    assert result.mode == "planned_synthesis"
+    assert result.claims[0].id == "intensity.position"
+    assert "141 bpm" in result.text and "140 bpm" not in result.text
+
+
 @pytest.mark.parametrize("confidence", ["medium", "high"])
 def test_regularity_never_inferred_from_availability_or_high_confidence(confidence):
     v3 = synthetic_case("intervals_4x4")
