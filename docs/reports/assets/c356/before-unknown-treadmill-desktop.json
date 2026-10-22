@@ -1,0 +1,38 @@
+{
+  "stage": "before",
+  "kind": "unknown-treadmill",
+  "viewportName": "desktop",
+  "fixture": "synthetic contract-based; not actual Garmin evidence",
+  "head": "ee0109efe6f614136bf7aee98e409b70d73858ef",
+  "apiRequests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-unknown-treadmill",
+    "/api/coach/workout-analysis/c356-unknown-treadmill"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "metrics": [
+    {
+      "pathname": "/workout/c356-unknown-treadmill",
+      "viewportWidth": 1440,
+      "documentWidth": 1440,
+      "horizontalOverflow": false,
+      "heading": null,
+      "headings": [
+        "Session summary",
+        "Synthetic · Treadmill",
+        "Session synthesis"
+      ],
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · Treadmill\n\nSun, Oct 18 · Run\n\nDuration\n30m\nSession synthesis\n\nValidated interpretation\nLes données disponibles ne permettent pas de caractériser cette séance.\n\nLimitations\nDistance, allure et fréquence cardiaque indisponibles.\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+    }
+  ]
+}

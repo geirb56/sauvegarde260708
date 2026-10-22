@@ -1,0 +1,40 @@
+{
+  "stage": "before",
+  "kind": "intervals",
+  "viewportName": "mobile",
+  "fixture": "synthetic contract-based; not actual Garmin evidence",
+  "head": "ee0109efe6f614136bf7aee98e409b70d73858ef",
+  "apiRequests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-intervals",
+    "/api/coach/workout-analysis/c356-intervals"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "metrics": [
+    {
+      "pathname": "/workout/c356-intervals",
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": null,
+      "headings": [
+        "Session summary",
+        "Synthetic · 4 × 4 min",
+        "Session synthesis",
+        "Efforts and recoveries",
+        "Key takeaways"
+      ],
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · 4 × 4 min\n\nSun, Oct 18 · Run\n\nDistance\n7.2 km\nDuration\n40m\nAverage pace\n5:33/km\nAverage heart rate\n151 bpm\nSession synthesis\n\nFactual observation\nTes quatre efforts sont restés proches les uns des autres.\n\nFactual observation\nQuatre répétitions de quatre minutes sont enregistrées.\n\nLimitations\nSans zones individualisées, l’intensité physiologique reste incertaine.\nEfforts and recoveries\nEfforts: 4\nRecoveries: 4\nAverage effort pace: 4:49/km\nPace spread: 0 s/km\n\nEffort 14:00 · 4:49/km · 158 bpm\n\nRecovery 1 · 2:00\n\nEffort 24:00 · 4:49/km · 158 bpm\n\nRecovery 2 · 2:00\n\nEffort 34:00 · 4:49/km · 158 bpm\n\nRecovery 3 · 2:00\n\nEffort 44:00 · 4:49/km · 158 bpm\n\nRecovery 4 · 2:00\nRecorded kilometer splits · 6\nKey takeaways\n\nStructure: Intervals\n\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "stage": "before",
+  "kind": "probable-easy",
+  "viewportName": "mobile",
+  "fixture": "synthetic contract-based; not actual Garmin evidence",
+  "head": "ee0109efe6f614136bf7aee98e409b70d73858ef",
+  "apiRequests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-probable-easy",
+    "/api/coach/workout-analysis/c356-probable-easy"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "metrics": [
+    {
+      "pathname": "/workout/c356-probable-easy",
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": null,
+      "headings": [
+        "Session summary",
+        "Synthetic · Probable easy run",
+        "Session synthesis",
+        "Key takeaways"
+      ],
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · Probable easy run\n\nSun, Oct 18 · Run\n\nDistance\n6 km\nDuration\n40m\nAverage pace\n6:40/km\nAverage heart rate\n132 bpm\nSession synthesis\n\nValidated interpretation\nCette sortie ressemble à une endurance facile, sans certitude physiologique.\n\nFactual observation\nLes kilomètres enregistrés sont proches en allure.\n\nLimitations\nSans zones individualisées, l’intensité physiologique reste incertaine.\nRecorded kilometer splits · 6\nKey takeaways\n\nStructure: Continuous\n\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+    }
+  ]
+}

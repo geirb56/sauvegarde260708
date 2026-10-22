@@ -1,0 +1,135 @@
+{
+  "stage": "after",
+  "kind": "intervals",
+  "viewportName": "mobile",
+  "fixture": "synthetic contract-based; not actual Garmin evidence",
+  "head": "bb66a394d12e35eb442b7fb119bbdac597865eb4",
+  "workingTreeDirty": true,
+  "sourceNote": "Captured against the working tree; head is the commit present at capture time. Consult workingTreeDirty for uncommitted changes; the final report records the validated committed source.",
+  "apiRequests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-intervals",
+    "/api/coach/workout-intelligence/c356-intervals",
+    "/api/coach/workout-analysis/c356-intervals",
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/workouts/c356-intervals",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c356-intervals",
+    "/api/coach/workout-intelligence/c356-intervals",
+    "/api/coach/workout-analysis/c356-intervals",
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/coach/workout-intelligence/c356-intervals",
+    "/api/workouts/c356-intervals",
+    "/api/coach/workout-analysis/c356-intervals"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "metrics": [
+    {
+      "pathname": "/workout/c356-intervals",
+      "initialCoachBounds": {
+        "x": 16,
+        "y": 369.5,
+        "width": 358,
+        "height": 259.5
+      },
+      "initialScrollY": 0,
+      "postExpansionScrollY": 834,
+      "measurementScrollY": 0,
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": "Four efforts, a controlled rhythm",
+      "coachBounds": {
+        "x": 16,
+        "y": 369.5,
+        "width": 358,
+        "height": 259.5
+      },
+      "detailsCount": 1,
+      "headings": [
+        "Session summary",
+        "Synthetic · 4 × 4 min",
+        "Four efforts, a controlled rhythm",
+        "What the data shows",
+        "Efforts and recoveries"
+      ],
+      "bodyText": "BACK\nRUN\nSession summary\nSynthetic · 4 × 4 min\n\nSun, Oct 18 · Run\n\nDistance\n7.2 km\nDuration\n40m\nAverage pace\n5:33/km\nAverage heart rate\n151 bpm\n\nTHE COACH\n\nFour efforts, a controlled rhythm\n\nThe recorded phases show four four-minute efforts, each followed by a two-minute recovery.\n\nThis describes the repeated work, not a physiological intensity zone.\n\nWithout individualized thresholds, physiological intensity remains uncertain.\n\nWhat the data shows\nSession type\nIntervals\nRecorded structure\n4 efforts · 4 recoveries\nHistorical comparison\nInsufficient comparable history\nRecorded repetition pace dispersion\n0 s/km · 4/4 efforts\nExplore session details\nEfforts and recoveries\nEfforts: 4\nRecoveries: 4\nAverage effort pace: 4:49/km\nPace spread: 0 s/km\n\nEffort 14:00 · 4:49/km · 158 bpm\n\nRecovery 1 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 24:00 · 4:49/km · 158 bpm\n\nRecovery 2 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 34:00 · 4:49/km · 158 bpm\n\nRecovery 3 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 44:00 · 4:49/km · 158 bpm\n\nRecovery 4 · 2:00\n\n10:00/km · 130 bpm\n\nRecorded kilometer splits · 6\nKm 1\n6:30 /km\nKm 2\n4:48 /km\nKm 3\n6:24 /km\nKm 4\n4:42 /km\nKm 5\n6:18 /km\nKm 6\n4:48 /km\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress"
+    },
+    {
+      "pathname": "/sessions/c356-intervals",
+      "initialCoachBounds": {
+        "x": 16,
+        "y": 219,
+        "width": 358,
+        "height": 259.5
+      },
+      "initialScrollY": 0,
+      "postExpansionScrollY": 1028,
+      "measurementScrollY": 0,
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": "Four efforts, a controlled rhythm",
+      "coachBounds": {
+        "x": 16,
+        "y": 219,
+        "width": 358,
+        "height": 259.5
+      },
+      "detailsCount": 1,
+      "headings": [
+        "Synthetic · 4 × 4 min",
+        "Four efforts, a controlled rhythm",
+        "What the data shows",
+        "Efforts and recoveries",
+        "Metrics"
+      ],
+      "bodyText": "Back to sessions\n\nRun\n\nSynthetic · 4 × 4 min\n\nOctober 18, 2026 at 08:00 AM\n\nTHE COACH\n\nFour efforts, a controlled rhythm\n\nThe recorded phases show four four-minute efforts, each followed by a two-minute recovery.\n\nThis describes the repeated work, not a physiological intensity zone.\n\nWithout individualized thresholds, physiological intensity remains uncertain.\n\nWhat the data shows\nSession type\nIntervals\nRecorded structure\n4 efforts · 4 recoveries\nHistorical comparison\nInsufficient comparable history\nRecorded repetition pace dispersion\n0 s/km · 4/4 efforts\nExplore session details\nEfforts and recoveries\nEfforts: 4\nRecoveries: 4\nAverage effort pace: 4:49/km\nPace spread: 0 s/km\n\nEffort 14:00 · 4:49/km · 158 bpm\n\nRecovery 1 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 24:00 · 4:49/km · 158 bpm\n\nRecovery 2 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 34:00 · 4:49/km · 158 bpm\n\nRecovery 3 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 44:00 · 4:49/km · 158 bpm\n\nRecovery 4 · 2:00\n\n10:00/km · 130 bpm\n\nRecorded kilometer splits · 6\nKm 1\n6:30 /km\nKm 2\n4:48 /km\nKm 3\n6:24 /km\nKm 4\n4:42 /km\nKm 5\n6:18 /km\nKm 6\n4:48 /km\nMETRICS\n\nDISTANCE\n\n7.20 km\n\nDURATION\n\n40m\n\nAVG PACE\n\n5:33 /km\n\nAVG HEART RATE\n\n151 bpm\n\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+    },
+    {
+      "pathname": "/workout/c356-intervals/analysis",
+      "initialCoachBounds": {
+        "x": 16,
+        "y": 268,
+        "width": 358,
+        "height": 259.5
+      },
+      "initialScrollY": 0,
+      "postExpansionScrollY": 943,
+      "measurementScrollY": 0,
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "heading": "Four efforts, a controlled rhythm",
+      "coachBounds": {
+        "x": 16,
+        "y": 268,
+        "width": 358,
+        "height": 259.5
+      },
+      "detailsCount": 1,
+      "headings": [
+        "Synthetic · 4 × 4 min",
+        "Four efforts, a controlled rhythm",
+        "What the data shows",
+        "Efforts and recoveries"
+      ],
+      "bodyText": "DETAILED ANALYSIS\nSun, Oct 18\nSynthetic · 4 × 4 min\nDistance\n7.20 km\nDuration\n40m\nAverage pace\n5:33/km\nAverage heart rate\n151 bpm\n\nTHE COACH\n\nFour efforts, a controlled rhythm\n\nThe recorded phases show four four-minute efforts, each followed by a two-minute recovery.\n\nThis describes the repeated work, not a physiological intensity zone.\n\nWithout individualized thresholds, physiological intensity remains uncertain.\n\nWhat the data shows\nSession type\nIntervals\nRecorded structure\n4 efforts · 4 recoveries\nHistorical comparison\nInsufficient comparable history\nRecorded repetition pace dispersion\n0 s/km · 4/4 efforts\nExplore session details\nEfforts and recoveries\nEfforts: 4\nRecoveries: 4\nAverage effort pace: 4:49/km\nPace spread: 0 s/km\n\nEffort 14:00 · 4:49/km · 158 bpm\n\nRecovery 1 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 24:00 · 4:49/km · 158 bpm\n\nRecovery 2 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 34:00 · 4:49/km · 158 bpm\n\nRecovery 3 · 2:00\n\n10:00/km · 130 bpm\n\nEffort 44:00 · 4:49/km · 158 bpm\n\nRecovery 4 · 2:00\n\n10:00/km · 130 bpm\n\nRecorded kilometer splits · 6\nKm 1\n6:30 /km\nKm 2\n4:48 /km\nKm 3\n6:24 /km\nKm 4\n4:42 /km\nKm 5\n6:18 /km\nKm 6\n4:48 /km\nASK THE COACH\nHome\nPlan\nSessions\nCoach\nProgress"
+    }
+  ]
+}

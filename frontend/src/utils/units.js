@@ -5,6 +5,8 @@
 // - elevation: meters
 // Conversions are done only for display.
 
+import { formatAnalysisNumber } from "@/lib/analysisFormat";
+
 export const UNIT_SYSTEM_KEY = "runindex_unit_system";
 
 // Detect device region and return a default unit system ("metric" | "imperial")
@@ -111,8 +113,9 @@ const pad2 = (value) => value.toString().padStart(2, "0");
 export const formatDistance = (km, options = {}) => {
   const unitSystem = options.unitSystem || getUnitSystem();
   const value = convertDistance(km, unitSystem);
-  const rounded =
-    value >= 10 ? value.toFixed(1) : value.toFixed(2); // more precision on small distances
+  const rounded = options.lang
+    ? formatAnalysisNumber(value, options.lang, value >= 10 ? 1 : 2, value >= 10 ? 1 : 2)
+    : value >= 10 ? value.toFixed(1) : value.toFixed(2); // more precision on small distances
   const unit = unitSystem === "imperial" ? "mi" : "km";
   return `${rounded} ${unit}`;
 };
@@ -134,7 +137,7 @@ export const formatPace = (secondsPerKm, options = {}) => {
 export const formatSpeed = (kmh, options = {}) => {
   const unitSystem = options.unitSystem || getUnitSystem();
   const value = convertSpeed(kmh, unitSystem);
-  const rounded = value.toFixed(1);
+  const rounded = options.lang ? formatAnalysisNumber(value, options.lang, 1, 1) : value.toFixed(1);
   const unit = unitSystem === "imperial" ? "mph" : "km/h";
   return `${rounded} ${unit}`;
 };
