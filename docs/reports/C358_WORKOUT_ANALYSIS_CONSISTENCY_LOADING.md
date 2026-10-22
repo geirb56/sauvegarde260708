@@ -662,6 +662,80 @@ Les résultats initiaux restent ceux des §§14–18 : **946 frontend**,
 étendue avait **1 346 réussites et trois échecs V2 historiques**, reproduits
 sur la base. Ces résultats ne constituent pas des relances du nettoyage.
 
-Relances, volume final, contrôles des liens, statut CodeQL et SHA de livraison :
-à compléter après exécution. **HOLD de livraison tant que ces contrôles ne
-sont pas terminés**. La PR reste en brouillon ; aucun merge ni déploiement.
+Relances réellement exécutées après retrait des artefacts, le 22/10/2026 :
+
+| Contrôle | Référence avant nettoyage | Relance après nettoyage |
+|---|---|---|
+| Frontend, trois suites | 946 réussites | **946 réussites**, 3 suites, 22,259 s |
+| Backend ciblé | 750 réussites | **750 réussites**, 7 avertissements, 5,79 s |
+| Backend étendu | 1 346 réussites, 3 échecs historiques | **1 346 réussites, les mêmes 3 échecs**, 14 avertissements, 5,62 s |
+| Playwright C358, sans retry | 133 réussites | **133 réussites**, aucun échec/skip/flaky, 216,299 s |
+| Build frontend | Réussi | **Réussi**, compilation terminée |
+| CodeQL Python et JavaScript | Aucun résultat final initial | **Exécuté : 0 alerte** |
+
+Commandes de relance, depuis les répertoires indiqués :
+
+```text
+# frontend/
+CI=true REACT_APP_BACKEND_URL=http://localhost:8000 npm test -- --watchAll=false --runInBand src/__tests__/workout-analysis-v3-pages.test.jsx src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/analysis-format.test.js
+REACT_APP_BACKEND_URL=http://localhost:8000 npm run build
+
+# backend/
+python -m pytest tests/test_workout_consistency_c358.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py tests/test_coach_repetition_judgment.py tests/test_coach_language.py -q --tb=short
+python -m pytest tests/test_workout_consistency_c358.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py tests/test_workout_analysis_v2.py tests/test_workout_analysis_v2_phases.py tests/test_workout_analysis_v2_facts.py tests/test_workout_analysis_v2_unified.py tests/test_coach_language.py tests/test_coach_session_synthesis_c351.py tests/test_coach_repetition_judgment.py -q --tb=short
+
+# tests/ — application React locale démarrée, toutes les API interceptées
+./node_modules/.bin/playwright test e2e/c358-consistency-loading.spec.ts --retries=0
+```
+
+Les trois échecs restent exactement
+`tests/test_workout_analysis_v2.py::test_comparable_history_stays_separate_and_metrics_are_unchanged[en/fr/es]` :
+attendu `meaning.consistent_pacing`, obtenu
+`meaning.hr_without_intensity_with_pacing`. Leur reproduction sur la base est
+documentée au §14 ; cette relance les retrouve, sans nouveau défaut et sans
+modifier ces tests. Le build ne signale que l'ancienneté des données
+Browserslist ; aucune mise à jour de dépendance n'a été faite.
+
+Le validateur a comparé les empreintes de **589 fichiers suivis** (sources,
+tests, fixtures et configuration, hors documents/preuves en cours d'édition) :
+aucun changement induit par les exécutions. Les **296 sorties produites**
+sous `tests/test-results/` sont toutes ignorées, dont les 132 JSON et 30 PNG
+de C358. Aucun nouveau fichier non ignoré, aucun fichier suivi recréé ou modifié
+par les tests. Les trois captures conservées sont inchangées. Les liens locaux
+du rapport et les références de captures du manifeste ont été vérifiés.
+
+La validation parallèle a réellement terminé **CodeQL Python/JavaScript sans
+alerte** sur le commit de nettoyage. Son module de revue de code a en revanche
+signalé un modèle indisponible : son en-tête « succès » n'est pas interprété
+comme une revue exécutée. Une revue indépendante en lecture seule du diff de
+nettoyage a ensuite terminé **sans problème significatif**. Ces résultats
+remplacent, pour le nettoyage, l'indisponibilité historique du §18.
+
+### Bilan de volume et livraison
+
+- Diff PR : **182 → 21 fichiers** (20 conservés, plus `.gitignore` modifié).
+- Contenu des fichiers nouvellement ajoutés dans la PR : environ
+  **3,21 → 0,34 Mo** (octets décimaux, rapport compris) ; les totaux exacts
+  au HEAD final sont consignés dans le commentaire de livraison.
+- Preuves suivies : **166 → 4 fichiers**, soit **162 retraits**.
+- Volume des preuves suivies : **3 151 202 → 267 397 octets**
+  (réduction de **2 883 805 octets**, environ **91,5 %**).
+- Le volume est celui des contenus non compressés, pas une réduction de
+  l'historique Git : aucun historique n'a été réécrit.
+- Commit de nettoyage validé et publié :
+  **`26e94286eabd351a1c99a20aa0ee836c45cdc0d7`**.
+- Les exécutions ont chevauché la publication de ce commit : leur HEAD
+  observé commence à `5de2d651b91aafa39037d1aa7b30a10ec34b3842` et termine
+  à `26e94286eabd351a1c99a20aa0ee836c45cdc0d7`. Les empreintes confirment
+  que les sources et assertions testées n'ont pas changé pendant les passages.
+  Le présent complément documentaire est publié ensuite ; son SHA HEAD final
+  figure dans le commentaire de livraison de la PR #358, pour éviter une
+  auto-référence impossible dans le contenu d'un commit.
+
+**Verdict : GO pour l'audit humain du nettoyage, pas une autorisation de merge.**
+Aucun fichier applicatif, test ou fixture nécessaire supprimé ; aucun
+changement de formule, contrat API, gating ni comportement de chargement.
+Les limitations synthétiques, la revue humaine des images et les trois
+échecs historiques restent explicitement déclarés. PR #358 conservée en
+brouillon ; aucun nouvel accès Garmin/GCCLI, aucune écriture MongoDB, aucun
+merge ni déploiement. **STOP après livraison, en attente de l'audit utilisateur.**
