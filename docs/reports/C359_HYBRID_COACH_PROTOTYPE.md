@@ -1534,4 +1534,6 @@ route, interface, calcul V2/V3, accès données ou flag production n'a été cha
 dans cette itération ; seuls les tests de caractérisation et ce rapport sont
 ajoutés. PR #360 reste ouverte, sans merge ni déploiement. HEAD d'audit de
 cette itération : `b02ca60dae97b0b38b117d47c78b35c12d12af39`; le SHA de
-livraison sera consigné après le commit documentaire.
+livraison des tests et du rapport : `cd1dea70d2a66b326f023f65b6e3c8839000397e`.
+Le HEAD de branche final inclura le commit documentaire consignant cette
+référence.
