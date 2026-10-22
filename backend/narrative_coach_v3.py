@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from coach_language import CoachLanguageV1
     from workout_analysis_v2 import WorkoutAnalysisPhaseAnalysis
 
-GENERATION_VERSION = "c357-controlled-1"
+GENERATION_VERSION = "c358-controlled-1"
 LLM_TIMEOUT_SECONDS = 8.0
 CACHE_MAX_ENTRIES = 128
 MAX_RESPONSE_CHARS = 24000
@@ -206,9 +206,9 @@ def build_narrative_context(
             spread = number(regularity.pace_dispersion_sec_per_km)
             sampled, total = regularity.pace_sample_count, regularity.effort_count
             add("interval.spread", "analysis",
-                f"The recorded pace dispersion is {spread} s/km across {sampled} of {total} effort phases.",
-                f"La dispersion d'allure enregistrée est de {spread} s/km sur {sampled} des {total} phases d'effort.",
-                f"La dispersión de ritmo registrada es de {spread} s/km en {sampled} de las {total} fases de esfuerzo.",
+                f"The recorded pace standard deviation is {spread} s/km across {sampled} of {total} effort phases.",
+                f"L'écart-type des allures enregistré est de {spread} s/km sur {sampled} des {total} phases d'effort.",
+                f"La desviación estándar de los ritmos registrada es de {spread} s/km en {sampled} de las {total} fases de esfuerzo.",
                 refs=("phase_analysis.effort_regularity",
                       "session_classification.evidence.effort_count"))
             if regularity.partial_comparison:
@@ -249,9 +249,9 @@ def build_narrative_context(
             en, fr, es = labels[judgment["band"]]
             path = f"coach_language.conclusions.{judgment['index']}"
             add("interval.judgment", "interpretation",
-                f"{en} across your {n} comparable repetitions: an average gap of {gap} s/km from the central pace.",
-                f"{fr} sur tes {n} répétitions comparables : un écart moyen de {gap} s/km par rapport à l'allure centrale.",
-                f"{es} en tus {n} repeticiones comparables: una diferencia media de {gap} s/km respecto al ritmo central.",
+                f"{en} across your {n} comparable repetitions: an average gap of {gap} s/km from the median pace.",
+                f"{fr} sur tes {n} répétitions comparables : un écart moyen de {gap} s/km par rapport à l'allure médiane.",
+                f"{es} en tus {n} repeticiones comparables: una diferencia media de {gap} s/km respecto a la mediana de los ritmos.",
                 refs=(f"{path}.code", f"{path}.metadata.judgment_version",
                       f"{path}.metadata.comparison_scope", f"{path}.metadata.regularity_band",
                       f"{path}.metadata.metric", f"{path}.evidence.comparable_effort_count",
@@ -259,9 +259,9 @@ def build_narrative_context(
                       f"{path}.evidence.absolute_deviation_sec_per_km"))
         elif usable_spread:
             add("interval.execution", "interpretation",
-                "The pace spread describes variation within the assessed repetitions, but does not by itself establish that they were regular.",
-                "La dispersion d'allure décrit les variations entre les répétitions évaluées, sans suffire à affirmer qu'elles étaient régulières.",
-                "La dispersión de ritmo describe la variación entre las repeticiones evaluadas, pero no demuestra por sí sola que fueran regulares.",
+                "The pace standard deviation describes variation within the assessed repetitions, but does not by itself establish that they were regular.",
+                "L'écart-type des allures décrit les variations entre les répétitions évaluées, sans suffire à affirmer qu'elles étaient régulières.",
+                "La desviación estándar de los ritmos describe la variación entre las repeticiones evaluadas, pero no demuestra por sí sola que fueran regulares.",
                 refs=("phase_analysis.effort_regularity",))
         else:
             add("interval.execution", "interpretation",
@@ -286,9 +286,9 @@ def build_narrative_context(
                       else ("phase_analysis.available", "phase_analysis.effort_regularity.available")))
         elif phase_analysis is not None:
             add("interval.regularity", "limitations",
-                "No regularity verdict was supplied; pace dispersion alone cannot confirm regular repetitions.",
-                "Aucun verdict de régularité n'est fourni ; la dispersion d'allure seule ne confirme pas des répétitions régulières.",
-                "No se proporcionó un veredicto de regularidad; la dispersión de ritmo sola no confirma repeticiones regulares.",
+                "No regularity verdict was supplied; pace standard deviation alone cannot confirm regular repetitions.",
+                "Aucun verdict de régularité n'est fourni ; l'écart-type des allures seul ne confirme pas des répétitions régulières.",
+                "No se proporcionó un veredicto de regularidad; la desviación estándar de los ritmos sola no confirma repeticiones regulares.",
                 refs=("phase_analysis.effort_regularity",))
         else:
             add("interval.regularity", "limitations",

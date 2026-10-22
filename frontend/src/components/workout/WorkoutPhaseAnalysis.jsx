@@ -77,8 +77,9 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
     }
   }
 
-  const regularityValue = Number.isFinite(regularity.pace_dispersion_sec_per_km)
-    && regularity.pace_dispersion_sec_per_km >= 0
+  const hasStandardDeviation = Number.isFinite(regularity.pace_dispersion_sec_per_km)
+    && regularity.pace_dispersion_sec_per_km >= 0;
+  const regularityValue = hasStandardDeviation
     ? `${formatNumber(regularity.pace_dispersion_sec_per_km, lang)} s/km`
     : Number.isFinite(regularity.first_to_last_pace_change_sec_per_km)
       ? `${regularity.first_to_last_pace_change_sec_per_km > 0 ? "+" : ""}${formatNumber(regularity.first_to_last_pace_change_sec_per_km, lang)} s/km`
@@ -115,7 +116,10 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
             )}
             {regularity.available === true && regularityValue && (
               <span data-testid="effort-regularity">
-                {t("workoutDetailExtended.paceDispersion")}: {regularityValue}
+                {t(hasStandardDeviation ? "workoutDetailExtended.paceDispersion" : "workoutDetailExtended.firstToLastPace")}: {regularityValue}
+                {Number.isInteger(regularity.pace_sample_count) && regularity.pace_sample_count > 0
+                  && Number.isInteger(regularity.effort_count) && regularity.effort_count >= regularity.pace_sample_count
+                  && ` · ${regularity.pace_sample_count}/${regularity.effort_count} ${t("workoutNarrative.efforts")}`}
                 {regularity.partial_comparison === true && ` · ${t("workoutDetailExtended.partialEffortComparison")}`}
               </span>
             )}

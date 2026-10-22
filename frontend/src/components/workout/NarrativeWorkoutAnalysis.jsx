@@ -26,8 +26,6 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
   const history = facts?.historical_comparison;
   const trend = facts?.performance_trend;
   const relative = classification?.relative_effort;
-  const regularity = analysis?.phase_analysis?.available === true
-    ? analysis.phase_analysis.effort_regularity : null;
   const text = (key) => t(`workoutNarrative.${key}`);
   const number = (value, precision = 1) => formatAnalysisNumber(value, lang, precision);
   const evidence = [];
@@ -56,14 +54,6 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
   if (reliable(trend?.confidence)
     && ["probable_improvement", "stable", "possible_decline"].includes(trend.status)) {
     evidence.push(["trend", text(trend.status)]);
-  }
-  if (classification?.type === "intervals" && regularity?.available === true
-    && Number.isFinite(regularity.pace_dispersion_sec_per_km) && regularity.pace_dispersion_sec_per_km >= 0) {
-    const sample = regularity.pace_sample_count;
-    const total = regularity.effort_count;
-    const cohort = Number.isInteger(sample) && Number.isInteger(total) && sample > 0 && total >= sample
-      ? ` · ${number(sample, 0)}/${number(total, 0)} ${text("efforts")}` : "";
-    evidence.push(["regularity", `${number(regularity.pace_dispersion_sec_per_km)} s/km${cohort}${regularity.partial_comparison === true ? ` · ${text("partialComparison")}` : ""}`]);
   }
   const limitations = [...new Set((Array.isArray(narrative.limitations) ? narrative.limitations : [])
     .filter(hasText))];

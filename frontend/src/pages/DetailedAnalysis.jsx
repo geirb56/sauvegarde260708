@@ -12,6 +12,7 @@ import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
 import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
+import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { formatAnalysisNumber } from "@/lib/analysisFormat";
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatSpeed } from "@/utils/units";
@@ -28,21 +29,22 @@ export default function DetailedAnalysis() {
   const { unitSystem } = useUnitSystem();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
-  const { data: intelligence, error: intelligenceError, loading: intelligenceLoading } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
+  const { data: intelligence, error: intelligenceError, loading: intelligenceLoading, scope } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
   const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
   const [loadedAnalysis, setAnalysis] = useState(null);
   const [loadedWorkout, setWorkout] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
   const [requestScope, setRequestScope] = useState(null);
-  const scope = JSON.stringify([id, lang]);
   const isCurrentRequest = requestScope === scope;
   const analysis = canAccessAnalysis && isCurrentRequest ? loadedAnalysis : null;
   const workout = canAccessAnalysis && isCurrentRequest ? loadedWorkout : null;
 
   useEffect(() => {
-    setRequestScope(JSON.stringify([id, lang]));
+    setRequestScope(scope);
     setAnalysis(null);
     setWorkout(null);
+    setAnalysisLoading(canAccessAnalysis);
     if (!canAccessAnalysis) {
       setLoading(false);
       return undefined;
@@ -63,15 +65,18 @@ export default function DetailedAnalysis() {
       })
       .catch(() => {
         if (!signal.aborted) setAnalysis(null);
+      })
+      .finally(() => {
+        if (!signal.aborted) setAnalysisLoading(false);
       });
     Promise.all([workoutRequest, analysisRequest]).finally(() => {
       if (!signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, [id, lang, canAccessAnalysis]);
+  }, [id, lang, canAccessAnalysis, scope]);
 
   if (subscriptionLoading || (canAccessAnalysis && !narrative
-    && (!isCurrentRequest || loading || (!analysis && !workout && intelligenceLoading)))) {
+    && (!isCurrentRequest || (!analysis && !workout && (loading || intelligenceLoading))))) {
     return (
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
@@ -164,14 +169,14 @@ export default function DetailedAnalysis() {
             <dd className="text-sm font-semibold">{value}</dd>
           </div>)}
         </dl>}
-        {!narrative && metrics.length === 0 && analysis?.coach_language?.version !== "v1" && analysis?.summary?.text && <p className="mt-3 font-sans text-sm leading-relaxed" data-testid="header-context">{analysis.summary.text}</p>}
+        {!intelligenceLoading && !narrative && metrics.length === 0 && analysis?.coach_language?.version !== "v1" && analysis?.summary?.text && <p className="mt-3 font-sans text-sm leading-relaxed" data-testid="header-context">{analysis.summary.text}</p>}
       </section>
 
       {intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
-      {narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysis} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+      {intelligenceLoading ? <><WorkoutCoachPending t={t} />{analysisDetails}</> : narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysis} lang={lang} t={t} detailsAvailable={detailsAvailable}>
         {analysisDetails}
       </NarrativeWorkoutAnalysis> : <>
-      {!analysis && <p className="text-muted-foreground" data-testid="analysis-not-found">{t("workoutDetailExtended.analysisLoadError")}</p>}
+      {!analysis && !analysisLoading && <p className="text-muted-foreground" data-testid="analysis-not-found">{t("workoutDetailExtended.analysisLoadError")}</p>}
       {coachConclusions.length > 0 && <section className="my-3 space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
@@ -191,7 +196,7 @@ export default function DetailedAnalysis() {
       </section>}
       </>}
 
-      {!narrative && observation && <section className="my-3 rounded-xl border border-border bg-card p-3">
+      {!intelligenceLoading && !narrative && observation && <section className="my-3 rounded-xl border border-border bg-card p-3">
         <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-primary">{t("workoutDetailExtended.coachObservation")}</h2>
         <p className="font-sans text-sm leading-relaxed" data-testid="advice-text">{observation}</p>
       </section>}
