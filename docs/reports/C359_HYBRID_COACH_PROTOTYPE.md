@@ -1341,3 +1341,197 @@ réelles isolées, sans données personnelles/secrets, puis audit C360 demandé.
 Le SHA du code validé est
 `bc7c63970a742b3623a6f58843dfdfd6d5b8efd7`; ce rapport sera ensuite livré dans
 un commit documentaire. Aucun merge ni déploiement n'est effectué.
+
+## C360 — Évaluation empirique du Coach LLM
+
+### Configuration et audit de disponibilité
+
+Audit initial en lecture seule effectué sur `backend/hybrid_coach_c359.py`,
+`backend/llm_coach.py`, `backend/narrative_coach_v3.py`,
+`backend/tests/test_hybrid_coach_c359.py` et ce rapport, au HEAD audité
+`b02ca60dae97b0b38b117d47c78b35c12d12af39`, branche existante
+`copilot/c359-recovery`, base `copilot/dev`
+(`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`).
+
+Contrat vérifié :
+
+**Workout Intelligence V3 → Evidence Pack admis selon les droits → rédaction
+LLM libre → contrôles heuristiques → texte accepté ou fallback déterministe.**
+
+La source configure `gpt-4.1-mini`, fournisseur `openai`, via Emergent. Le
+transport partagé a un timeout interne de 15 s ; l'appel C360 est borné à 8 s
+à l'extérieur, avec réponse C360 limitée à 2400 caractères et détection d'une
+troncature. Les autres usages conservent le nettoyage par défaut à 700
+caractères. Une réussite de génération ne signifie pas une acceptation :
+seules les réponses satisfaisant les contrôles reçoivent
+`generated_narrative`; les autres gardent le texte de fallback.
+
+L'accès exige `coach_workout_analysis` et `llm_access`; l'ajout de faits
+d'historique et de prescription dépend en outre des permissions explicites
+`history` et `prescription`. Le flag `C359_HYBRID_COACH_ENABLED` est OFF par
+défaut. L'évaluation prévue aurait utilisé des entrées synthétiques,
+permissions premium contrôlées, cinq appels indépendants par fixture et langue,
+et le prompt/transport C360 inchangés.
+
+**Blocage constaté :** `EMERGENT_LLM_KEY` était absent du processus actif et
+aucun fichier `.env` n'était présent à la racine du dépôt ni dans `backend/`.
+Aucun secret n'a été lu, affiché ou transmis. Aucun appel au fournisseur n'a
+été tenté. Cela signifie « fournisseur non accessible dans cet environnement
+isolé », pas une affirmation sur sa disponibilité générale. Conformément à la
+mission, l'évaluation réelle est arrêtée ici ; aucun mock n'est substitué aux
+générations demandées.
+
+### Jeu synthétique, Evidence Packs et références
+
+Les sept fixtures existantes de `synthetic_case()` ont été conservées sans
+modifier leurs valeurs. L'Evidence Pack décrit ci-dessous est celui autorisé
+par V3 avec permissions histoire/prescription activées pour comparer les droits
+à niveau égal ; aucun paquet ne produit de fait de prescription sur ces
+fixtures. Les permissions ordinaires sans histoire retirent les classifications
+dérivées de l'historique et les tendances, même si le V3 synthétique contient
+ces champs. Les libellés « interdits » signifient conclusions non autorisées
+par ce paquet et ce niveau d'accès, pas impossibilités universelles.
+
+| Fixture | Evidence Pack admissible — conclusion, valeurs/unités, confiance | Narrative V3 de référence | Conclusions non autorisées par le paquet | Réserves indispensables |
+| --- | --- | --- | --- | --- |
+| `easy` | `session.kind` — `probable_session_type`, `easy_run_probable`, confiance moyenne ; `intensity.position` — `average_hr_threshold_position`, moyenne 140 bpm sous LT1 (LT1 150, LT2 170 bpm), confiance moyenne | Footing probablement facile ; moyenne sous LT1 ; l'historique comparable n'établit pas une tendance fiable ; la moyenne ne donne pas le temps en zones ; prescription indéterminée | Zone numérotée ou durée en zone, intensité de chaque segment, cause de la FC, progression basée sur cette seule sortie, conseil de séance | Classification probable ; moyenne non représentative de tout l'effort ; pas de temps en zones ni de cause |
+| `long` | `session.long` — `probable_long_duration_comparison`, 100 min contre 50 min habituelles, confiance moyenne ; même position HR `below_LT1`, moyenne 140 bpm | Sortie probablement longue ; moyenne sous LT1 ; comparaison historique non concluante ; limite moyenne/splits ; prescription indéterminée | Déduire l'intensité de la seule durée, convertir les 100 min en effort continu, conclure à une progression ou prescrire | « Probablement » ; durée seule n'établit pas l'effort ; limites de la FC moyenne |
+| `intervals_4x4` | `interval.count` — `recorded_intervals_without_regularity`, 4 efforts et 3 récupérations, confiance moyenne ; `intensity.position` — moyenne 160 bpm entre LT1 150 et LT2 170 bpm | Séance fractionnée ; décompte 4/3 ; régularité indéterminée ; prescription indéterminée | Durée de chaque répétition, « 4 × 4 min » déduit des noms de fixture/durée totale, régularité, intensité des répétitions ou prescription | Les durées individuelles ne sont pas disponibles et la régularité ne peut pas être jugée ; limites de la moyenne |
+| `sparse` | `session.unknown` — `session_type_unproven`, type inconnu, aucune FC moyenne, confiance nulle | Type incertain ; données insuffisantes ; historique non concluant ; pas de zone établie ; prescription indéterminée | « Facile », « récupération », zone, intensité, FC moyenne ou but de séance | Inconnu ne signifie pas facile ; moyenne HR indisponible |
+| `treadmill` | Mêmes faits admis que `easy` : classification facile probable et FC moyenne 140 bpm sous LT1 synthétique | Même narration V3 de footing facile que `easy` ; le paquet ne contient pas de fait narratif tapis | Effet spécifique tapis, comparaison extérieur/tapis, correction d'allure, causalité de surface | Probabilité et limites de moyenne ; ne pas inférer un fait tapis absent du paquet |
+| `comparable_history` | `session.kind` — footing probable ; `intensity.position` — moyenne 140 bpm sous LT1 ; `trend.probable_improvement` — `qualified_historical_trend`, 6 observations, −24 s/km médian, 92 jours, confiance moyenne | Footing probable ; FC moyenne sous LT1 ; allure comparable améliorée de façon probable, pas une preuve de forme ; sans splits, pas de durée en zone ; prescription indéterminée | Gains de forme certains, progression imputée à cette sortie, cause (charge/fatigue/météo/terrain), durée d'entraînement en zone, conseil prescriptif | Tendance qualifiée et non preuve de forme ; aucune cause établie ; effets terrain/météo non isolés ; limites de la moyenne |
+| `no_physiology` | `intensity.hr` — `descriptive_average_hr_only`, moyenne 140 bpm, confiance nulle ; `session.unknown` — type inconnu, FC disponible, confiance nulle | Type incertain ; historique non concluant ; aucun seuil fiable donc aucune zone confirmée ; prescription indéterminée | LT1/LT2, zone physiologique ou classification facile/soutenue tirée de la moyenne | FC moyenne seule ne donne pas de zone et ne décrit pas tout l'effort ; type inconnu ne signifie pas facile |
+
+Les sorties Narrative V3 complètes restent celles reproduites pour les mêmes
+sept fixtures dans la section précédente de ce rapport (« Sept comparaisons
+V3 / C360 » de l'itération C360). Aucun texte généré n'existe dans cette
+évaluation ; il n'y a donc pas de comparaison de réponse réelle avec V3.
+
+### Générations réelles et indicateurs obligatoires
+
+| Langue | Appels planifiés | Appels réels | Réponses générées | Acceptations | Fallbacks liés à une réponse | Latence fournisseur médiane / P95 | Coût moyen |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| Français | 35 | 0 | 0 | 0 | non mesuré | non mesurés | non mesuré |
+| Anglais | 35 | 0 | 0 | 0 | non mesuré | non mesurés | non mesuré |
+| Espagnol | 35 | 0 | 0 | 0 | non mesuré | non mesurés | non mesuré |
+| Global | 105 | 0 | 0 | 0 | non mesuré | non mesurés | non mesuré |
+
+Avec zéro appel réel, les taux de réussite, d'acceptation, de fallback,
+de rejets justifiés/injustifiés, d'erreur parmi les acceptations, les scores de
+qualité et leur écart à Narrative V3 sont **non définis** (dénominateur nul),
+et non égaux à zéro ou à 100 %. Les durées rapportées par des doubles ou les
+exemples rédigés dans les tests ne sont pas des mesures fournisseur. Aucun
+P95, coût, taux ou score produit n'est inventé. Même 105 réponses ne formeraient
+qu'un échantillon exploratoire de sept fixtures, sans intervalle de confiance
+sur une population d'activités ; dans le présent run, cet échantillon n'a pas
+été collecté.
+
+Aucune note 1–5 n'est attribuée. Il n'y a ni génération à noter, ni panel
+d'évaluateurs indépendants, ni évaluation aveugle. Une autoévaluation LLM
+n'aurait pas servi de preuve ; les mocks précédents sont explicitement exclus.
+
+### Caractérisation séparée du validateur — exemples synthétiques, pas générations
+
+Douze textes fabriqués séparément ont été exécutés contre le validateur
+inchangé. Les résultats automatisés caractérisent le code ; la colonne
+« lecture du cas » est une appréciation humaine non aveugle, fondée sur les
+faits listés plus haut, et ne transforme pas l'heuristique en arbitre sémantique.
+Sept rejets ont une raison scientifique manifeste, deux rejets paraissent
+injustifiés au regard de la formulation exacte, et trois acceptations
+ambiguës montrent un risque résiduel. Ces effectifs sont des cas choisis, pas
+des taux de performance.
+
+| # | Texte adversarial synthétique et sortie du validateur | Lecture indépendante du cas |
+| --- | --- | --- |
+| 1 — valeur sur mauvaise métrique/unité | Avec histoire autorisée, « Ta FC moyenne est de 100 bpm » réutilise le nombre 100 de la durée en minutes ; rejet `unsupported_numeric_unit_or_value` | Rejet justifié : valeur attribuée à une métrique incompatible |
+| 2 — progression inventée | « Cette séance confirme une progression récente » sans tendance ; rejet `unauthorized_trend_claim` | Rejet justifié : une séance ne démontre pas une progression |
+| 3 — régularité inventée | « Les répétitions sont régulières » ; rejet `unsupported_regularity_claim` | Rejet justifié : pas de durées ni de verdict V3 |
+| 4 — physiologie inventée | « probablement sous LT1 » sans seuil fiable ; rejet `unauthorized_physiological_conclusion` | Rejet justifié |
+| 5 — prescription implicite | « Tu devrais courir demain… » ; rejet `unauthorized_prescription` | Rejet justifié : aucune prescription canonique n'autorise ce conseil |
+| 6 — causalité | « La FC plus haute s'explique par la fatigue » ; rejet `unauthorized_causality` | Rejet justifié : cause non établie |
+| 7 — réserve histoire omise | Classification facile fondée sur historique, sans préciser « relative à l'historique, pas physiologique » ; rejet `missing_history_relative_qualification` | Rejet justifié |
+| 8 — paraphrase correcte d'une réserve | « le chiffre ne raconte pas chaque instant… ni le temps exact passé dans chaque zone » ; rejet `missing_average_effort_limit` | Rejet probablement injustifié : l'idée de la réserve est présente autrement, mais non reconnue par les phrases codées |
+| 9 — description sans jugement de régularité | Décompte Garmin 4 efforts/3 récupérations décrit comme structure observée, sans qualifier la régularité ; rejet `missing_regularity_limit` | Rejet possiblement injustifié : texte purement descriptif, sans conclusion de régularité ; l'heuristique déclenche sur « phases » |
+| 10a — ambiguïté FR | « Ta séance était vraiment intense… » sans preuve d'intensité ; accepté `heuristic_checks_passed` | Acceptation dangereuse/ambiguë : « intense » n'est pas détecté comme catégorie physiologique |
+| 10b — ambiguïté EN | « This was clearly a hard workout… » sans preuve ; accepté `heuristic_checks_passed` | Acceptation dangereuse/ambiguë |
+| 10c — ambiguïté ES | « Fue una sesión muy intensa… » sans preuve ; accepté `heuristic_checks_passed` | Acceptation dangereuse/ambiguë |
+
+Tests de caractérisation : `backend/tests/test_hybrid_coach_c359.py`,
+`test_c360_adversarial_characterization_without_changing_validator`.
+Ils ajoutent douze assertions de comportement sans modifier les règles
+production. Au total, la suite C360 passe de 50 à 62 tests ; ce nombre n'est
+ni le nombre de générations ni une estimation du taux d'erreur du modèle.
+
+Validation de cette itération, depuis `backend/`, dans `/tmp/c360-eval-venv` :
+
+| Vérification | Résultat |
+| --- | --- |
+| `PYTHONPATH=. /tmp/c360-eval-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q -o addopts=''` | **62 réussis** |
+| Les mêmes options avec `tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py` | **381 réussis, 1 échec d'environnement** : le test d'endpoint V3 ne peut pas importer `passlib`, absent de l'environnement isolé ; les fichiers modifiés sont hors du chemin défaillant |
+| `py_compile` du fichier de test et `git diff --check` | Réussis |
+| Scanner de secrets des deux fichiers modifiés | Aucun secret détecté |
+
+### Comparaison Narrative V3 et faiblesses mesurées
+
+La référence Narrative V3 est déterministe et possède les mêmes limites de
+preuve. Sur les fixtures faciles, tapis et longue, son texte disponible contient
+des réserves historiques ou de prescription qui ne sont pas dans l'Evidence
+Pack transmis au Writer ; la comparaison produit future devra comparer les
+faits réellement autorisés, pas pénaliser le Writer pour ne pas répéter des
+éléments exclus. Pour les intervalles, la référence V3 énonce explicitement
+l'absence de verdict de régularité. Pour le cas historique, elle expose le
+comparatif médian et ses qualifications. Ces textes sont de bons baselines
+déterministes, mais aucun « gain » en naturel, utilité ou fidélité ne peut être
+calculé sans les 105 sorties réelles et un protocole de notation humain.
+
+Limites du validateur révélées par inspection et probes :
+
+1. Les contrôles cherchent des chaînes et motifs locaux ; ils ne lient pas
+   toujours un nombre à son rôle. Les unités limitent une association erronée
+   seulement pour les unités répertoriées.
+2. Le contrôle de seuil couvre quelques expressions LT1/LT2, pas tout le
+   vocabulaire d'intensité (« dur », « intense », « high effort »).
+3. Le contrôle d'omission peut rejeter des réserves sémantiquement correctes
+   exprimées autrement, ou une observation littérale qui n'infère rien.
+4. Les heuristiques de tendance et d'affirmation qualifiée restent sensibles
+   à l'ordre des mots, aux négations éloignées, à la portée et aux formulations
+   multilingues.
+5. Une réponse acceptée peut être vague, incohérente, excessivement certaine,
+   mal relier la FC et le type, ou omettre une nuance non couverte. « Accepté »
+   ne signifie pas « scientifiquement validé ».
+6. Le fallback préserve la disponibilité mais ne prouve pas une qualité
+   conversationnelle ; les réponses de test ne démontrent pas le fournisseur.
+
+### Recommandations classées par impact
+
+1. **Bloquant avant tout GO produit :** obtenir un chemin fournisseur de test
+   explicitement autorisé, isolé, sans compte utilisateur ni donnée réelle ;
+   exécuter les 105 appels synthétiques prévus, ne conserver que les textes et
+   métadonnées autorisées, et établir latence/coût à partir des données
+   fournisseur réellement retournées.
+2. **Bloquant avant activation :** faire noter les réponses et les références
+   V3 par au moins deux évaluateurs humains indépendants, à l'aveugle autant
+   que possible ; arbitrer les désaccords et publier les erreurs acceptées
+   comme les rejets injustifiés.
+3. **Priorité élevée, dans une itération ultérieure distincte :** après mesure,
+   améliorer l'adjudication des nombres/métriques, les catégories d'intensité
+   multilingues, les réserves paraphrasées et la distinction entre observation
+   factuelle et conclusion. Aucun de ces correctifs n'est appliqué ici.
+4. **Priorité élevée :** conserver un taux de fallback contrôlé, une réponse
+   déterministe et un flag OFF ; définir des critères d'arrêt si des
+   acceptations scientifiques erronées sont observées.
+5. **Plus tard :** évaluer d'autres formulations, niveaux de détail et fixtures
+   représentatives avant toute généralisation ; ne pas introduire RAG dans
+   cette évaluation.
+
+### Verdict et livraison
+
+**HOLD — Fournisseur indisponible.** Aucune génération réelle, métrique de
+qualité, taux d'acceptation, coût ou latence ne peut être rapporté. Les 12
+probes sont uniquement une caractérisation du validateur, distincte des
+générations et des anciens mocks. Aucun code du moteur, prompt, validateur,
+route, interface, calcul V2/V3, accès données ou flag production n'a été changé
+dans cette itération ; seuls les tests de caractérisation et ce rapport sont
+ajoutés. PR #360 reste ouverte, sans merge ni déploiement. HEAD d'audit de
+cette itération : `b02ca60dae97b0b38b117d47c78b35c12d12af39`; le SHA de
+livraison sera consigné après le commit documentaire.

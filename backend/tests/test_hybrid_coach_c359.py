@@ -683,3 +683,81 @@ def test_prescription_permission_is_required_for_review_fact():
     assert any(f.id == "prescription.review" for f in _facts(
         v3, permissions=hybrid.HybridPermissions(prescription=True),
     ))
+
+
+@pytest.mark.parametrize("case,text,language,expected,classification", [
+    (
+        "long",
+        "Ta FC moyenne est de 100 bpm, un repère utile pour cette sortie, mais elle ne décrit pas tout l'effort.",
+        "fr", "unsupported_numeric_unit_or_value", "justified_rejection",
+    ),
+    (
+        "easy",
+        "Cette séance confirme une progression récente, un signal utile pour comprendre ton entraînement.",
+        "fr", "unauthorized_trend_claim", "justified_rejection",
+    ),
+    (
+        "intervals_4x4",
+        "Les répétitions sont régulières, un élément positif qui décrit bien la séance réalisée.",
+        "fr", "unsupported_regularity_claim", "justified_rejection",
+    ),
+    (
+        "no_physiology",
+        "Ta séance était probablement sous LT1, un repère utile pour comprendre son intensité.",
+        "fr", "unauthorized_physiological_conclusion", "justified_rejection",
+    ),
+    (
+        "easy",
+        "Tu devrais courir demain pour consolider cette séance et préparer la prochaine étape.",
+        "fr", "unauthorized_prescription", "justified_rejection",
+    ),
+    (
+        "easy",
+        "Ta FC plus haute s'explique par la fatigue accumulée, ce qui éclaire le résultat d'aujourd'hui.",
+        "fr", "unauthorized_causality", "justified_rejection",
+    ),
+    (
+        "history_classification",
+        "Tu as probablement fait un footing facile selon ton historique récent, un repère pour cette séance.",
+        "fr", "missing_history_relative_qualification", "justified_rejection",
+    ),
+    (
+        "easy",
+        "Ta FC moyenne de 140 bpm se situe sous LT1, mais le chiffre ne raconte pas chaque instant de la sortie ni le temps exact passé dans chaque zone.",
+        "fr", "missing_average_effort_limit", "unjustified_rejection",
+    ),
+    (
+        "intervals_4x4",
+        "Garmin a enregistré quatre phases d'effort et trois phases de récupération, ce qui décrit la structure observée.",
+        "fr", "missing_regularity_limit", "unjustified_rejection",
+    ),
+    (
+        "easy",
+        "Ta séance était vraiment intense, une lecture utile pour comprendre l'effort et situer son profil.",
+        "fr", "heuristic_checks_passed", "dangerous_ambiguous_acceptance",
+    ),
+    (
+        "easy",
+        "This was clearly a hard workout, a useful way to understand the effort and describe the session as a whole.",
+        "en", "heuristic_checks_passed", "dangerous_ambiguous_acceptance",
+    ),
+    (
+        "easy",
+        "Fue una sesión muy intensa, una lectura útil para entender el esfuerzo y describir la salida en conjunto.",
+        "es", "heuristic_checks_passed", "dangerous_ambiguous_acceptance",
+    ),
+])
+def test_c360_adversarial_characterization_without_changing_validator(
+    case, text, language, expected, classification,
+):
+    permissions = hybrid.HybridPermissions(history=case in {"history_classification", "long"})
+    if case == "history_classification":
+        v3 = synthetic_case("no_physiology")
+        v3.session_classification.type = "easy_run_probable"
+        v3.session_classification.decision_tier = "individual_history"
+    else:
+        v3 = synthetic_case(case)
+    facts = _facts(v3, permissions=permissions, language=language)
+    valid, reason, _ = hybrid.validate_generated_narrative(text, facts, language=language)
+    assert reason == expected
+    assert valid is (classification == "dangerous_ambiguous_acceptance")
