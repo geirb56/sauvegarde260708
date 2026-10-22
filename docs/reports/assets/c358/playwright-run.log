@@ -1,0 +1,8 @@
+
+Running 133 tests using 1 worker
+
+  ✓    1 [chromium] › e2e/c358-consistency-loading.spec.ts:39:5 › SYNTHETIC reference arithmetic is independently reproducible (10ms)
+  ✓    2 [chromium] › e2e/c358-consistency-loading.spec.ts:57:13 › SYNTHETIC WorkoutDetail desktop fr delayed (4.0s)
+  ✓    3 [chromium] › e2e/c358-consistency-loading.spec.ts:57:13 › SYNTHETIC WorkoutDetail desktop fr immediate (1.5s)
+  ✓    4 [chromium] › e2e/c358-consistency-loading.spec.ts:57:13 › SYNTHETIC WorkoutDetail desktop fr http500 (1.2s)
+  ✓    5 [chromium] › e2e/c358-consistency-loading.spec.ts:57:13 › SYNTHETIC WorkoutDetail desktop fr absent (1.0s)

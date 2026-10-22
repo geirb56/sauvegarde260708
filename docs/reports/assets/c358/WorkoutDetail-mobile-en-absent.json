@@ -1,0 +1,77 @@
+{
+  "provenance": "SYNTHETIC intercepted API responses in the actual locally served React app; not actual Garmin observations.",
+  "base": "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
+  "baseNote": "C358_BASE_SHA if supplied, otherwise HEAD at suite module load; not an inferred integration-branch merge base.",
+  "head": "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
+  "workingTreeDirty": true,
+  "sourceHashes": {
+    "tests/e2e/c358-consistency-loading.spec.ts": "deda7ae75f2c8f3c1a2f2bf23aaaa0b6a260e21de920dd537b0f5b68f6fc22e5",
+    "tests/fixtures/c358-workouts.ts": "b0b21ce7a742e540c5ea205cd09bc6bf152363228052fc024fd3738e359a37dd",
+    "tests/fixtures/c356-workouts.ts": "ba15c7245819547b715f7fbdc972711be50e5b840f4341b59e1d591108d29b17",
+    "frontend/src/pages/WorkoutDetail.jsx": "2b20eeaf817ec007742ab368ef250d72cb0bb91b9fb97cb3c1c45031802fc677",
+    "frontend/src/pages/SessionDetail.jsx": "cce1313ebc6a50d7eef77bb892498c70bc89dc2072760835af5d2b4178b12942",
+    "frontend/src/pages/DetailedAnalysis.jsx": "58732bf31a15ef00c9cf77f5b407b4690c8ed8ce052810246b8b5b31639051fd",
+    "frontend/src/hooks/useWorkoutIntelligence.js": "ad3665f630c8c3e6e383f225d83d9350a5b744d9465fab6a60f4c75c4f83637b",
+    "frontend/src/components/workout/WorkoutPhaseAnalysis.jsx": "b43f644136d7d70f7a03697cc3f79b4b499f482d4bbbe152637de05122c4e884",
+    "frontend/src/components/workout/WorkoutCoachPending.jsx": "599a896cb4aa7e9c19a491a4b8fbaa34ad7fee53ff5cd34701ec0cfca850933f",
+    "frontend/src/lib/i18n.js": "dda74063e8ddfd26aaeadd550e511d88406828b33e1658b46206ef617189d19b"
+  },
+  "routeName": "WorkoutDetail",
+  "viewportName": "mobile",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "language": "en",
+  "scenario": "absent",
+  "reference": {
+    "durations_s": [
+      240,
+      240,
+      240,
+      240
+    ],
+    "distances_m": [
+      832.07,
+      851.11,
+      885.81,
+      825.41
+    ],
+    "meanAbsoluteDeviationAroundMedian": 6.569673797567631,
+    "populationStd": 7.687007906315586
+  },
+  "partialSyntheticStd": null,
+  "partialNote": null,
+  "v3PendingDurationMs": 0,
+  "captures": [],
+  "captureSha256": {},
+  "requests": [
+    "/api/auth/me",
+    "/api/auth/me",
+    "/api/user/features",
+    "/api/subscription/info",
+    "/api/workouts/c358-synthetic-reference",
+    "/api/coach/workout-intelligence/c358-synthetic-reference",
+    "/api/coach/workout-analysis/c358-synthetic-reference"
+  ],
+  "unexpectedApi": [],
+  "blockedExternal": [
+    "https://fonts.googleapis.com/css2",
+    "https://assets.emergent.sh/scripts/emergent-main.js",
+    "https://us-assets.i.posthog.com/static/array.js",
+    "https://fonts.googleapis.com/css2"
+  ],
+  "errors": [],
+  "states": [
+    {
+      "state": "fallback",
+      "viewportWidth": 390,
+      "documentWidth": 390,
+      "horizontalOverflow": false,
+      "scrollY": 0,
+      "text": "BACK\nRUN\nSession summary\nSYNTHETIC · 4 × 4 min · C358\n\nSun, Oct 18 · Run\n\nDistance\n7.2 km\nDuration\n40m\nAverage pace\n5:33/km\nAverage heart rate\n151 bpm\nSession synthesis\n\nFactual observation\nSYNTHETIC · Legacy V2 narrative\n\nLimitations\nSYNTHETIC API fixture, not Garmin evidence. Individualized thresholds are unavailable.\nEfforts and recoveries\nEfforts: 4\nRecoveries: 4\nAverage effort pace: 4:43/km\nPace standard deviation: 7.7 s/km · 4/4 efforts\n\nEffort 14:00 · 4:48/km · 158 bpm\n\nRecovery 1 · 2:00\n\nEffort 24:00 · 4:42/km · 158 bpm\n\nRecovery 2 · 2:00\n\nEffort 34:00 · 4:31/km · 158 bpm\n\nRecovery 3 · 2:00\n\nEffort 44:00 · 4:51/km · 158 bpm\n\nRecovery 4 · 2:00\nRecorded kilometer splits · 6\nKey takeaways\n\nStructure: Intervals\n\nAsk the coach\nHome\nPlan\nSessions\nCoach\nProgress",
+      "coachCount": 0,
+      "openDetails": 0
+    }
+  ]
+}

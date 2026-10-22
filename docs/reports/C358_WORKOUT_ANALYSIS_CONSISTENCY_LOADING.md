@@ -1,5 +1,10 @@
 # C358 — Workout Analysis V3 Consistency & Loading UX
 
+> **Reprise autorisée le 22 octobre 2026.** Les sections 1 à 10 conservent
+> l'audit initial et son HOLD historique ; elles ne décrivent pas l'état de
+> livraison après reprise. Voir les sections 11 et suivantes pour les
+> corrections, validations et le verdict actualisé.
+
 ## 1. Périmètre, base et HEAD
 
 Date : 22 octobre 2026. **Verdict : HOLD. Rapport d'audit uniquement.**
@@ -225,3 +230,327 @@ La PR en brouillon sert uniquement à conserver l'audit demandé, conformément
 à l'autorisation utilisateur après le STOP. Elle n'est pas une livraison
 fonctionnelle de C358 et ne doit pas être présentée comme prête au merge.
 Attendre la levée du blocage et l'audit humain ; aucun merge automatique.
+
+## 11. Autorisation et périmètre de la reprise
+
+L'utilisateur a explicitement levé le HOLD et autorisé l'implémentation à partir
+de fixtures synthétiques :
+
+> « Il n'est pas nécessaire d'obtenir les réponses API réelles des séances
+> Garmin du 10/10 et du 19/09 pour commencer les corrections. »
+
+La même PR #358 et la même branche sont conservées. Base de comparaison :
+`copilot/dev` à `bdb67314b3bb16ae166dc1e91f3ba11039d9b616`. HEAD de reprise :
+`c263d318dd72fef6b3e19c2130ef8868d48ccfea` (rapport initial uniquement).
+HEAD applicatif validé (code et tests unitaires) :
+`3c4a12e4eae5ee47e86b7af203eda649ba4b19d9`.
+Les commits suivants ajoutent les preuves navigateur et le rapport.
+Le SHA final de livraison est communiqué dans la PR avec les résultats exacts.
+
+Les fixtures ne deviennent pas des observations réelles par cette autorisation.
+Aucune connexion Garmin/GCCLI, aucune écriture MongoDB et aucun déploiement
+ne sont nécessaires ni effectués.
+
+## 12. Présentation corrigée des métriques
+
+Les formules et leurs champs sources restent inchangés. Les seules
+modifications backend sont des constantes textuelles et le numéro de génération
+du catalogue narratif (`c358-controlled-1`), pour invalider les anciens textes
+dans le cache existant, sans créer de cache.
+
+- Le Coach garde le jugement canonique et l'écart absolu moyen existant.
+  « Allure centrale » devient explicitement « allure médiane », « median pace »
+  ou « mediana de los ritmos ».
+- Les textes V2 de preuves et de fallback décrivent explicitement un
+  écart-type ; les codes et champs de contrat, dont `fact.effort_dispersion`,
+  restent inchangés.
+- Sans jugement canonique, la narration peut toujours citer l'écart-type
+  fourni, sans conclure à la régularité ; les réserves deviennent elles aussi
+  explicites sur la métrique concernée.
+- L'écart-type quitte la grille de preuves principale V3. Il reste dans les
+  détails des phases, avec les libellés « Écart-type des allures »,
+  « Pace standard deviation » et « Desviación estándar de los ritmos ».
+  Le résumé principal ne juxtapose donc plus 6,6 et 7,7 comme deux valeurs
+  supposées d'un même indicateur.
+- Zéro est conservé ; une valeur absente ou non finie n'est pas remplacée par
+  zéro. La couverture partielle reste affichée ; aucun seuil de catégorie
+  n'est ajouté au frontend.
+
+Le contrôle AST des trois modules backend modifiés confirme que, après
+neutralisation des constantes de chaînes, leurs arbres syntaxiques sont
+identiques à la base. Les définitions des classes de modèles sont identiques,
+sans neutralisation. Aucun calcul, seuil ou contrat n'a été changé.
+
+## 13. Machine à états de chargement
+
+L'état réseau V3 devient une condition explicite des branches de rendu des
+trois pages :
+
+| Situation | Rendu Coach |
+| --- | --- |
+| FREE ou droit non confirmé | Pas de requête V3 ni de placeholder V3 ; gating conservé. |
+| Autorisé, requête en attente | Placeholder local et discret, aucun récit V1/V2 ; données factuelles disponibles conservées. |
+| Réponse valide dans la langue courante | Coach V3 directement, sans attendre V2 et sans doublon historique. |
+| Réponse absente ou incomplète | Fin du placeholder, fallback V1/V2 disponible. |
+| Erreur réseau/HTTP ou timeout | Fin du placeholder, fallback et message d'indisponibilité existant. |
+| Nouvelle séance/langue/droits | Invalidation du périmètre précédent au rendu et annulation des requêtes obsolètes au nettoyage. |
+| Démontage | Annulation ; les réponses tardives ne mettent plus à jour l'état. |
+
+Le hook V3 utilise une identité de périmètre renouvelée lors d'un changement
+d'identifiant, langue ou autorisation. Elle protège également une révocation
+suivie d'un rétablissement des droits, même pour la même séance/langue.
+Un timeout réseau Axios de 15 secondes borne l'attente V3 : ce n'est ni un
+délai artificiel avant affichage, ni un nouveau cache.
+
+Les requêtes séance et V2 de SessionDetail deviennent annulables, et les données
+de séance sont masquées tant qu'elles appartiennent à la route précédente.
+DetailedAnalysis conserve l'affichage des données disponibles sans dépendre
+de la fin de V2 pour présenter V3.
+
+## 14. Validation backend de la reprise
+
+Exécution depuis le répertoire `backend`, avec `python -m pytest` et la
+configuration existante `-n 2 --dist loadscope`.
+
+### Suites ciblées
+
+```text
+python -m pytest tests/test_workout_consistency_c358.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py tests/test_coach_repetition_judgment.py tests/test_coach_language.py -q --tb=short
+750 passed, 7 warnings
+```
+
+Les 18 nouveaux cas C358 couvrent FR/EN/ES : même population de quatre efforts,
+valeurs distinctes 6,6 et 7,7, vocabulaire médiane/écart-type, absence de
+recalcul dans la narration, sources non mutées et enveloppe narrative
+inchangée. Ils couvrent aussi six efforts dont quatre comparables, avec une
+observation **injectée synthétiquement** de 16,5621, sans jugement canonique,
+et les valeurs absentes/non finies.
+
+### Régression étendue
+
+```text
+python -m pytest tests/test_workout_consistency_c358.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py tests/test_workout_analysis_v2.py tests/test_workout_analysis_v2_phases.py tests/test_workout_analysis_v2_facts.py tests/test_workout_analysis_v2_unified.py tests/test_coach_language.py tests/test_coach_session_synthesis_c351.py tests/test_coach_repetition_judgment.py -q --tb=short
+1346 passed, 3 failed, 14 warnings
+```
+
+Les trois échecs sont exactement les cas historiques
+`test_workout_analysis_v2.py::test_comparable_history_stays_separate_and_metrics_are_unchanged[en/fr/es]` :
+attendu `meaning.consistent_pacing`, obtenu
+`meaning.hr_without_intensity_with_pacing`.
+
+Ils ont été reproduits indépendamment depuis une archive Git de la base exacte
+`bdb67314b3bb16ae166dc1e91f3ba11039d9b616`, dans le même environnement :
+
+```text
+python -m pytest tests/test_workout_analysis_v2.py::test_comparable_history_stays_separate_and_metrics_are_unchanged -q --tb=short
+3 failed, 14 warnings
+```
+
+Aucun test historique n'est supprimé ou affaibli pour les masquer. Les
+premières tentatives ont rencontré une dépendance de test manquante et une
+assertion C358 initialement trop stricte sur l'emplacement d'une réserve
+(déjà portée par la couverture du récit) ; après restauration des dépendances
+et correction de ce nouveau test, les résultats finaux sont ceux ci-dessus.
+
+## 15. Fichiers applicatifs et tests concernés
+
+| Fichier | Changement |
+| --- | --- |
+| `backend/coach_language.py` | Vocabulaire médiane dans la conclusion existante, sans toucher au jugement. |
+| `backend/narrative_coach_v3.py` | Vocabulaire médiane/écart-type FR/EN/ES et génération du catalogue. |
+| `backend/workout_analysis_v2.py` | Six textes localisés de preuves/conseils précisent l'écart-type. |
+| `backend/tests/test_workout_consistency_c358.py` | Dix-huit régressions synthétiques. |
+| `frontend/src/hooks/useWorkoutIntelligence.js` | Périmètre de requête et timeout réseau V3. |
+| `frontend/src/components/workout/WorkoutCoachPending.jsx` | Placeholder localisé, accessible via `role="status"`. |
+| `frontend/src/components/workout/NarrativeWorkoutAnalysis.jsx` | Suppression de l'écart-type de la grille de résumé V3. |
+| `frontend/src/components/workout/WorkoutPhaseAnalysis.jsx` | Libellé explicite et couverture du nombre d'efforts ; distinction avec la variation premier/dernier effort. |
+| `frontend/src/lib/i18n.js` | Libellés et chargement FR/EN/ES. |
+| `frontend/src/pages/WorkoutDetail.jsx` | Garde d'attente V3, périmètres et placeholder. |
+| `frontend/src/pages/SessionDetail.jsx` | Même garde ; annulation et protection des requêtes séance/V2. |
+| `frontend/src/pages/DetailedAnalysis.jsx` | Même garde ; affichage indépendant des données disponibles. |
+| `frontend/src/__tests__/workout-analysis-v3-pages.test.jsx` | Nouveau comportement pendant l'attente et matrice de concurrence/accès/langues sur les trois pages. |
+| `tests/e2e/c358-consistency-loading.spec.ts` | Vérifications navigateur sur composants réels, API simulée. |
+| `tests/fixtures/c358-workouts.ts` | Entrées et textes synthétiques explicitement identifiés. |
+| `docs/reports/assets/c358/` | Captures et résultats structurés simulés, distincts des données Garmin. |
+| `docs/reports/C358_WORKOUT_ANALYSIS_CONSISTENCY_LOADING.md` | Audit conservé et compte rendu de reprise. |
+
+Les fichiers de modèles narratifs/V3 et le moteur Workout Intelligence V3 ne
+sont pas modifiés. Aucun manifeste ni lockfile de dépendances n'est changé.
+
+## 16. Tests frontend et build
+
+Dépendances existantes restaurées depuis `frontend` avec :
+
+```text
+npm ci --legacy-peer-deps --no-audit --no-fund
+```
+
+Commande finale, exécutée sur les derniers changements applicatifs :
+
+```text
+CI=true REACT_APP_BACKEND_URL=http://localhost:8000 npm test -- --watchAll=false --runInBand src/__tests__/workout-analysis-v3-pages.test.jsx src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/analysis-format.test.js
+3 suites passed, 946 tests passed
+
+REACT_APP_BACKEND_URL=http://localhost:8000 npm run build
+Production build succeeded
+```
+
+La suite historique V3 qui attendait un Coach V1 pendant l'attente attend
+désormais le placeholder, vérifie explicitement l'absence des anciens textes
+et conserve le contrôle des phases factuelles.
+
+La matrice des trois pages couvre :
+
+- V2 avant V3 et V3 avant V2, y compris V2 en erreur ;
+- délai réseau synthétique de 2 500 ms (test à horloge contrôlée), avec absence
+  des récits historiques jusqu'à la réponse ;
+- HTTP 500, réponse absente/incomplète et erreur de timeout ;
+- données factuelles disponibles pendant l'attente, et absence d'erreur
+  prématurée quand les requêtes factuelles/V2 sont encore en cours ;
+- absence des résumés historiques même lorsque toutes les métriques principales
+  sont absentes ou non finies ;
+- changements de séance/langue avec réponses désordonnées et annulation ;
+- démontage, révocation des droits pendant l'attente, masquage immédiat des
+  données déjà reçues et rétablissement avec un nouveau périmètre ;
+- FREE, droits en cours de confirmation et TRIAL/PREMIUM autorisés ;
+- absence de doublon, FR/EN/ES, chiffres distincts, détail replié, couverture
+  partielle et valeurs absentes/non finies/zéro ;
+- variation premier/dernier effort correctement nommée quand l'écart-type
+  manque, sans la présenter comme un écart-type.
+
+Une revue indépendante en lecture seule a signalé une erreur d'indisponibilité
+V2 affichée prématurément dans DetailedAnalysis lorsque V3 était terminal mais
+V2 encore en cours. Un état `analysisLoading` séparé et 18 cas d'ordonnancement
+FR/EN/ES ont été ajoutés. Le dernier passage de 946 tests inclut ce correctif ;
+la revue de suivi ne relève plus de problème significatif.
+
+## 17. Protocole navigateur simulé
+
+La validation utilise les véritables composants de l'application React locale,
+pas une maquette HTML. Le navigateur Chromium intercepte les réponses
+d'authentification, de droits, de séance et d'analyse ; les autres origines
+(polices distantes et télémétrie incluses) sont bloquées avant accès réseau.
+Cette interception ne valide pas les mécanismes réels d'authentification ou
+d'abonnement.
+
+Le protocole couvre les trois routes en 1920 × 1080 et 390 × 844, dans les
+trois langues. Scénarios : V3 immédiat, V3 retardé de 2,5 secondes, HTTP 500,
+réponse absente, réponse incomplète, V3 valide avec V2 en erreur et comparaison
+partielle sans jugement. Les tests vérifient le DOM pendant l'attente, et pas
+seulement après la réponse : placeholder, absence de textes historiques et
+métriques factuelles visibles.
+
+Les captures représentatives anglaises distinguent, pour chaque route et
+chaque taille :
+
+1. chargement initial, avant libération des données simulées ;
+2. données factuelles avec placeholder Coach local ;
+3. attente V3 simulée de 2,5 secondes ;
+4. Coach V3 valide, sans doublon ;
+5. fallback après HTTP 500.
+
+Les états FR/ES sont contrôlés par assertions de visibilité, texte et mesures
+de mise en page, avec résultats structurés ; ils ne sont pas présentés comme
+une galerie de captures FR/ES. Les détails sont vérifiés initialement repliés
+puis ouverts, avec libellé explicite, couverture et absence de débordement
+horizontal. Les images sont capturées mais ne font pas l'objet d'une revue
+humaine pixel par pixel dans cette intervention ; les contrôles visuels
+automatisés reposent sur le DOM et les mesures de géométrie.
+
+Le manifeste `docs/reports/assets/c358/validation-summary.json` et les
+enregistrements par cas conservent commandes, dimensions, textes observés,
+requêtes simulées, empreintes des sources et captures. Ils indiquent
+explicitement le HEAD présent lors de l'exécution et l'arbre de travail
+modifié ; ce HEAD de capture ne doit pas être confondu avec un commit de code
+déjà publié. La base d'intégration de cette PR reste le SHA indiqué en
+section 11.
+
+### Résultats navigateur finaux
+
+```text
+cd tests
+./node_modules/.bin/playwright test e2e/c358-consistency-loading.spec.ts --retries=0
+133 passed, 0 failed, 0 skipped, 0 flaky (210,31 secondes)
+```
+
+Soit les 126 combinaisons de la matrice, une vérification arithmétique et six
+cas supplémentaires DetailedAnalysis : V3 en erreur alors que V2 reste en
+attente, pour chaque langue et chaque taille. Ces six cas vérifient que les
+métriques restent visibles et qu'aucune erreur V2 prématurée n'est affichée
+avant la fin de sa propre requête.
+
+Résultats persistés :
+
+- **30 PNG**, soit cinq états pour chaque couple page/taille ;
+- **132 enregistrements de cas**, manifeste, journal et résultats du runner ;
+- aucun débordement horizontal observé dans les états mesurés, y compris
+  après ouverture des détails ;
+- aucune exception de page, aucune requête API inattendue ;
+- aucun récit historique pendant l'attente V3, puis un seul Coach V3 valide ;
+- textes FR/EN/ES visibles, écart-type seulement dans les détails ;
+- couverture partielle 4/6 et absence de jugement, avec 16,5621 injecté ;
+- absence de répétition des paragraphes dans les fixtures narratives finales.
+
+Les fixtures ont été corrigées pendant leur élaboration : une expression
+régulière confondait 16,6 et 6,6, une réponse fallback n'incluait pas la
+conclusion synthétique attendue sur deux pages, et les textes partiels
+réutilisaient un titre quatre efforts et une réserve répétée. Ces problèmes
+de fixtures/tests ne sont pas présentés comme des défauts Garmin. Les passages
+précédents ont été remplacés par le passage final sans retry ; le manifeste
+en conserve les limites. Les textes de référence reflètent maintenant la
+catégorie canonique « variations perceptibles », et la moyenne d'allure V2 est
+la moyenne arithmétique des allures individuelles, pas un rapport global
+durée/distance.
+
+Les empreintes des sources enregistrées ont été comparées aux fichiers finaux :
+elles correspondent. Les preuves enregistrent le HEAD de capture
+`c263d318dd72fef6b3e19c2130ef8868d48ccfea` et l'arbre modifié, pas un faux
+HEAD de livraison. Leur contenu applicatif correspond au commit
+`3c4a12e4eae5ee47e86b7af203eda649ba4b19d9`. Les captures générées
+automatiquement dans `tests/test-results` ont été supprimées ; seules les
+captures persistantes listées par le manifeste sont livrées.
+
+Exemples comparatifs :
+
+- [WorkoutDetail mobile — placeholder](assets/c358/WorkoutDetail-mobile-en-delayed-local-placeholder.png)
+  → [Coach V3](assets/c358/WorkoutDetail-mobile-en-delayed-valid.png)
+  → [fallback HTTP 500](assets/c358/WorkoutDetail-mobile-en-http500-fallback.png).
+- [SessionDetail desktop — attente](assets/c358/SessionDetail-desktop-en-delayed-delayed-2500ms.png)
+  → [Coach V3](assets/c358/SessionDetail-desktop-en-delayed-valid.png).
+- [DetailedAnalysis mobile — attente](assets/c358/DetailedAnalysis-mobile-en-delayed-delayed-2500ms.png)
+  → [Coach V3](assets/c358/DetailedAnalysis-mobile-en-delayed-valid.png).
+
+## 18. Sécurité, limites et verdict de reprise
+
+- Contrôles de diff : sans erreur d'espacement.
+- Scans de secrets des fichiers applicatifs, tests, rapport et 168 fichiers
+  de tests navigateur/preuves (PNG inclus) : aucune détection.
+- Revue indépendante en lecture seule : le défaut V2 prématuré a été corrigé,
+  puis aucun autre problème significatif signalé.
+- Validation parallèle Code Review/CodeQL demandée après publication des
+  changements ; résultat final ajouté à la livraison, sans présumer ici
+  qu'un outil indisponible aurait effectué une revue.
+
+**Risques résiduels :**
+
+1. Les trois échecs V2 historiques sont toujours présents et reproduits sur la
+   base ; ils ne sont ni nouveaux ni corrigés par cette PR.
+2. Les réponses réseau, droits et données du navigateur sont simulés. Les
+   tests ne certifient ni les valeurs exactes des séances Garmin citées, ni
+   l'authentification ou l'application réelle des abonnements côté serveur.
+   L'autorisation utilisateur a explicitement retiré cette dépendance pour
+   commencer et livrer C358.
+3. Les captures utilisent les polices locales de repli, les origines externes
+   étant bloquées. Une revue humaine des images et de la lisibilité finale
+   reste nécessaire.
+4. Le timeout V3 de 15 secondes privilégie un fallback explicite plutôt
+   qu'une attente infinie si le service réel est exceptionnellement lent.
+5. Aucun test réel Garmin, aucun LLM réel, aucune écriture MongoDB, aucun merge
+   et aucun déploiement ne sont effectués.
+
+**Verdict : GO conditionnel pour audit humain de la PR #358 en brouillon**,
+avec contrôle de sécurité final et acceptation explicite des échecs V2
+préexistants. Les deux corrections applicatives sont livrées, sur preuves
+synthétiques déclarées, sans changer les formules ni les contrats. Le HOLD
+historique des sections 1 à 10 est levé par l'autorisation de reprise.
+Attendre l'autorisation utilisateur avant tout merge ou intégration Emergent.
