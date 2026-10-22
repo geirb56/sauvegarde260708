@@ -38,3 +38,11 @@ frontend/node_modules/.cache/default-development/15.pack
 
 tmp/
 **/node_modules/
+
+# Regenerable browser outputs; keep only the curated C358 evidence in Git.
+/tests/test-results/
+/docs/reports/assets/c358/*
+!/docs/reports/assets/c358/validation-summary.json
+!/docs/reports/assets/c358/WorkoutDetail-mobile-en-delayed-local-placeholder.png
+!/docs/reports/assets/c358/WorkoutDetail-mobile-en-delayed-valid.png
+!/docs/reports/assets/c358/WorkoutDetail-mobile-en-http500-fallback.png

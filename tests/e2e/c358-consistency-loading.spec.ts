@@ -6,7 +6,7 @@ import path from 'node:path';
 import { c358Workout, copy, Language, referenceDistances, referenceMAD, referenceStd, partialSyntheticStd } from '../fixtures/c358-workouts';
 
 const origin = 'http://localhost:3000';
-const assets = path.resolve(__dirname, '../../docs/reports/assets/c358');
+const assets = path.resolve(__dirname, '../test-results/c358-evidence');
 const root = path.resolve(__dirname, '../..');
 const baseline = process.env.C358_BASE_SHA || execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const scenarios = ['delayed', 'immediate', 'http500', 'absent', 'incomplete', 'v2-error', 'partial', 'v2-pending-v3-error'] as const;

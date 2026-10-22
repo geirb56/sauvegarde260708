@@ -12,23 +12,9 @@
   "flaky": 0,
   "browserCases": 132,
   "arithmeticCases": 1,
-  "caseRecords": 132,
-  "persistentRunnerResults": "playwright-results.json",
-  "transientOutputCleanup": {
-    "removedC358Directories": 132,
-    "removedFiles": 134,
-    "remainingTestsTestResultsEntries": 0,
-    "indexChanges": "Only eight staged C358 generated-artifact paths were unstaged under the final explicit authorization; no source/report/other index paths were touched.",
-    "concurrentCommitCleanup": "Four automatic screenshots were committed by the parent during this run and are now deleted from the working tree. Parent must commit these deletions; tests/test-results has no remaining files.",
-    "trackedTransientPathsDeleted": [
-      "tests/test-results/c358-consistency-loading-S-7f907-Detail-desktop-fr-immediate-chromium/test-finished-1.png",
-      "tests/test-results/c358-consistency-loading-S-baa06-outDetail-desktop-fr-absent-chromium/test-finished-1.png",
-      "tests/test-results/c358-consistency-loading-S-c4bdf-utDetail-desktop-fr-delayed-chromium/test-finished-1.png",
-      "tests/test-results/c358-consistency-loading-S-f9544-utDetail-desktop-fr-http500-chromium/test-finished-1.png"
-    ],
-    "attachmentNote": "Raw runner JSON retains attachment paths from execution. Those automatic screenshots were transient and removed; the 30 persistent PNGs listed here remain available."
-  },
-  "pngCaptures": 30,
+  "historicalGeneratedCaseRecords": 132,
+  "historicalGeneratedPngCaptures": 30,
+  "retainedPngCaptures": 3,
   "base": "3c4a12e4eae5ee47e86b7af203eda649ba4b19d9",
   "head": "122b89906fa0f10457a7fc2d021a6eee0e3d5e35",
   "captureHeads": [
@@ -38,7 +24,7 @@
   "baseNote": "HEAD at suite module load. The shallow clone has no origin/copilot/dev ref; this is not a claimed integration-branch merge base.",
   "workingTreeDirty": true,
   "captureWorkingTreeDirtyStates": [false, true],
-  "captureSourceNote": "Parent commits advanced during this final run. Per-case records preserve the exact observed head and dirty flag. All ten source SHA256 values remained identical across all 132 cases and matched the working tree after completion; no tested source changed.",
+  "captureSourceNote": "Historical run before cleanup; source hashes below describe that run, not the output-directory-only test change. Parent commits advanced during capture; application sources remained stable.",
   "routes": ["WorkoutDetail", "SessionDetail", "DetailedAnalysis"],
   "viewports": {
     "desktop": {"width": 1920, "height": 1080},
@@ -90,112 +76,18 @@
     "frontend/src/lib/i18n.js": "dda74063e8ddfd26aaeadd550e511d88406828b33e1658b46206ef617189d19b"
   },
   "sourceHashesStableAcrossAllCases": true,
-  "runHistory": [
-    {
-      "scope": "Initial 24-case English smoke matrix",
-      "passed": 14,
-      "failed": 10,
-      "retries": 0,
-      "resolution": "Test-authoring defects, not unresolved app failures: an unbounded 6.6 exclusion matched 16.6, and reused V2 fixtures lacked the coach-language contract needed for two routes' fallback assertions. Both were fixed before complete runs."
-    },
-    {
-      "suiteStartTime": "2026-10-22T06:48:27.050Z",
-      "passed": 127,
-      "failed": 0,
-      "retries": 0,
-      "supersededReason": "Production DetailedAnalysis changed after captures; full suite rerun."
-    },
-    {
-      "suiteStartTime": "2026-10-22T06:54:06.549Z",
-      "passed": 127,
-      "failed": 0,
-      "retries": 0,
-      "supersededReason": "Corrected partial fixture headline to six efforts/four usable paces."
-    },
-    {
-      "suiteStartTime": "2026-10-22T06:59:13.872Z",
-      "passed": 127,
-      "failed": 0,
-      "retries": 0,
-      "supersededReason": "Canonical noticeable-band wording and arithmetic-mean fixture correction."
-    },
-    {
-      "suiteStartTime": "2026-10-22T07:04:26.131Z",
-      "passed": 127,
-      "failed": 0,
-      "retries": 0,
-      "supersededReason": "Added six gated V2-pending/V3-error browser regressions requested during final review."
-    },
-    {
-      "scope": "Preliminary six-case reviewer regression",
-      "passed": 6,
-      "failed": 0,
-      "retries": 0,
-      "log": "playwright-reviewer-regression.log",
-      "note": "Final full run additionally waits for the visible localized V3 error before asserting no premature V2 failure."
-    },
-    {
-      "suiteStartTime": "2026-10-22T07:11:56.701Z",
-      "passed": 133,
-      "failed": 0,
-      "retries": 0,
-      "supersededReason": "Replaced duplicated partial interpretation/limitation prose with explicit neutral abstention and added unique-paragraph/one-limitation assertions."
-    },
-    {
-      "suiteStartTime": "2026-10-22T07:17:33.150Z",
-      "passed": 133,
-      "failed": 0,
-      "retries": 0,
-      "supersededReason": "Parent explicitly requested one consolidated final run after frontend freeze; no fixture or production source changes were necessary."
-    },
-    {
-      "suiteStartTime": "2026-10-22T07:23:22.887Z",
-      "passed": 133,
-      "failed": 0,
-      "retries": 0,
-      "log": "playwright-run.log",
-      "note": "All persistent case JSON, runner JSON and 30 PNG captures refer to this successful final run. No failed-run captures remain."
-    }
-  ],
-  "captureHashes": "Each corresponding English delayed/http500 case JSON contains captureSha256 for every PNG.",
+  "cleanup": "132 case records, 27 redundant PNGs, raw runner JSON and two logs removed. Tests read source fixtures, never these outputs. Historical counts above describe execution, not retained files. Cleanup rerun results are recorded in the C358 report.",
+  "regeneratedEvidenceDirectory": "tests/test-results/c358-evidence",
   "captures": [
-    "DetailedAnalysis-desktop-en-delayed-delayed-2500ms.png",
-    "DetailedAnalysis-desktop-en-delayed-initial.png",
-    "DetailedAnalysis-desktop-en-delayed-local-placeholder.png",
-    "DetailedAnalysis-desktop-en-delayed-valid.png",
-    "DetailedAnalysis-desktop-en-http500-fallback.png",
-    "DetailedAnalysis-mobile-en-delayed-delayed-2500ms.png",
-    "DetailedAnalysis-mobile-en-delayed-initial.png",
-    "DetailedAnalysis-mobile-en-delayed-local-placeholder.png",
-    "DetailedAnalysis-mobile-en-delayed-valid.png",
-    "DetailedAnalysis-mobile-en-http500-fallback.png",
-    "SessionDetail-desktop-en-delayed-delayed-2500ms.png",
-    "SessionDetail-desktop-en-delayed-initial.png",
-    "SessionDetail-desktop-en-delayed-local-placeholder.png",
-    "SessionDetail-desktop-en-delayed-valid.png",
-    "SessionDetail-desktop-en-http500-fallback.png",
-    "SessionDetail-mobile-en-delayed-delayed-2500ms.png",
-    "SessionDetail-mobile-en-delayed-initial.png",
-    "SessionDetail-mobile-en-delayed-local-placeholder.png",
-    "SessionDetail-mobile-en-delayed-valid.png",
-    "SessionDetail-mobile-en-http500-fallback.png",
-    "WorkoutDetail-desktop-en-delayed-delayed-2500ms.png",
-    "WorkoutDetail-desktop-en-delayed-initial.png",
-    "WorkoutDetail-desktop-en-delayed-local-placeholder.png",
-    "WorkoutDetail-desktop-en-delayed-valid.png",
-    "WorkoutDetail-desktop-en-http500-fallback.png",
-    "WorkoutDetail-mobile-en-delayed-delayed-2500ms.png",
-    "WorkoutDetail-mobile-en-delayed-initial.png",
     "WorkoutDetail-mobile-en-delayed-local-placeholder.png",
     "WorkoutDetail-mobile-en-delayed-valid.png",
     "WorkoutDetail-mobile-en-http500-fallback.png"
   ],
   "limitations": [
     "All API data is synthetic. This does not validate real Garmin data, backend computation, authentication, subscription enforcement, or an LLM.",
-    "PNG captures are representative English states for every route/viewport; FR/ES states are verified through browser assertions and structured text/layout records.",
+    "Three retained English mobile WorkoutDetail captures illustrate pending, valid and fallback states; the tests still cover all three routes, both viewports and FR/EN/ES.",
     "External fonts and telemetry scripts are blocked; screenshots use locally available fallback fonts.",
     "Images were captured but not opened; visual checks use structured DOM/layout measurements.",
-    "Unit tests, production build, gating/navigation/revocation coverage and repository-wide review are owned by the parent/frontend agent, not rerun here.",
-    "Captures prove the dirty working tree identified by stable source hashes, not a later committed HEAD."
+    "Retained captures document the historical synthetic run, not the later cleanup validation or real Garmin data."
   ]
 }

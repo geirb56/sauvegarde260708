@@ -457,13 +457,12 @@ horizontal. Les images sont capturées mais ne font pas l'objet d'une revue
 humaine pixel par pixel dans cette intervention ; les contrôles visuels
 automatisés reposent sur le DOM et les mesures de géométrie.
 
-Le manifeste `docs/reports/assets/c358/validation-summary.json` et les
-enregistrements par cas conservent commandes, dimensions, textes observés,
-requêtes simulées, empreintes des sources et captures. Ils indiquent
-explicitement le HEAD présent lors de l'exécution et l'arbre de travail
-modifié ; ce HEAD de capture ne doit pas être confondu avec un commit de code
-déjà publié. La base d'intégration de cette PR reste le SHA indiqué en
-section 11.
+Le [manifeste synthétique](assets/c358/validation-summary.json) conserve les
+commandes, dimensions, résultats historiques et empreintes des sources. Les
+enregistrements individuels étaient des sorties, jamais des entrées de tests ;
+ils ont été retirés lors du nettoyage (§19). Les identifiants historiques de
+capture ne doivent pas être confondus avec le HEAD de livraison. La base
+d'intégration reste le SHA indiqué en section 11.
 
 ### Résultats navigateur finaux
 
@@ -479,10 +478,10 @@ attente, pour chaque langue et chaque taille. Ces six cas vérifient que les
 métriques restent visibles et qu'aucune erreur V2 prématurée n'est affichée
 avant la fin de sa propre requête.
 
-Résultats persistés :
+Résultats exécutés lors de la validation initiale (pas inventaire des fichiers conservés) :
 
 - **30 PNG**, soit cinq états pour chaque couple page/taille ;
-- **132 enregistrements de cas**, manifeste, journal et résultats du runner ;
+- **132 enregistrements de cas** produits, avec manifeste, journaux et résultats du runner ;
 - aucun débordement horizontal observé dans les états mesurés, y compris
   après ouverture des détails ;
 - aucune exception de page, aucune requête API inattendue ;
@@ -496,29 +495,30 @@ régulière confondait 16,6 et 6,6, une réponse fallback n'incluait pas la
 conclusion synthétique attendue sur deux pages, et les textes partiels
 réutilisaient un titre quatre efforts et une réserve répétée. Ces problèmes
 de fixtures/tests ne sont pas présentés comme des défauts Garmin. Les passages
-précédents ont été remplacés par le passage final sans retry ; le manifeste
+précédents ont été remplacés par le passage final sans retry ; le rapport
 en conserve les limites. Les textes de référence reflètent maintenant la
 catégorie canonique « variations perceptibles », et la moyenne d'allure V2 est
 la moyenne arithmétique des allures individuelles, pas un rapport global
 durée/distance.
 
-Les empreintes des sources enregistrées ont été comparées aux fichiers finaux :
-elles correspondent. Les preuves enregistrent le HEAD de capture
-`c263d318dd72fef6b3e19c2130ef8868d48ccfea` et l'arbre modifié, pas un faux
-HEAD de livraison. Leur contenu applicatif correspond au commit
-`3c4a12e4eae5ee47e86b7af203eda649ba4b19d9`. Les captures générées
-automatiquement dans `tests/test-results` ont été supprimées ; seules les
-captures persistantes listées par le manifeste sont livrées.
+Les empreintes enregistrées ont été comparées aux fichiers applicatifs finaux :
+elles correspondent au code validé de
+`3c4a12e4eae5ee47e86b7af203eda649ba4b19d9`. Le manifeste du dernier passage
+historique indique les HEAD observés
+`3c4a12e4eae5ee47e86b7af203eda649ba4b19d9` et
+`122b89906fa0f10457a7fc2d021a6eee0e3d5e35`, avec arbre parfois modifié,
+et non le HEAD de livraison. Après nettoyage, trois captures historiques
+seulement sont conservées ; les nouvelles sorties vont dans
+`tests/test-results/c358-evidence/`, ignoré par Git.
 
 Exemples comparatifs :
 
 - [WorkoutDetail mobile — placeholder](assets/c358/WorkoutDetail-mobile-en-delayed-local-placeholder.png)
   → [Coach V3](assets/c358/WorkoutDetail-mobile-en-delayed-valid.png)
   → [fallback HTTP 500](assets/c358/WorkoutDetail-mobile-en-http500-fallback.png).
-- [SessionDetail desktop — attente](assets/c358/SessionDetail-desktop-en-delayed-delayed-2500ms.png)
-  → [Coach V3](assets/c358/SessionDetail-desktop-en-delayed-valid.png).
-- [DetailedAnalysis mobile — attente](assets/c358/DetailedAnalysis-mobile-en-delayed-delayed-2500ms.png)
-  → [Coach V3](assets/c358/DetailedAnalysis-mobile-en-delayed-valid.png).
+
+Les captures des autres routes restent reproductibles par le test, sans
+dupliquer leur galerie dans le dépôt.
 
 ## 18. Sécurité, limites et verdict de reprise
 
@@ -556,3 +556,112 @@ préexistants. Les deux corrections applicatives sont livrées, sur preuves
 synthétiques déclarées, sans changer les formules ni les contrats. Le HOLD
 historique des sections 1 à 10 est levé par l'autorisation de reprise.
 Attendre l'autorisation utilisateur avant tout merge ou intégration Emergent.
+
+## 19. Nettoyage final avant merge — PR #358
+
+### Périmètre et audit préalable
+
+- Base exacte : `copilot/dev`, `bdb67314b3bb16ae166dc1e91f3ba11039d9b616`
+  (merge C357, incluant C356).
+- HEAD avant nettoyage : `5de2d651b91aafa39037d1aa7b30a10ec34b3842`.
+- Branche : `copilot/c358-workout-analysis-v3-ux` ; arbre initial propre.
+- Inventaire des **182 fichiers** du diff PR, effectué avant suppression :
+
+| Catégorie | Fichiers | Octets de contenu avant nettoyage |
+|---|---:|---:|
+| Code applicatif | 11 | 443 449 |
+| Tests automatisés | 3 | 67 898 |
+| Fixtures nécessaires | 1 | 6 954 |
+| Documentation | 1 | 31 572 |
+| Captures de validation | 30 | 2 269 414 |
+| Résultats générés | 136 | 881 788 |
+| Fichiers temporaires supplémentaires | 0 | 0 |
+| **Total** | **182** | **3 701 075** |
+
+Les 136 résultats générés sont 132 JSON par scénario, un manifeste,
+un JSON brut du runner et deux journaux. La lecture du test confirme que ces
+fichiers sont écrits après les assertions, jamais importés ni lus comme
+fixtures. Les seules relectures concernent le calcul des empreintes de
+captures venant d'être générées. La suppression ne prive donc ni les tests
+de leurs entrées, ni la reproduction de ses sources.
+
+Trois captures illustrent les trois états utiles (attente locale, Coach V3,
+fallback HTTP 500). Le manifeste conserve les résultats synthétiques et les
+limites ; les journaux et JSON par cas dupliquaient ce que les tests peuvent
+régénérer. Aucune suppression n'est fondée uniquement sur le nombre de lignes.
+
+### Liste exhaustive des sources conservées
+
+Les 11 fichiers applicatifs suivants sont **strictement inchangés par le nettoyage** :
+
+- `backend/coach_language.py`
+- `backend/narrative_coach_v3.py`
+- `backend/workout_analysis_v2.py`
+- `frontend/src/components/workout/NarrativeWorkoutAnalysis.jsx`
+- `frontend/src/components/workout/WorkoutCoachPending.jsx`
+- `frontend/src/components/workout/WorkoutPhaseAnalysis.jsx`
+- `frontend/src/hooks/useWorkoutIntelligence.js`
+- `frontend/src/lib/i18n.js` (FR/EN/ES)
+- `frontend/src/pages/WorkoutDetail.jsx`
+- `frontend/src/pages/SessionDetail.jsx`
+- `frontend/src/pages/DetailedAnalysis.jsx`
+
+Tests, fixtures et documentation conservés :
+
+- `backend/tests/test_workout_consistency_c358.py` — inchangé ;
+- `frontend/src/__tests__/workout-analysis-v3-pages.test.jsx` — inchangé ;
+- `tests/e2e/c358-consistency-loading.spec.ts` — seule la destination des
+  sorties change ; toutes les assertions et tous les scénarios sont conservés ;
+- `tests/fixtures/c358-workouts.ts` — inchangé ;
+- `docs/reports/C358_WORKOUT_ANALYSIS_CONSISTENCY_LOADING.md` — ce rapport ;
+- les dépendances de fixtures préexistantes, notamment
+  `tests/fixtures/c356-workouts.ts` et
+  `backend/tests/fixtures/coach_session_synthesis_c351.json` — inchangées,
+  hors des 182 fichiers du diff initial.
+
+Les quatre preuves conservées sous `docs/reports/assets/c358/` sont :
+
+- `validation-summary.json` — synthèse autonome, sans liens vers les sorties retirées ;
+- `WorkoutDetail-mobile-en-delayed-local-placeholder.png` ;
+- `WorkoutDetail-mobile-en-delayed-valid.png` ;
+- `WorkoutDetail-mobile-en-http500-fallback.png`.
+
+### Liste exhaustive des sorties retirées du suivi Git
+
+**162 fichiers**, tous sous `docs/reports/assets/c358/`. Pour éviter de
+recréer un volumineux inventaire généré, les familles ci-dessous définissent
+exactement chaque nom supprimé (produit cartésien, aucune exception implicite) :
+
+1. **126 JSON** : `<page>-<taille>-<langue>-<scénario>.json`, avec
+   - page ∈ {`WorkoutDetail`, `SessionDetail`, `DetailedAnalysis`} ;
+   - taille ∈ {`desktop`, `mobile`} ;
+   - langue ∈ {`fr`, `en`, `es`} ;
+   - scénario ∈ {`delayed`, `immediate`, `http500`, `absent`, `incomplete`,
+     `v2-error`, `partial`}.
+2. **6 JSON** : `DetailedAnalysis-<taille>-<langue>-v2-pending-v3-error.json`,
+   avec les mêmes tailles et langues.
+3. **27 PNG** : `<page>-<taille>-en-<état>.png`, mêmes pages et tailles,
+   état ∈ {`delayed-initial`, `delayed-local-placeholder`,
+   `delayed-delayed-2500ms`, `delayed-valid`, `http500-fallback`},
+   **sauf les trois PNG explicitement conservés ci-dessus**.
+4. **3 sorties du runner** : `playwright-results.json`, `playwright-run.log`,
+   `playwright-reviewer-regression.log`.
+
+La suppression du suivi ne réécrit pas l'historique : ces sorties restent
+consultables au HEAD précédent. Les futures preuves complètes sont produites
+dans `tests/test-results/c358-evidence/` ; le reporter conserve ses sorties
+usuelles dans `tests/test-results/`. Les deux sont ignorés. Les règles
+supplémentaires sur `docs/reports/assets/c358/` empêchent le retour accidentel
+des anciennes sorties, tout en autorisant les quatre preuves choisies.
+Les fixtures et les fichiers sources ne sont pas masqués.
+
+### Validation après nettoyage
+
+Les résultats initiaux restent ceux des §§14–18 : **946 frontend**,
+**750 backend ciblés**, **133 Playwright**, build réussi ; la suite backend
+étendue avait **1 346 réussites et trois échecs V2 historiques**, reproduits
+sur la base. Ces résultats ne constituent pas des relances du nettoyage.
+
+Relances, volume final, contrôles des liens, statut CodeQL et SHA de livraison :
+à compléter après exécution. **HOLD de livraison tant que ces contrôles ne
+sont pas terminés**. La PR reste en brouillon ; aucun merge ni déploiement.
