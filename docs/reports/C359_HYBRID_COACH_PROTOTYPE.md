@@ -4,9 +4,8 @@
 
 Cette section est le rapport courant pour la PR **#360**, branche existante
 `copilot/c359-recovery`, base `copilot/dev`. Elle supersède les verdicts C359
-historiques ci-dessous sans les réécrire. HEAD du code évalué :
-`8cae06c3c387de446fe019a62d108a2863e67f7e` ; le commit documentaire qui ajoute
-cette section est postérieur et ne modifie pas ce code.
+historiques ci-dessous sans les réécrire. HEAD du code évalué et de cette
+livraison C360 : `7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`.
 
 ### Architecture avant / après
 
@@ -303,10 +302,9 @@ Le feature flag `C359_HYBRID_COACH_ENABLED` reste **OFF par défaut**.
   supérieure vérifiée. Attendre l'audit C360 ; ne pas activer ni intégrer.
 
 Base : `copilot/dev` (`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD du code
-testé : à estampiller après le commit du code. Suite ciblée :
+testé et SHA final C360 : `7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`. Suite ciblée :
 `/tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q --tb=short`
-depuis `backend/` — **164 passed**. HEAD final après commit documentaire sera
-consigné dans le message de livraison.
+depuis `backend/` — **164 passed**.
 
 # C359 — Coach hybride V1/V3, prototype contrôlé
 
