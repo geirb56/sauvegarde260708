@@ -1,5 +1,278 @@
 # C359 — Coach hybride V1/V3, prototype contrôlé
 
+## Correction après audit HOLD — PR #359 uniquement
+
+La première version ci-dessous est conservée comme **instantané historique**,
+pas comme description de la correction. Son gain de substitution lexicale ne
+répondait pas à l'objectif de synthèse intelligente. Il ne suffit pas de
+remplacer un catalogue de synonymes par un catalogue plus grand.
+
+### Audit préalable de la correction, en lecture seule
+
+Point de départ : `4466e3e0e79e5e86e41a4ce8124f045c6c4b0315`, sur la même
+branche de la PR draft #359. Base d'intégration inchangée :
+`copilot/dev`, `720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`.
+
+Fichiers relus avant modification : prototype hybride, Narrative V3,
+Workout Intelligence V3 et ses modèles, transport LLM, présent audit historique
+et tests hybrides/V3. Aucune modification des autorités scientifiques n'est
+nécessaire ni autorisée.
+
+| Source à ce point de départ | Fait fiable disponible / frontière |
+| --- | --- |
+| `backend/workout_intelligence_v3.py:621–744` | Type de séance, confiance, règles et preuves. Une sortie longue porte déjà durée, durée habituelle, ratio et taille d'historique ; ne pas recalculer le seuil de classification. |
+| `backend/workout_intelligence_v3_models.py:183–199` | FC moyenne, position **de cette moyenne** par rapport aux seuils personnels acceptés ; ni temps dans les zones, ni position de chaque répétition. |
+| `backend/workout_intelligence_v3_models.py:202–231` | Référence d'effort relative à l'historique, explicitement non physiologique ; accès historique requis. |
+| `backend/workout_intelligence_v3.py:919–974` | Tendance évaluée par le moteur, avec confiance/sensibilité. Une différence isolée ne crée pas une tendance. |
+| `backend/workout_intelligence_v3_models.py:310–320` | Statut canonique de conformité, pas une autorisation de créer/modifier un entraînement. |
+| `backend/workout_intelligence_v3.py:626–634` | Décompte des efforts/récupérations et **disponibilité** de régularité seulement. La confiance haute ne constitue pas un verdict « régulier ». |
+| `backend/narrative_coach_v3.py:73–108,195–299` | Le verdict catégoriel de régularité utilisé par la narration actuelle vient des conclusions versionnées V2/CoachLanguage du même passage, pas du seul booléen V3. Pas de nouvelle déduction à partir de la dispersion. |
+| `backend/llm_coach.py:209–299` | Transport existant, mais nettoyage générique à 700 caractères : risque de troncature du JSON structuré. Aucun changement du transport de production pour masquer ce blocage. |
+
+Informations manquantes : objectif autorisé dans la sortie V3, durées
+individuelles des répétitions, verdict de régularité V3 autonome, métadonnée
+narrative spécifique tapis, preuve d'une cause de fatigue, service indépendant
+de vérification sémantique générale. Le libellé de fixture « 4 × 4 min » n'est
+pas une preuve permettant au narrateur d'énoncer les durées.
+
+**Décision d'architecture avant la correction :** laisser le LLM proposer une
+synthèse véritablement libre et structurée, mais ne jamais confondre cette
+proposition avec du texte vérifié. Des références déclarées, des chiffres
+corrects et des assertions structurées cohérentes ne prouvent pas l'équivalence
+de leur formulation libre. Toute partie invérifiable doit être rejetée, pas
+« validée » par une heuristique ou un second LLM. Sans solution fiable à cette
+frontière, le verdict reste HOLD, même si la sélection déterministe des faits
+devient plus utile.
+
+### Protocole d'évaluation de la correction
+
+Réutiliser les sept fixtures **sans changer leurs données** pour rendre un
+résultat plus flatteur. La fixture fractionnée d'origine ne contient pas de
+verdict de régularité. D'éventuels cas réguliers/irréguliers supplémentaires
+doivent être identifiés séparément.
+
+Pour chaque cas, distinguer :
+
+1. Narrative V3 actuel à partir de la même preuve.
+2. Proposition libre simulée (non assimilable à une réponse réelle du LLM).
+3. Texte effectivement servi après contrôle ou repli.
+
+Évaluer séparément exactitude, personnalisation, pertinence, naturel, concision,
+conseil et fiabilité. Une meilleure sélection ou un meilleur repli déterministe
+n'établissent pas un gain de qualité du LLM. Une phrase libre correcte refusée
+doit compter comme une limite du prototype, pas être cachée du bilan.
+
+Vérification des prérequis fournisseur dans le processus de cette correction :
+clé de transport absente et SDK existant non installé dans le Python système.
+Seuls ces booléens ont été vérifiés, sans lecture ni exposition de secrets.
+Aucun appel LLM réel, aucun test de séance réelle ou accès aux données privées
+n'a été effectué. Aucun coût ou temps fournisseur ne sera extrapolé à partir
+des simulations. Le budget timeout est une limite, pas une latence mesurée.
+
+### Architecture avant / après
+
+| Couche | Première livraison, rejetée par l'audit | Correction |
+| --- | --- | --- |
+| Science | Moteurs V2/V3 existants | **Inchangés** ; aucun seuil, régularité, progrès ou prescription recalculé par le narrateur |
+| Faits | Sous-ensemble du texte déjà présélectionné par Narrative V3 | `AdmissibleFact` construit depuis des champs structurés V3 : identifiant stable, valeurs/unités, conclusion autorisée, confiance, conditions, limites importantes, priorité et chemins de source locaux |
+| Génération | Une phrase, substitutions prédéfinies | Demande de synthèse originale, choix/hiérarchie/relations des faits admissibles ; sortie structurée avec texte complet, affirmations et identifiants de preuves/conclusions |
+| Contrôle | Grammaire de substitutions littérales | Reconstruction indépendante des assertions autorisées depuis V3 ; **aucun vérificateur d'entailment libre disponible** |
+| Texte servi | Tout le catalogue rendu, une phrase éventuellement reformulée | Proposition invérifiable écartée ; sélection déterministe de faits utiles comme repli. Sous-ensemble littéral vérifiable distingué explicitement d'une synthèse libre validée |
+| Verdict | Prototype prudent mais gain conversationnel non démontré | **HOLD explicite dans chaque résultat** ; pas de succès sémantique déclaré par défaut |
+
+Les listes de synonymes et les fonctions `_equivalent` et
+`validate_hybrid_lead` sont retirées, pas agrandies. Le paquet fourni au LLM
+ne contient pas de phrase à recopier : `provider_fact()` exclut l'assertion
+locale et les chemins de source. Les identifiants de preuve sont du vocabulaire
+fixe (`interval.count`, `session.long`…), jamais les identifiants de séances
+ou d'utilisateurs. Les textes libres des champs coach, limites et sources
+arbitraires ne sont pas transmis.
+
+Les autorisations sont contrôlées **avant** la construction privilégiée et
+l'appel fournisseur. FREE est refusé ; TRIAL/PREMIUM passent par `UserAccess`.
+L'historique et la prescription nécessitent toujours le booléen explicite
+`True` côté serveur. Une conformité dérivée d'un type dépendant de l'historique
+ne contourne pas cette restriction. Le résultat d'une erreur n'est jamais un
+V3 complet non filtré.
+
+Le prompt demande une réponse naturelle dans la langue du paquet FR/EN/ES,
+non limitée à une phrase ni à trois paragraphes, sans inventer de conclusion
+ou de prescription. Le transport RunIndex existant reste inchangé. Il n'est
+appelé qu'en opt-in avec le flag expérimental ; aucun appel réel n'a été
+effectué pour cette correction.
+
+### Méthode de contrôle factuel et frontière non résolue
+
+La sortie demandée au fournisseur a la forme :
+
+- `text` : synthèse complète.
+- `claims` : affirmations factuelles, chacune avec son `text`, ses
+  `evidence_ids` et ses `conclusion_ids`.
+
+Ces déclarations **ne sont pas une preuve**. Le contrôle ne compare pas
+seulement les nombres, ni les assertions structurées entre elles : il
+reconstruit le catalogue autorisé depuis les valeurs V3 et les droits.
+Pour l'unique cas démontrable aujourd'hui, le texte d'une affirmation doit
+être exactement une assertion locale, ses identifiants doivent correspondre
+à cette assertion, et le texte complet doit être exactement l'assemblage de
+ces affirmations, sans connecteur ni phrase non couverte. Identifiant inconnu,
+doublon, changement d'unité, de négation, de confiance ou omission d'une réserve
+matérielle échouent à ce contrôle.
+
+Ce sous-cas est nommé `literal_subset_verified`, avec
+`verification_scope=literal_assertions_only`. Ce n'est **pas** un générateur
+libre certifié ; le verdict reste HOLD. La sélection, l'omission et l'ordre de
+faits littéraux peuvent être acceptés, mais une reformulation libre même
+plausible, une relation causale ou une interprétation nouvelle sont refusées.
+Le texte non vérifié n'est ni renvoyé dans le résultat ni journalisé.
+
+Une réponse bien formée mais non démontrable produit
+`reason=semantic_verification_unavailable` et le repli autorisé. Les réponses
+invalides/tronquées, les erreurs et les timeouts ont aussi un repli ; une
+annulation du demandeur se propage. Il n'existe ni juge LLM présenté comme
+garantie, ni score heuristique baptisé « équivalence sémantique ».
+
+**Limites résiduelles :**
+
+- Le sous-cas littéral est trop restrictif pour démontrer l'objectif V1 :
+  des formulations correctes sont rejetées. C'est un blocage documenté,
+  pas une nouvelle solution par substitutions.
+- Des champs structurés identiques ne prouvent pas le sens d'un texte libre ;
+  les relations entre faits (cause, concession, évolution, conseil) restent
+  particulièrement difficiles à vérifier indépendamment.
+- Les assertions locales et leur pertinence sont du code de présentation
+  auditable, pas une preuve universelle de complétude ou de qualité humaine.
+- La confiance dans les données d'entrée suppose une sortie canonique V3
+  déjà limitée au propriétaire ; cet appel interne n'est pas une API acceptant
+  des preuves ou droits fournis par le navigateur.
+- Le nettoyage partagé de 700 caractères peut couper le JSON, dont le texte
+  est répété dans les affirmations. Une réponse rejetée pour cette raison
+  n'évalue pas la qualité du modèle.
+- Le verdict de régularité autonome manque dans V3. Ni le décompte, ni la
+  confiance, ni la disponibilité ne peuvent combler ce manque.
+
+### Connaissances scientifiques futures
+
+L'audit historique de la première livraison est conservé plus bas : aucun des
+190 conseils non sourcés n'est réintroduit. L'interface immuable
+`ValidatedKnowledgeProvenance` réserve une URI source, une empreinte et une
+révision relue. Le registre `VALIDATED_KNOWLEDGE` est vide ; il n'y a ni loader,
+ni recherche, ni entrée de texte scientifique activable par un appelant.
+Le nom du type et une provenance déclarée ne valent pas validation scientifique.
+L'admission future nécessitera une politique séparée de revue et de pertinence.
+
+### Comparaison qualitative des sept fixtures conservées
+
+Référence : **texte complet** du rendu déterministe Narrative V3 actuel, pas
+uniquement son champ `analysis`. Même sortie scientifique, droits historiques
+et prescription explicitement autorisés pour les deux textes. Les propositions
+libres du transport simulé ont été refusées ; la colonne hybride ci-dessous
+est donc le **repli réellement servi**, pas une synthèse LLM prétendument validée.
+Les phrases et valeurs sont issues exclusivement des fixtures synthétiques.
+
+| Séance | Narrative V3 actuel — texte complet | Hybride corrigé — repli déterministe |
+| --- | --- | --- |
+| Footing facile | Probablement un footing facile. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. | Type probable de ta séance : footing facile. Ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort. |
+| Sortie longue | Probablement une sortie longue. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. | Sortie longue probable : 100 min, contre tes 50 min habituelles. Ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort. |
+| Fractionné 4 × 4 min | Une séance fractionnée. Garmin a enregistré 4 phases d'effort et 3 phases de récupération. La comparaison disponible ne permet pas d'établir la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières. La conformité à la prescription reste indéterminée. | Garmin a enregistré 4 phases d'effort et 3 phases de récupération. |
+| Séance peu documentée | Type de séance incertain. Les données disponibles ne permettent pas d'identifier le type de séance de façon fiable. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits ni LT1 fiable, les moyennes de séance ne permettent pas de confirmer une zone physiologique. La conformité à la prescription reste indéterminée. | Le type de ta séance reste incertain ; aucune FC moyenne n'est disponible. |
+| Tapis roulant | Probablement un footing facile. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. | Type probable de ta séance : footing facile. Ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort. |
+| Historique comparable | Probablement un footing facile. Ta fréquence cardiaque moyenne (140 bpm) se situe sous LT1, selon tes seuils personnels. Ton allure médiane est plus rapide de 24 s/km à fréquence cardiaque comparable sur 6 observations sur 92 jours : un signe encourageant d'amélioration probable, pas une preuve de gain de forme. Sans splits, la FC moyenne ne décrit pas le temps passé dans chaque zone. La conformité à la prescription reste indéterminée. | Ton historique suggère une amélioration probable : 6 observations sur 92 jours, variation d'allure médiane de −24 s/km (récente moins ancienne) ; ce n'est pas une preuve de changement de forme. Ta FC moyenne est de 140 bpm, sous LT1 ; elle ne décrit pas tout l'effort. |
+| Physiologie insuffisante | Type de séance incertain. Les données disponibles ne permettent pas d'identifier le type de séance de façon fiable. Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent. Sans splits ni LT1 fiable, les moyennes de séance ne permettent pas de confirmer une zone physiologique. La conformité à la prescription reste indéterminée. | Ta FC moyenne est de 140 bpm ; le type de ta séance reste incertain. |
+
+Les réserves absentes du repli ne sont pas des assertions contraires : ne pas
+parler de progrès quand aucune tendance n'est disponible n'exige pas une phrase
+générique sur l'absence de progrès démontré. De même, ne pas qualifier la
+régularité des quatre efforts évite d'affirmer aussi bien « réguliers » que
+« irréguliers ». Les limites restent dans le paquet structuré pour empêcher le
+générateur de dépasser ces droits d'interprétation.
+
+| Critère | Observation sur ces textes servis | Limite / verdict partiel |
+| --- | --- | --- |
+| Exactitude | Valeurs et conclusions rattachées aux assertions locales ; pas de nouvelle mesure ou cause | Certification du sous-cas littéral uniquement, pas de validation sémantique libre |
+| Personnalisation | La sortie longue expose maintenant 100 min contre 50 min habituelles ; FC disponible utilisée sans inventer de seuil absent | Aucun objectif, verdict de régularité ou contexte tapis ajouté ; pas de personnalisation supplémentaire démontrée pour tapis |
+| Pertinence | La durée distinctive ou la tendance passe avant les métriques secondaires ; la moyenne de séance n'est plus utilisée pour commenter les répétitions | Règles de sélection de présentation, pas intelligence LLM démontrée |
+| Naturel | Tutoiement et formulations moins administratives ; pas de rappel de conformité indisponible dans chaque séance | Appréciation de lecture, sans panel aveugle ; des formulations de type « Type probable » restent peu conversationnelles |
+| Concision | Une ou deux assertions dans ces cas ; disparition des réserves répétitives sans rapport avec le fait retenu | Ne démontre pas à elle seule une meilleure analyse ni la complétude de la réponse |
+| Conseil | Aucun entraînement/allure/zone conseillé sans autorité ; la comparaison de durée peut constituer un enseignement descriptif | Aucun gain de conseil personnalisé démontré ; ne pas inventer de recommandation pour remplir une structure |
+| Fiabilité | Droits et dépendances indirectes fermés par défaut ; propositions libres refusées, erreurs et annulation testées | Fonction de synthèse libre toujours **HOLD** |
+
+**Ce qui est réellement amélioré :** choix déterministe de l'information
+distinctive (notamment la durée relative déjà calculée par V3), hiérarchie et
+concision. **Ce qui n'est pas démontré :** un gain de qualité d'analyse provenant
+du LLM, ni la capacité à servir une explication originale avec fiabilité.
+
+Exemple de faux négatif assumé : dans la fixture longue, le transport simulé
+propose « Avec 100 minutes face aux 50 habituelles, cette sortie se distingue
+probablement par sa longueur, sans indication de difficulté. » Cette phrase
+peut paraître cohérente avec les valeurs, mais le contrôle ne sait pas en
+démontrer automatiquement le sens complet : elle est rejetée, pas présentée
+comme validée. Les références déclarées ne changent pas ce résultat.
+
+### Tests, mesures et verdict de la correction
+
+Validation exécutée par l'agent d'implémentation, avec les outils existants
+restaurés dans `.git/c359-venv`, sans modification des dépendances du dépôt :
+
+| Exécution | Résultat |
+| --- | --- |
+| Dernière exécution des suites hybride, Narrative V3 et Workout Intelligence V3 | **447 réussis**, 7 avertissements |
+| Régression élargie V2, CoachLanguage, droits et synthèse de séance, avant les dernières régressions de présentation | **954 réussis, 3 échecs** préexistants |
+| Flake8 ciblé `E9,F63,F7,F82` et vérification des espaces du diff | Réussis |
+
+Commande ciblée, depuis `backend/` :
+
+```sh
+../.git/c359-venv/bin/python -m pytest \
+  tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py \
+  tests/test_workout_intelligence_v3.py -q
+```
+
+La régression élargie couvre `test_workout_analysis_v2.py`,
+`test_workout_analysis_v2_unified.py`, `test_workout_analysis_v2_facts.py`,
+`test_workout_analysis_v2_phases.py`, `test_coach_language.py`,
+`test_coach_workout_access_pr325.py` et
+`test_coach_session_synthesis_c351.py`. Les trois échecs concernent
+`test_comparable_history_stays_separate_and_metrics_are_unchanged[en/fr/es]` :
+attendu `meaning.consistent_pacing`, reçu
+`meaning.hr_without_intensity_with_pacing`. Leur reproduction sur la base
+intacte est établie dans la première livraison conservée ci-dessous ; elle
+n'a pas été refaite pour cette correction. Ces tests et moteurs restent
+inchangés ; aucune suppression pour obtenir du vert.
+
+Les tests couvrent les assertions exactes acceptées **et** les refus :
+invention/modification de chiffres ou unités, contradictions texte/preuve,
+FC moyenne confondue avec intensité des répétitions, FC maximale présente
+sans moyenne, LT1/LT2 absents, progression non démontrée, régularité non
+autorisée, cause de fatigue, prescription inventée, historique interdit et
+dépendances indirectes, texte caché, identifiants/doublons/JSON invalides,
+troncature fournisseur, erreur, timeout, annulation, FREE/TRIAL/PREMIUM et
+français/anglais/espagnol. Les sept fixtures initiales sont conservées.
+
+**Mesures fournisseur : non disponibles.** Les sept comparaisons ont
+`cost=None` et `provider_duration_sec=None`. Aucun coût nul ou temps LLM
+n'est inféré d'un mock. Le timeout de 8 secondes n'est pas une latence mesurée.
+
+**Verdict : HOLD.** Le prototype démontre une meilleure sélection déterministe
+de certains faits, pas une synthèse intelligente libre suffisamment fiable.
+Trois blocages techniques sont explicites : vérification sémantique libre
+indisponible, réponse structurée exposée à la troncature de l'adaptateur partagé,
+et absence d'autorité de régularité autonome dans l'entrée V3. À cela s'ajoute
+l'absence d'évaluation d'un vrai fournisseur. Ne pas activer sur la seule base
+de la fluidité des phrases simulées.
+
+Livraison sur la même PR #359, toujours draft. Flag désactivé par défaut ;
+aucune route/UI branchée, aucun moteur scientifique modifié, aucun accès
+Garmin/GCCLI, aucune écriture MongoDB, aucun test de séance réelle,
+déploiement ou merge. **Attendre l'audit C359 avant toute suite.**
+
+---
+
+## Instantané de la première livraison — non applicable à la correction
+
+<details>
+<summary>Audit historique conservé et résultats de la première livraison (avant correction)</summary>
+
 ## Périmètre et références
 
 - Base : `copilot/dev`, `720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`.
@@ -344,3 +617,5 @@ Points non démontrés restant à l'audit : naturel réellement produit par le L
 taux de rejet en conditions réelles, pertinence/utilité jugées en aveugle, coût
 et latence fournisseur, admission éventuelle de connaissances historiquement
 sourcées. Le prototype n'autorise pas à déclarer ces critères satisfaits.
+
+</details>
