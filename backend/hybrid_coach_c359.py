@@ -1,17 +1,13 @@
-"""C360 offline experiment: validated narrative planning and controlled rendering.
-
-V3 structured observations are the only runtime authority. The provider selects
-only authorized fact IDs and operations; the server validates and renders them.
-No route, knowledge loader, persistence or scientific calculation is added.
-"""
+"""C360 offline experiment: evidence-grounded LLM coaching with heuristic checks."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import json
 import math
 import os
+import re
+import json
 from time import perf_counter
 from typing import Literal, Optional
 
@@ -23,8 +19,8 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
 TIMEOUT_SECONDS = 8.0
-MAX_RESPONSE_CHARS = 700
-VERSION = "c360-validated-plan-1"
+MAX_RESPONSE_CHARS = 2400
+VERSION = "c360-evidence-grounded-llm-1"
 
 _REQUIRED_LIMITS = {
     "interval.count": ("no_repetition_durations", "regularity_verdict_unavailable"),
@@ -35,70 +31,6 @@ _REQUIRED_LIMITS = {
     "session.unknown": ("unknown_not_easy",),
     "prescription.review": ("no_new_prescription", "no_inferred_cause"),
 }
-
-_LIMIT_TEXT = {
-    "fr": {
-        "no_repetition_durations": "La durée de chaque répétition n'est pas disponible.",
-        "regularity_verdict_unavailable": "La régularité ne peut donc pas être jugée.",
-        "probable_not_certain": "Ce type reste probable, pas certain.",
-        "duration_not_effort": "La durée ne permet pas à elle seule d'estimer l'intensité.",
-        "low_confidence": "La classification reste incertaine.",
-        "relative_effort_not_physiological_intensity": "Cette classification est relative à ton historique, pas à une intensité physiologique.",
-        "average_not_whole_effort": "Cette moyenne ne décrit pas chaque moment de l'effort.",
-        "no_time_in_zones": "Elle ne renseigne pas le temps passé dans les zones.",
-        "no_physiological_cause": "Elle n'explique pas pourquoi ta FC moyenne était à ce niveau.",
-        "no_physiological_zone": "Cette moyenne seule ne permet pas d'établir une zone physiologique.",
-        "unknown_not_easy": "Un type inconnu ne signifie pas que la séance était facile.",
-        "missing_average_hr": "Aucune fréquence cardiaque moyenne n'est disponible.",
-        "threshold_interpretation_unavailable": "Aucune zone physiologique ne peut être établie.",
-        "not_proof_of_fitness": "Ce signal ne prouve pas un changement de forme.",
-        "no_cause": "La cause de cette tendance n'est pas établie.",
-        "terrain_weather_not_controlled": "Les effets du terrain et de la météo ne sont pas isolés.",
-        "no_new_prescription": "Cette lecture ne remplace ni ne modifie la prescription.",
-        "no_inferred_cause": "Aucune cause n'est déduite.",
-    },
-    "en": {
-        "no_repetition_durations": "Individual repetition durations are unavailable.",
-        "regularity_verdict_unavailable": "So repetition regularity cannot be judged.",
-        "probable_not_certain": "This type remains probable, not certain.",
-        "duration_not_effort": "Duration alone does not establish effort intensity.",
-        "low_confidence": "The classification remains uncertain.",
-        "relative_effort_not_physiological_intensity": "This classification is relative to your history, not physiological intensity.",
-        "average_not_whole_effort": "This average does not describe every part of the effort.",
-        "no_time_in_zones": "It does not show time spent in zones.",
-        "no_physiological_cause": "It does not explain why your average HR was at that level.",
-        "no_physiological_zone": "Average HR alone cannot establish a physiological zone.",
-        "unknown_not_easy": "An unknown type does not mean the session was easy.",
-        "missing_average_hr": "No average heart rate is available.",
-        "threshold_interpretation_unavailable": "No physiological zone can be established.",
-        "not_proof_of_fitness": "This signal does not prove a change in fitness.",
-        "no_cause": "The cause of this trend is not established.",
-        "terrain_weather_not_controlled": "Terrain and weather effects are not isolated.",
-        "no_new_prescription": "This reading does not replace or change the prescription.",
-        "no_inferred_cause": "No cause is inferred.",
-    },
-    "es": {
-        "no_repetition_durations": "No están disponibles las duraciones de cada repetición.",
-        "regularity_verdict_unavailable": "Por tanto, no se puede juzgar la regularidad.",
-        "probable_not_certain": "Este tipo sigue siendo probable, no seguro.",
-        "duration_not_effort": "La duración por sí sola no determina la intensidad del esfuerzo.",
-        "low_confidence": "La clasificación sigue siendo incierta.",
-        "relative_effort_not_physiological_intensity": "Esta clasificación es relativa a tu historial, no a la intensidad fisiológica.",
-        "average_not_whole_effort": "Esta media no describe cada momento del esfuerzo.",
-        "no_time_in_zones": "No indica el tiempo pasado en las zonas.",
-        "no_physiological_cause": "No explica por qué tu FC media estuvo en ese nivel.",
-        "no_physiological_zone": "La FC media por sí sola no permite establecer una zona fisiológica.",
-        "unknown_not_easy": "Un tipo desconocido no significa que la sesión fuera fácil.",
-        "missing_average_hr": "No hay una frecuencia cardíaca media disponible.",
-        "threshold_interpretation_unavailable": "No se puede establecer una zona fisiológica.",
-        "not_proof_of_fitness": "Esta señal no demuestra un cambio de forma.",
-        "no_cause": "No se establece la causa de esta tendencia.",
-        "terrain_weather_not_controlled": "No se aíslan los efectos del terreno y del tiempo.",
-        "no_new_prescription": "Esta lectura no sustituye ni modifica la prescripción.",
-        "no_inferred_cause": "No se deduce ninguna causa.",
-    },
-}
-
 
 @dataclass(frozen=True)
 class HybridPermissions:
@@ -138,7 +70,6 @@ class AdmissibleFact:
             "units": dict(self.units), "allowed_conclusion": self.allowed_conclusion,
             "confidence": self.confidence,
             "usage_conditions": list(self.usage_conditions),
-            "important_limits": list(self.important_limits), "priority": self.priority,
             "required_limits": list(_required_limit_ids(self)),
         }
 
@@ -158,16 +89,16 @@ class HybridResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str = VERSION
-    mode: Literal["disabled", "denied", "deterministic_fallback", "planned_synthesis"]
+    mode: Literal["disabled", "denied", "deterministic_fallback", "generated_narrative"]
     verdict: Literal["HOLD"] = "HOLD"
     reason: str
-    verification_scope: Literal["none", "structured_plan"] = "none"
+    verification_scope: Literal["none", "heuristic_risk_checks"] = "none"
     blockers: list[str] = Field(default_factory=lambda: [
-        "free_form_scientific_prose_not_accepted", "shared_adapter_700_char_truncation",
+        "heuristic_checks_are_not_semantic_proof",
     ])
     text: str = ""
     claims: list[HybridClaim] = Field(default_factory=list)
-    narrative_plan: Optional[dict] = None
+    checks: list[str] = Field(default_factory=list)
     provider_attempted: bool = False
     transport_kind: Literal["none", "runindex", "injected"] = "none"
     elapsed_ms: Optional[float] = None
@@ -472,140 +403,298 @@ def _render(claims: list[HybridClaim]) -> str:
     return " ".join(c.text for c in claims)
 
 
-def validate_narrative_plan(
-    payload: object, intelligence: WorkoutIntelligenceV3, *, access: UserAccess,
-    permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
-) -> Optional[dict]:
-    """Validate an ID-only plan against freshly rebuilt facts and permissions."""
-    facts = build_admissible_facts(
-        intelligence, access=access, permissions=permissions, language=language,
-    )
-    return _validate_narrative_plan_payload(payload, facts)
+_NUMBER_RE = re.compile(r"(?<![\w.])[-+]?\d+(?:[.,]\d+)?")
+_AVERAGE_HR_CLAIM = re.compile(
+    r"(?:fc moyenne|fréquence cardiaque moyenne|average hr|mean heart rate|"
+    r"fc media|frecuencia cardíaca media)[^.!?]{0,35}?"
+    r"([-+]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", re.I,
+)
+_NUMBER_WITH_UNIT = re.compile(
+    r"(?<![\w.])([-+]?\d+(?:[.,]\d+)?)\s*"
+    r"(bpm|lpm|min(?:ute)?s?|days?|días|jours?|s/km|sec(?:onds?)?/km)\b", re.I,
+)
+_SENSITIVE_PATTERNS = {
+    "physiological_threshold": re.compile(
+        r"\b(?:lt\s*[12]|thresholds?|threshold zone|zone\s*[123]|zona\s*[123]|"
+        r"seuils?|zona fisiol[oó]gica|zones? physiologiques?)\b", re.I,
+    ),
+    "regularity": re.compile(
+        r"\b(?:regularity|regular|régularité|régulières?|regularidad|regulares?)\b", re.I,
+    ),
+    "trend": re.compile(
+        r"\b(?:progress(?:ion|ed|ing)?|improv(?:e|ement|ing)|declin(?:e|ed)|"
+        r"progrès|progression|amélior(?:ation|e)|baisse|progreso|mejora|descenso)\b", re.I,
+    ),
+    "causality": re.compile(
+        r"\b(?:because of|caused by|caused the|due to|result(?:s|ed)? from|"
+        r"explained by|à cause de|dû à|due à|provient de|entra[iî]ne|"
+        r"s'explique par|expliqué par|causé par|debido a|causado por|"
+        r"provocado por|se debe a|es la causa)\b", re.I,
+    ),
+    "prescription": re.compile(
+        r"\b(?:you should|you need to|should run|try running|i recommend|"
+        r"tu devrais|tu dois|je te conseille|il faut|fais demain|cours demain|"
+        r"aumenta|te recomiendo|deberías|debes|haz mañana|corre mañana)\b", re.I,
+    ),
+}
+_POSITIVE_REGULARITY = re.compile(
+    r"\b(?:regular intervals|regular repetitions|regularly paced|"
+    r"regularity (?:is|looks) (?:good|high|consistent)|"
+    r"régulières|régulièrement|régularité (?:est|semble) (?:bonne|excellente|constante)|"
+    r"repeticiones regulares|intervalos regulares|regularidad (?:es|parece) (?:buena|constante))\b",
+    re.I,
+)
+_THRESHOLD_POSITIONS = {
+    "below_LT1": re.compile(r"\b(?:below LT1|sous LT1|por debajo de LT1)\b", re.I),
+    "between_LT1_LT2": re.compile(
+        r"\b(?:between LT1 and LT2|entre LT1 et LT2|entre LT1 y LT2)\b", re.I,
+    ),
+    "above_LT2": re.compile(r"\b(?:above LT2|au-dessus de LT2|por encima de LT2)\b", re.I),
+}
+_NEGATED = {
+    "fr": ("ne peut pas", "ne permet pas", "n'est pas", "pas une preuve",
+           "ne prouve pas", "impossible d'établir", "ne suffit pas"),
+    "en": ("cannot", "can't", "does not", "doesn't", "not a proof", "not prove",
+           "cannot establish", "does not establish"),
+    "es": ("no se puede", "no permite", "no es", "no demuestra", "no basta",
+           "no se establece", "no permite establecer", "no está disponible",
+           "no disponible"),
+}
+_REQUIRED_PHRASES = {
+    "relative_effort_not_physiological_intensity": {
+        "fr": ("historique", "pas à une intensité physiologique"),
+        "en": ("history", "not physiological"),
+        "es": ("historial", "no a la intensidad fisiológica"),
+    },
+    "probable_not_certain": {
+        "fr": ("probable",), "en": ("probably", "probable"), "es": ("probable",),
+    },
+    "low_confidence": {
+        "fr": ("incertain", "incertaine"), "en": ("uncertain",), "es": ("inciert",),
+    },
+    "average_not_whole_effort": {
+        "fr": ("ne décrit pas tout", "ne décrit pas chaque moment", "pas toute la séance", "moyenne seule"),
+        "en": ("not describe the entire", "not represent the whole", "not represent every part", "average alone"),
+        "es": ("no describe todo", "no describe cada momento", "no representa todo", "media por sí sola"),
+    },
+    "no_time_in_zones": {
+        "fr": ("temps passé dans les zones", "temps dans les zones", "ne renseigne pas les zones"),
+        "en": ("time spent in zones", "does not show time", "not time in zones"),
+        "es": ("tiempo pasado en las zonas", "no indica el tiempo", "tiempo en las zonas"),
+    },
+    "no_physiological_zone": {
+        "fr": ("ne suffit pas à établir une zone", "ne permet pas d'établir une zone"),
+        "en": ("cannot establish a physiological zone", "cannot establish a zone"),
+        "es": ("no permite establecer una zona", "no basta para establecer una zona"),
+    },
+    "regularity_verdict_unavailable": {
+        "fr": ("ne peut pas être jugée", "impossible à juger", "pas disponible"),
+        "en": ("cannot be judged", "cannot assess", "unavailable"),
+        "es": ("no se puede juzgar", "no puede evaluarse", "no disponible"),
+    },
+    "not_proof_of_fitness": {
+        "fr": ("pas une preuve", "ne prouve pas", "ne démontre pas"),
+        "en": ("not proof", "does not prove", "doesn't prove"),
+        "es": ("no es una prueba", "no demuestra"),
+    },
+    "no_new_prescription": {
+        "fr": ("ne remplace", "ne modifie pas"),
+        "en": ("does not replace", "doesn't replace", "does not change"),
+        "es": ("no sustituye", "no modifica"),
+    },
+    "duration_not_effort": {
+        "fr": ("durée ne suffit pas", "durée seule ne permet pas"),
+        "en": ("duration alone does not", "duration does not establish"),
+        "es": ("duración por sí sola no", "duración no determina"),
+    },
+    "missing_average_hr": {
+        "fr": ("aucune fc moyenne", "pas de fc moyenne"),
+        "en": ("no average hr", "no average heart rate"),
+        "es": ("no hay fc media", "no hay frecuencia cardíaca media"),
+    },
+}
 
 
-def _validate_narrative_plan_payload(payload: object, facts: tuple[AdmissibleFact, ...]) -> Optional[dict]:
-    index = {fact.id: fact for fact in facts}
-    if type(payload) is not dict or set(payload) != {
-        "main_fact_id", "supporting_fact_ids", "conclusion_ids",
-        "required_limit_ids", "detail_level",
-    }:
-        return None
-    main_id = payload["main_fact_id"]
-    supporting = payload["supporting_fact_ids"]
-    conclusions = payload["conclusion_ids"]
-    limits = payload["required_limit_ids"]
-    detail = payload["detail_level"]
-    if (type(main_id) is not str or type(supporting) is not list
-            or any(type(item) is not str for item in supporting)
-            or type(conclusions) is not dict or type(limits) is not dict
-            or type(detail) is not str or detail not in {"concise", "balanced", "detailed"}):
-        return None
-    selected = [main_id, *supporting]
-    maximum = {"concise": 1, "balanced": 2, "detailed": 3}[detail]
-    if (not 1 <= len(selected) <= maximum or len(set(selected)) != len(selected)
-            or any(item not in index for item in selected)
-            or set(conclusions) != set(selected) or set(limits) != set(selected)):
-        return None
-    if "session.unknown" in selected and "intensity.hr" in selected:
-        return None
-    for fact_id in selected:
-        fact = index[fact_id]
-        if (type(conclusions[fact_id]) is not str
-                or conclusions[fact_id] != fact.allowed_conclusion
-                or type(limits[fact_id]) is not list
-                or any(type(item) is not str for item in limits[fact_id])
-                or len(set(limits[fact_id])) != len(limits[fact_id])
-                or not set(_required_limit_ids(fact)).issubset(set(limits[fact_id]))
-                or not set(limits[fact_id]).issubset(set(fact.important_limits))):
-            return None
+def _authorized_numbers(facts: tuple[AdmissibleFact, ...]) -> set[float]:
     return {
-        "main_fact_id": main_id, "supporting_fact_ids": list(supporting),
-        "conclusion_ids": dict(conclusions),
-        "required_limit_ids": {key: list(value) for key, value in limits.items()},
-        "detail_level": detail,
+        float(value)
+        for fact in facts
+        for key, value in fact.values
+        if key != "average_hr_available"
+        and type(value) in (int, float) and math.isfinite(value)
     }
 
 
-_LIMITS_ALREADY_IN_ASSERTIONS = {
-    "session.long": {"probable_not_certain"},
-    "session.kind": {"probable_not_certain", "low_confidence",
-                     "relative_effort_not_physiological_intensity"},
-    "intensity.position": {"average_not_whole_effort"},
-    "intensity.hr": {"no_physiological_zone", "average_not_whole_effort"},
-    "session.unknown": {"missing_average_hr"},
-    "trend.probable_improvement": {"not_proof_of_fitness"},
-    "trend.stable": {"not_proof_of_fitness"},
-    "trend.possible_decline": {"not_proof_of_fitness"},
-    "prescription.review": {"no_new_prescription"},
-}
-
-_COMBINED_LIMIT_TEXT = {
-    ("no_repetition_durations", "regularity_verdict_unavailable"): {
-        "fr": "La durée de chaque répétition n'est pas disponible, donc sa régularité ne peut pas être jugée.",
-        "en": "Individual repetition durations are unavailable, so their regularity cannot be judged.",
-        "es": "No están disponibles las duraciones de cada repetición, así que no se puede juzgar su regularidad.",
-    },
-    ("no_time_in_zones", "no_physiological_cause"): {
-        "fr": "Elle ne renseigne ni le temps passé dans les zones ni la raison de cette moyenne.",
-        "en": "It shows neither time spent in zones nor why the average was at that level.",
-        "es": "No indica ni el tiempo en las zonas ni por qué la media estuvo en ese nivel.",
-    },
-    ("no_cause", "terrain_weather_not_controlled"): {
-        "fr": "La cause n'est pas établie et les effets du terrain ou de la météo ne sont pas isolés.",
-        "en": "The cause is not established, and terrain or weather effects are not isolated.",
-        "es": "No se establece la causa ni se aíslan los efectos del terreno o del tiempo.",
-    },
-}
+def _has_unqualified(pattern: re.Pattern, text: str, language: str) -> bool:
+    match = pattern.search(text)
+    if not match:
+        return False
+    prefix = text[max(0, match.start() - 90):match.start()].lower()
+    return not any(phrase in prefix for phrase in _NEGATED[language])
 
 
-def render_validated_plan(
-    plan: dict, facts: tuple[AdmissibleFact, ...], *, language: str = "fr",
-) -> list[HybridClaim]:
-    """Render canonical assertions and allowlisted clauses; never accept provider prose."""
+def validate_generated_narrative(
+    text: object, facts: tuple[AdmissibleFact, ...], *, language: str = "fr",
+) -> tuple[bool, str, list[str]]:
+    """Apply conservative risk heuristics, not a semantic proof of the prose."""
+    if not isinstance(text, str):
+        return False, "response_not_text", []
+    candidate = text.strip()
+    if not candidate or len(candidate) > MAX_RESPONSE_CHARS:
+        return False, "response_length", []
+    words = re.findall(r"\b[\wÀ-ÿ'-]+\b", candidate)
+    if len(words) < 8 or len(words) > 150:
+        return False, "word_count", []
+    if candidate.startswith(("#", "-", "*")) or "```" in candidate:
+        return False, "response_format", []
     lang = _language(language)
-    index = {fact.id: fact for fact in facts}
-    ids = [plan["main_fact_id"], *plan["supporting_fact_ids"]]
-    rendered = []
-    for position, fact_id in enumerate(ids):
-        fact = index[fact_id]
-        text = fact.assertion
-        remaining = set(plan["required_limit_ids"][fact_id])
-        remaining.difference_update(_LIMITS_ALREADY_IN_ASSERTIONS.get(fact_id, set()))
-        clauses = []
-        for limit_group, translations in _COMBINED_LIMIT_TEXT.items():
-            if set(limit_group).issubset(remaining):
-                clauses.append(translations[lang])
-                remaining.difference_update(limit_group)
-        clauses.extend(_LIMIT_TEXT[lang][limit] for limit in sorted(remaining))
-        if clauses:
-            text = text.rstrip() + " " + " ".join(clauses)
-        if position:
-            prefix = {
-                "fr": ("En complément, ", "Autre repère utile : "),
-                "en": ("Alongside that, ", "Another useful detail: "),
-                "es": ("Además, ", "Como dato adicional: "),
-            }[lang][position - 1]
-            text = prefix + text[0].lower() + text[1:]
-        rendered.append(HybridClaim(
-            id=fact.id, text=text, evidence_ids=[fact.id],
-            conclusion_ids=[fact.allowed_conclusion], evidence_refs=list(fact.source_paths),
-        ))
-    return rendered
+    authorized = _authorized_numbers(facts)
+    for number in _NUMBER_RE.findall(candidate):
+        if float(number.replace(",", ".")) not in authorized:
+            return False, "unsupported_numeric_value", []
+    for match in _NUMBER_WITH_UNIT.finditer(candidate):
+        number, unit = match.groups()
+        unit = unit.lower()
+        if unit in {"lpm"}:
+            unit = "bpm"
+        elif unit in {"minute", "minutes"}:
+            unit = "min"
+        elif unit in {"day", "days", "días", "jours"}:
+            unit = "days"
+        elif unit in {"sec/km", "second/km", "seconds/km"}:
+            unit = "s/km"
+        allowed_for_unit = {
+            float(value)
+            for fact in facts
+            for key, value in fact.values
+            if dict(fact.units).get(key) == unit
+            and type(value) in (int, float) and math.isfinite(value)
+        }
+        if float(number.replace(",", ".")) not in allowed_for_unit:
+            return False, "unsupported_numeric_unit_or_value", []
+    average_hr = next(
+        (value for fact in facts for key, value in fact.values if key == "average_hr"),
+        None,
+    )
+    if average_hr is not None:
+        for match in _AVERAGE_HR_CLAIM.finditer(candidate):
+            if float(match.group(1).replace(",", ".")) != float(average_hr):
+                return False, "contradictory_average_hr", []
+    position_fact = next((fact for fact in facts if fact.id == "intensity.position"), None)
+    if position_fact is not None:
+        actual_position = dict(position_fact.values).get("position")
+        mentioned_positions = {
+            position for position, pattern in _THRESHOLD_POSITIONS.items()
+            if pattern.search(candidate)
+        }
+        if mentioned_positions and mentioned_positions != {actual_position}:
+            return False, "contradictory_threshold_position", []
 
+    lowered = candidate.lower()
+    has_intensity_position = any(f.id == "intensity.position" for f in facts)
+    has_intensity_hr = any(f.id == "intensity.hr" for f in facts)
+    if not has_intensity_position and _has_unqualified(
+        _SENSITIVE_PATTERNS["physiological_threshold"], lowered, lang,
+    ):
+        return False, "unauthorized_physiological_conclusion", []
+    if any(f.id == "interval.count" for f in facts) and _POSITIVE_REGULARITY.search(lowered):
+        return False, "unsupported_regularity_claim", []
+    if not any(f.id.startswith("trend.") for f in facts) and _has_unqualified(
+        _SENSITIVE_PATTERNS["trend"], lowered, lang,
+    ):
+        return False, "unauthorized_trend_claim", []
+    for category in ("causality", "prescription"):
+        if _has_unqualified(_SENSITIVE_PATTERNS[category], lowered, lang):
+            return False, f"unauthorized_{category}", []
 
-def _unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON key")
-        result[key] = value
-    return result
+    required = set().union(*(_required_limit_ids(fact) for fact in facts)) if facts else set()
+    checks = ["format", "length", "authorized_numbers", "sensitive_claims"]
+    relative = any(
+        fact.id == "session.kind"
+        and "relative_effort_not_physiological_intensity" in fact.important_limits
+        for fact in facts
+    )
+    classification_claim = _has_unqualified(re.compile(
+        r"\b(?:easy run|steady run|tempo run|footing facile|sortie soutenue|"
+        r"séance tempo|carrera fácil|carrera sostenida|sesión tempo)\b", re.I,
+    ), lowered, lang)
+    if relative and classification_claim:
+        if not all(phrase in lowered for phrase in _REQUIRED_PHRASES[
+            "relative_effort_not_physiological_intensity"
+        ][lang]):
+            return False, "missing_history_relative_qualification", checks
+        checks.append("history_relative_qualification")
+    if classification_claim and "probable_not_certain" in required:
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["probable_not_certain"][lang]):
+            return False, "missing_probability_qualification", checks
+        checks.append("probability_qualification")
+    if classification_claim and any(
+        f.id == "session.kind" and "low_confidence" in f.important_limits for f in facts
+    ):
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["low_confidence"][lang]):
+            return False, "missing_low_confidence_qualification", checks
+        checks.append("low_confidence_qualification")
+    long_claim = any(f.id == "session.long" for f in facts) and re.search(
+        r"\b(?:longue|long run|tirada larga|longer run)\b", lowered, re.I,
+    )
+    if long_claim:
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["probable_not_certain"][lang]):
+            return False, "missing_probability_qualification", checks
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["duration_not_effort"][lang]):
+            return False, "missing_duration_limit", checks
+        checks.append("duration_limits")
+    intensity_claim = has_intensity_position and bool(re.search(
+        r"\b(?:lt\s*[12]|threshold|seuil|umbral|zone|zona|sous|below|por debajo)\b",
+        lowered, re.I,
+    )) or has_intensity_hr and bool(re.search(
+        r"\b(?:fc moyenne|fréquence cardiaque|average hr|mean heart rate|fc media|"
+        r"frecuencia cardíaca media)\b", lowered, re.I,
+    ))
+    if intensity_claim:
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["average_not_whole_effort"][lang]):
+            return False, "missing_average_effort_limit", checks
+        if has_intensity_position and "no_time_in_zones" in required and not any(
+            phrase in lowered for phrase in _REQUIRED_PHRASES["no_time_in_zones"][lang]
+        ):
+            return False, "missing_time_in_zones_limit", checks
+        if has_intensity_hr and "no_physiological_zone" in required and not any(
+            phrase in lowered for phrase in _REQUIRED_PHRASES["no_physiological_zone"][lang]
+        ):
+            return False, "missing_no_zone_limit", checks
+        checks.append("average_effort_limits")
+    if any(f.id == "interval.count" for f in facts) and re.search(
+        r"\b(?:phase|phases|interval|intervalles|repeticiones|repetitions)\b", lowered, re.I,
+    ):
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["regularity_verdict_unavailable"][lang]):
+            return False, "missing_regularity_limit", checks
+        checks.append("regularity_limit")
+    if any(f.id.startswith("trend.") for f in facts) and _has_unqualified(
+        _SENSITIVE_PATTERNS["trend"], lowered, lang,
+    ):
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["not_proof_of_fitness"][lang]):
+            return False, "missing_trend_limit", checks
+        checks.append("trend_limit")
+    if any(f.id == "prescription.review" for f in facts) and re.search(
+        r"\b(?:prescription|prescription|prescripción|entraînement prévu|planned workout)\b",
+        lowered, re.I,
+    ):
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["no_new_prescription"][lang]):
+            return False, "missing_prescription_limit", checks
+        checks.append("prescription_limit")
+    if any(f.id == "session.unknown" and "missing_average_hr" in f.important_limits for f in facts):
+        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["missing_average_hr"][lang]):
+            return False, "missing_average_hr_limit", checks
+        checks.append("missing_average_hr_limit")
+    return True, "heuristic_checks_passed", checks
 
 
 async def _transport(system, prompt, user, context_type):
     from llm_coach import _call_gpt
 
-    return await _call_gpt(system, prompt, user, context_type, sanitize_errors=True)
+    return await _call_gpt(
+        system, prompt, user, context_type, sanitize_errors=True,
+        response_max_chars=MAX_RESPONSE_CHARS,
+    )
 
 
 async def generate_hybrid_coach(
@@ -613,12 +702,7 @@ async def generate_hybrid_coach(
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
     transport: Optional[Transport] = None,
 ) -> HybridResult:
-    """Request an ID-only narrative plan, validate it, then render locally.
-
-    The unchanged shared adapter truncates at 700 characters. Raw responses
-    exceeding that boundary or already truncated JSON fail closed. No provider
-    prose is accepted or interpreted.
-    """
+    """Generate original prose from admitted facts; reject risky text to fallback."""
     start = perf_counter()
     if not _authorized(access):
         return HybridResult(mode="denied", reason="workout_analysis_not_authorized")
@@ -643,17 +727,18 @@ async def generate_hybrid_coach(
     )
     prompt = json.dumps(context, ensure_ascii=False, allow_nan=False)
     system = (
-        "Create a narrative plan, not prose. Select the most characteristic authorized fact as main, "
-        "then zero to two useful supporting facts in the order to explain them. Choose concise for one "
-        "fact, balanced for up to two, or detailed for up to three. For each selected fact, use only "
-        "its exact allowed conclusion ID and preserve every required limit ID. Do not repeat facts. "
-        "Never infer physiology, causes, recovery, fitness, regularity, zones, or prescriptions. "
-        "Return only JSON with exactly these keys: "
-        '{"main_fact_id":"ID","supporting_fact_ids":["ID"],'
-        '"conclusion_ids":{"ID":"allowed conclusion ID"},'
-        '"required_limit_ids":{"ID":["required limit ID"]},'
-        '"detail_level":"concise|balanced|detailed"}. '
-        "No natural-language text is accepted; the server renders the validated plan."
+        "You are a running coach responding naturally to the workout described only by the "
+        "authorized evidence pack in the user message. Write an original, useful analysis in the "
+        "requested language; in French, address the runner as tu. React to a concrete session "
+        "observation, explain why it matters simply, and use a positive but unforced tone. "
+        "When evidence is rich, aim for 60–110 words; use fewer when it is limited. Use one natural "
+        "paragraph unless another structure genuinely helps. Select and prioritize compatible facts "
+        "yourself, and preserve the essential qualifications attached to them. Only V3-authorized "
+        "facts and conclusions are scientific authority. Do not invent or recalculate values; infer "
+        "no LT1/LT2 from average HR, repetition regularity, progression from one workout, fatigue "
+        "causes, or a new prescription. A history-relative classification is not physiological "
+        "intensity. Never claim a conclusion excluded by permissions. No RAG or outside knowledge. "
+        "Return only the analysis prose, without headings, IDs, JSON, or a generic sign-off."
     )
     result.provider_attempted = True
     result.transport_kind = "injected" if transport is not None else "runindex"
@@ -666,23 +751,25 @@ async def generate_hybrid_coach(
         if _finite(duration) and duration >= 0:
             result.provider_duration_sec = duration
         if success is True and isinstance(text, str):
-            if len(text) > MAX_RESPONSE_CHARS:
+            if ((isinstance(metadata, dict) and metadata.get("response_truncated") is True)
+                    or len(text) > MAX_RESPONSE_CHARS):
                 result.reason = "transport_response_limit"
             else:
-                payload = json.loads(text, object_pairs_hook=_unique_object)
                 render_facts = build_admissible_facts(
                     intelligence, access=access, permissions=permissions, language=language,
                 )
-                plan = _validate_narrative_plan_payload(payload, render_facts)
-                if plan is not None:
-                    result.narrative_plan = plan
-                    result.claims = render_validated_plan(plan, render_facts, language=language)
-                    result.text = _render(result.claims)
-                    result.mode = "planned_synthesis"
-                    result.reason = "validated_narrative_plan"
-                    result.verification_scope = "structured_plan"
+                valid, reason, checks = validate_generated_narrative(
+                    text, render_facts, language=language,
+                )
+                if valid:
+                    result.text = text.strip()
+                    result.claims = []
+                    result.mode = "generated_narrative"
+                    result.reason = reason
+                    result.verification_scope = "heuristic_risk_checks"
+                    result.checks = checks
                 else:
-                    result.reason = "invalid_narrative_plan"
+                    result.reason = reason
     except asyncio.TimeoutError:
         result.reason = "timeout"
     except Exception:

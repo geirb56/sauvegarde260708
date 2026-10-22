@@ -212,6 +212,7 @@ async def _call_gpt(
     user_id: str,
     context_type: str,
     sanitize_errors: bool = False,
+    response_max_chars: int = 700,
 ) -> Tuple[Optional[str], bool, Dict]:
     """Call the configured LLM model via Emergent LLM Key."""
 
@@ -247,7 +248,9 @@ async def _call_gpt(
         elapsed = time.time() - start_time
         metadata["duration_sec"] = round(elapsed, 2)
         metadata["success"] = True
-        response_text = _clean_response(str(response))
+        response_text = str(response).strip()
+        metadata["response_truncated"] = len(response_text) > response_max_chars
+        response_text = _clean_response(response_text, max_chars=response_max_chars)
 
         if response_text:
             logger.info(f"[LLM] ✅ {context_type} enriched in {elapsed:.2f}s")
@@ -285,7 +288,7 @@ def _format_history(history: List[Dict]) -> str:
     return "\n".join(lines)
 
 
-def _clean_response(response: str) -> str:
+def _clean_response(response: str, *, max_chars: int = 700) -> str:
     """Cleans GPT response"""
     if not response:
         return ""
@@ -294,8 +297,8 @@ def _clean_response(response: str) -> str:
     if response.startswith('"') and response.endswith('"'):
         response = response[1:-1]
 
-    if len(response) > 700:
-        response = response[:700]
+    if len(response) > max_chars:
+        response = response[:max_chars]
         last_period = max(response.rfind("."), response.rfind("!"), response.rfind("?"))
         if last_period > 400:
             response = response[:last_period + 1]
