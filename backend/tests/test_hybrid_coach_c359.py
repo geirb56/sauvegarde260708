@@ -163,6 +163,8 @@ def test_seven_comparative_fixtures(name, monkeypatch, record_property):
         assert v3.intensity_assessment.lt1 is None and v3.intensity_assessment.lt2 is None
         assert "sous LT1" not in result.text
         assert "incertain" in result.text and "ne permettent pas de confirmer" in result.text
+        assert sum(c.id in {"session.kind", "session.unknown", "confidence.limit"}
+                   for c in result.claims) == 1
     if name == "treadmill":
         assert v3.historical_comparison.reference_count == 0
     if name == "comparable_history":
@@ -188,6 +190,7 @@ def test_flag_and_entitlements_before_provider_or_context(tier, flag, monkeypatc
         assert result.claims == [] and result.text == ""
         assert not result.provider_attempted
         assert result.cost is None
+        assert result.elapsed_ms is None
 
 
 @pytest.mark.parametrize("name", ["long", "comparable_history", "no_physiology"])
@@ -231,6 +234,28 @@ def test_prescription_conformity_cannot_launder_unauthorized_history():
     v3.prescription_assessment = WIV3PrescriptionAssessment(status="deviation")
     context = _context(v3, permissions=hybrid.HybridPermissions(prescription=True))
     assert all(not c["id"].startswith("prescription.") for c in context["claims"])
+
+
+def test_low_confidence_is_explicit_and_cannot_be_paraphrased_away():
+    v3 = synthetic_case()
+    v3.session_classification.type = "steady_run_probable"
+    v3.session_classification.confidence = "low"
+    context = _context(v3)
+    caveats = [c for c in context["claims"] if c["id"] == "confidence.limit"]
+    assert len(caveats) == 1 and "incertain" in caveats[0]["text"]
+    index = context["claims"].index(caveats[0])
+    assert hybrid.validate_hybrid_lead({"lead": [index, "Le type de séance est certain."]}, context) is None
+
+
+@pytest.mark.parametrize("value", ["true", 1, None])
+def test_context_permissions_require_explicit_booleans(value):
+    context = _context(
+        synthetic_case("long"),
+        permissions=hybrid.HybridPermissions(history=value, prescription=value),
+    )
+    assert all(c["id"] not in {"session.kind", "intensity.relative"}
+               and not c["id"].startswith(("trend.", "prescription."))
+               for c in context["claims"])
 
 
 @pytest.mark.parametrize("status", ["consistent", "deviation", "indeterminate", "unavailable"])

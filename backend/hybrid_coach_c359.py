@@ -107,7 +107,7 @@ class HybridResult(BaseModel):
     claims: list[HybridClaim] = Field(default_factory=list)
     provider_attempted: bool = False
     transport_kind: Literal["none", "runindex", "injected"] = "none"
-    elapsed_ms: float = 0
+    elapsed_ms: Optional[float] = None
     provider_duration_sec: Optional[float] = None
     cost: Optional[float] = None
     """No tariff or token usage is provided by the existing transport."""
@@ -142,6 +142,10 @@ def build_hybrid_context(
             continue
         if dependency == "classification" and history_classification and not history:
             continue
+        # The unknown-type explanation already carries uncertainty. Repeating
+        # it as both a title and an extra caveat makes sparse sessions verbose.
+        if claim["id"] == "session.kind" and classification.type == "unknown":
+            continue
         if dependency == "prescription" and (
             not prescription or (history_classification and not history)
         ):
@@ -167,7 +171,7 @@ def build_hybrid_context(
                 id="intensity.hr", section="analysis", text=text,
                 evidence_refs=["intensity_assessment.hr_used_bpm"],
             ))
-    if intelligence.session_classification.confidence in {"low", "none"} and any(
+    if classification.confidence in {"low", "none"} and any(
         c.id == "session.kind" for c in claims
     ):
         claims.append(HybridClaim(
@@ -300,7 +304,7 @@ async def generate_hybrid_coach(
         duration = metadata.get("duration_sec") if isinstance(metadata, dict) else None
         if type(duration) in (float, int) and math.isfinite(duration) and duration >= 0:
             result.provider_duration_sec = duration
-        if success and isinstance(text, str) and len(text) <= MAX_RESPONSE_CHARS:
+        if success is True and isinstance(text, str) and len(text) <= MAX_RESPONSE_CHARS:
             payload = json.loads(text, object_pairs_hook=_unique_object)
             validated = validate_hybrid_lead(payload, context)
             if validated is not None:
