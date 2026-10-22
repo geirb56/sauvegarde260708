@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from coach_language import CoachLanguageV1
     from workout_analysis_v2 import WorkoutAnalysisPhaseAnalysis
 
-GENERATION_VERSION = "c355-controlled-7"
+GENERATION_VERSION = "c357-controlled-1"
 LLM_TIMEOUT_SECONDS = 8.0
 CACHE_MAX_ENTRIES = 128
 MAX_RESPONSE_CHARS = 24000
@@ -57,6 +57,17 @@ def _finite(value: Any) -> bool:
 
 def _count(value: Any) -> bool:
     return _finite(value) and value >= 0 and value == int(value)
+
+
+def format_narrative_number(value: Any, language: str = "en", *, signed: bool = False) -> Optional[str]:
+    """Format display-only metrics; absent/non-finite values never become zero."""
+    if not _finite(value):
+        return None
+    magnitude = f"{abs(value):.1f}".removesuffix(".0")
+    sign = ("−" if value < 0 else "+") if magnitude != "0" and (value < 0 or signed) else ""
+    if _language(language) in {"fr", "es"}:
+        magnitude = magnitude.replace(".", ",")
+    return sign + magnitude
 
 
 def _approved_repetition_judgment(coach_language, effort_count):
@@ -112,6 +123,9 @@ def build_narrative_context(
     """
     lang = _language(language)
     claims: list[dict] = []
+
+    def number(value, *, signed=False):
+        return format_narrative_number(value, lang, signed=signed)
 
     def add(claim_id, section, en, fr, es, refs=(), variants=None):
         texts = {"en": en, "fr": fr, "es": es}
@@ -189,7 +203,7 @@ def build_narrative_context(
             and regularity.pace_dispersion_sec_per_km >= 0
         )
         if usable_spread and judgment is None:
-            spread = f"{regularity.pace_dispersion_sec_per_km:g}"
+            spread = number(regularity.pace_dispersion_sec_per_km)
             sampled, total = regularity.pace_sample_count, regularity.effort_count
             add("interval.spread", "analysis",
                 f"The recorded pace dispersion is {spread} s/km across {sampled} of {total} effort phases.",
@@ -226,7 +240,7 @@ def build_narrative_context(
                       "phase_analysis.effort_regularity.comparability_basis"))
         if judgment is not None:
             n = judgment["count"]
-            gap = f"{judgment['deviation']:.1f}".removesuffix(".0")
+            gap = number(judgment["deviation"])
             labels = {
                 "homogeneous": ("Homogeneous paces", "Allures homogènes", "Ritmos homogéneos"),
                 "noticeable": ("Noticeable pace variations", "Variations d'allure perceptibles", "Variaciones de ritmo perceptibles"),
@@ -236,7 +250,7 @@ def build_narrative_context(
             path = f"coach_language.conclusions.{judgment['index']}"
             add("interval.judgment", "interpretation",
                 f"{en} across your {n} comparable repetitions: an average gap of {gap} s/km from the central pace.",
-                f"{fr} sur vos {n} répétitions comparables : un écart moyen de {gap} s/km par rapport à l'allure centrale.",
+                f"{fr} sur tes {n} répétitions comparables : un écart moyen de {gap} s/km par rapport à l'allure centrale.",
                 f"{es} en tus {n} repeticiones comparables: una diferencia media de {gap} s/km respecto al ritmo central.",
                 refs=(f"{path}.code", f"{path}.metadata.judgment_version",
                       f"{path}.metadata.comparison_scope", f"{path}.metadata.regularity_band",
@@ -251,10 +265,12 @@ def build_narrative_context(
                 refs=("phase_analysis.effort_regularity",))
         else:
             add("interval.execution", "interpretation",
-                "The effort-recovery pattern identifies interval work, but the supplied comparison cannot establish how evenly the repetitions were executed.",
-                "L'alternance effort-récupération identifie le fractionné, mais la comparaison fournie ne permet pas d'établir la régularité d'exécution des répétitions.",
-                "La alternancia esfuerzo-recuperación identifica el trabajo de intervalos, pero la comparación proporcionada no permite establecer la regularidad de ejecución de las repeticiones.",
-                refs=("session_classification.type",))
+                "The supplied comparison cannot establish how evenly the repetitions were executed; this does not mean they were irregular.",
+                "La comparaison disponible ne permet pas d'établir la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières.",
+                "La comparación disponible no permite establecer la regularidad de las repeticiones; esto no significa que fueran irregulares.",
+                refs=("session_classification.type", "session_classification.limitations") + (
+                    ("phase_analysis.available", "phase_analysis.effort_regularity.available")
+                    if phase_analysis is not None else ()))
         unavailable = (
             "effort_regularity_unavailable" in cls.limitations if phase_analysis is None
             else not phase_analysis.available or not regularity.available
@@ -282,9 +298,9 @@ def build_narrative_context(
                 refs=("session_classification.confidence", "session_classification.limitations"))
 
     if _finite(intensity.hr_used_bpm) and cls.type != "intervals":
-        hr = f"{intensity.hr_used_bpm:g}"
+        hr = number(intensity.hr_used_bpm)
         add("intensity.hr", "analysis", f"Your average heart rate for this session was {hr} bpm.",
-            f"Votre FC moyenne sur cette séance était de {hr} bpm.",
+            f"Ta fréquence cardiaque moyenne sur cette séance était de {hr} bpm.",
             f"Tu FC media en esta sesión fue de {hr} lpm.",
             refs=("intensity_assessment.hr_used_bpm",))
         add("intensity.average", "limitations",
@@ -299,10 +315,10 @@ def build_narrative_context(
             "above_LT2": ("above LT2", "au-dessus de LT2", "por encima de LT2"),
         }
         en, fr, es = positions[intensity.position]
-        hr = f"{intensity.hr_used_bpm:g}" if _finite(intensity.hr_used_bpm) else None
+        hr = number(intensity.hr_used_bpm)
         add("intensity.position", "analysis",
             f"Your average heart rate{' (' + hr + ' bpm)' if hr else ''} sits {en}, using your personal thresholds.",
-            f"Votre FC moyenne{' (' + hr + ' bpm)' if hr else ''} se situe {fr}, selon vos seuils personnels.",
+            f"Ta fréquence cardiaque moyenne{' (' + hr + ' bpm)' if hr else ''} se situe {fr}, selon tes seuils personnels.",
             f"Tu FC media{' (' + hr + ' lpm)' if hr else ''} se sitúa {es}, según tus umbrales personales.",
             refs=("intensity_assessment.hr_used_bpm", "intensity_assessment.position",
                   "intensity_assessment.lt1", "intensity_assessment.lt2"))
@@ -323,7 +339,7 @@ def build_narrative_context(
             count = rel.reference_count
             add("intensity.relative", "analysis",
                 f"Compared with your {count} personal reference sessions, this effort looks {en}.",
-                f"Par rapport à vos {count} séances personnelles de référence, cet effort paraît {fr}.",
+                f"Par rapport à tes {count} séances de référence, cet effort paraît {fr}.",
                 f"En comparación con tus {count} sesiones personales de referencia, este esfuerzo parece {es}.",
                 refs=("session_classification.type", "session_classification.decision_tier",
                       "session_classification.relative_effort.status",
@@ -337,7 +353,7 @@ def build_narrative_context(
         if rel.status == "used" and rel.reference_count > 0:
             add("intensity.relative_count", "analysis",
                 f"This relative assessment uses {rel.reference_count} of your earlier sessions.",
-                f"Cette évaluation relative utilise {rel.reference_count} de vos séances antérieures.",
+                f"Cette évaluation relative utilise {rel.reference_count} de tes séances antérieures.",
                 f"Esta evaluación relativa utiliza {rel.reference_count} de tus sesiones anteriores.",
                 refs=("session_classification.relative_effort.reference_count",))
 
@@ -345,7 +361,7 @@ def build_narrative_context(
     pace = comparison.pace_at_comparable_hr
     if (comparison.status == "available" and comparison.comparability in {"strong", "moderate"}
             and pace.reference_count >= 3 and _finite(pace.pace_difference_sec_per_km)):
-        delta = f"{pace.pace_difference_sec_per_km:+g}"
+        delta = number(pace.pace_difference_sec_per_km, signed=True)
         add("comparison.pace", "analysis",
             f"At comparable heart rate, this session's pace difference is {delta} s/km versus {pace.reference_count} references (session minus reference); this alone is not a trend.",
             f"À FC comparable, l'écart d'allure de cette séance est de {delta} s/km sur {pace.reference_count} références (séance moins référence) ; cela seul n'est pas une tendance.",
@@ -362,33 +378,34 @@ def build_narrative_context(
     if cls.type == "intervals":
         pass
     elif trend.status == "probable_improvement" and strong_trend and trend.median_change_sec_per_km < 0:
-        n, gain = trend.observation_count, f"{abs(trend.median_change_sec_per_km):g}"
+        n, gain = trend.observation_count, number(abs(trend.median_change_sec_per_km))
         span = trend.span_days if _count(trend.span_days) else None
         en_span = f" over {span} days" if span is not None else ""
         fr_span = f" sur {span} jours" if span is not None else ""
         es_span = f" durante {span} días" if span is not None else ""
         add("trend.improvement", "interpretation",
             f"Your median pace is {gain} s/km faster at comparable heart rate across {n} observations{en_span}: an encouraging sign of probable improvement, not proof of fitness gain.",
-            f"Votre allure médiane est plus rapide de {gain} s/km à FC comparable sur {n} observations{fr_span} : un signe encourageant d'amélioration probable, pas une preuve de gain de forme.",
+            f"Ton allure médiane est plus rapide de {gain} s/km à fréquence cardiaque comparable sur {n} observations{fr_span} : un signe encourageant d'amélioration probable, pas une preuve de gain de forme.",
             f"Tu ritmo mediano es {gain} s/km más rápido a FC comparable en {n} observaciones{es_span}: una señal alentadora de mejora probable, no una prueba de mejora de forma.",
             refs=trend_refs + (("performance_trend.span_days",) if span is not None else ()))
     elif trend.status == "stable" and strong_trend:
-        n, delta = trend.observation_count, f"{trend.median_change_sec_per_km:+g}"
+        n, delta = trend.observation_count, number(trend.median_change_sec_per_km, signed=True)
         add("trend.stable", "interpretation",
             f"Your history shows a stable trend across {n} observations (median pace change {delta} s/km); this does not establish improvement.",
-            f"Votre historique montre une tendance stable sur {n} observations (variation d'allure médiane de {delta} s/km) ; cela ne démontre pas une amélioration.",
+            f"Sur tes {n} observations comparables, la tendance reste stable (variation d'allure médiane de {delta} s/km) : ta progression n'est pas encore démontrée.",
             f"Tu historial muestra una tendencia estable en {n} observaciones (cambio de ritmo mediano de {delta} s/km); esto no demuestra una mejora.",
             refs=trend_refs)
     elif trend.status == "possible_decline" and strong_trend:
+        delta = number(trend.median_change_sec_per_km, signed=True)
         add("trend.decline", "interpretation",
-            f"Your history suggests a possible decline across {trend.observation_count} observations (median pace change {trend.median_change_sec_per_km:+g} s/km), not a confirmed loss of fitness.",
-            f"Votre historique suggère une baisse possible sur {trend.observation_count} observations (variation d'allure médiane de {trend.median_change_sec_per_km:+g} s/km), pas une perte de forme confirmée.",
-            f"Tu historial sugiere un posible descenso en {trend.observation_count} observaciones (cambio de ritmo mediano de {trend.median_change_sec_per_km:+g} s/km), no una pérdida de forma confirmada.",
+            f"Your history suggests a possible decline across {trend.observation_count} observations (median pace change {delta} s/km), not a confirmed loss of fitness.",
+            f"Ton historique suggère une baisse possible sur {trend.observation_count} observations (variation d'allure médiane de {delta} s/km), pas une perte de forme confirmée.",
+            f"Tu historial sugiere un posible descenso en {trend.observation_count} observaciones (cambio de ritmo mediano de {delta} s/km), no una pérdida de forma confirmada.",
             refs=trend_refs)
     else:
         add("trend.insufficient", "interpretation",
             "Your comparable history is insufficient to conclude confidently that you are improving or declining.",
-            "Votre historique comparable est insuffisant pour conclure avec confiance à une amélioration ou à une baisse.",
+            "Ton historique comparable ne permet pas encore de savoir avec confiance si tu progresses ou si tes performances baissent.",
             "Tu historial comparable es insuficiente para concluir con confianza una mejora o un descenso.",
             refs=("performance_trend.status", "performance_trend.confidence"))
     if cls.type != "intervals":
@@ -413,11 +430,11 @@ def build_narrative_context(
     prescription_text = {
         "consistent": (
             "Your session type is consistent with the recorded prescription; this does not verify every target.",
-            "Votre type de séance est conforme à la prescription enregistrée ; cela ne vérifie pas chaque cible.",
+            "Ton type de séance correspond à la prescription enregistrée ; cela ne vérifie pas chaque objectif.",
             "Tu tipo de sesión es conforme con la prescripción registrada; esto no comprueba cada objetivo."),
         "deviation": (
             "Your session type shows a deviation from the recorded prescription.",
-            "Votre type de séance présente un écart par rapport à la prescription enregistrée.",
+            "Ton type de séance diffère de la prescription enregistrée.",
             "Tu tipo de sesión muestra una desviación respecto a la prescripción registrada."),
         "unavailable": (
             "No reliable prescription comparison is available, so conformity cannot be judged.",
@@ -433,7 +450,7 @@ def build_narrative_context(
     if prescription.status == "deviation":
         add("prescription.review", "recommendation",
             "Review this type deviation against the existing Training prescription; this analysis does not replace or modify it.",
-            "Relisez cet écart de type à la lumière de la prescription Training existante ; cette analyse ne la remplace ni ne la modifie.",
+            "Compare ce type de séance à la prescription Training existante ; cette analyse ne la remplace ni ne la modifie.",
             "Revisa esta desviación de tipo frente a la prescripción Training existente; este análisis no la sustituye ni la modifica.",
             refs=("prescription_assessment.status",))
     elif (cls.type == "easy_run_probable" and cls.decision_tier == "individual_history"
@@ -442,7 +459,7 @@ def build_narrative_context(
           and cls.relative_effort.reference_count > 0):
         add("advice.comfortable", "recommendation",
             "You can keep the effort comfortable, without always trying to speed up.",
-            "Vous pouvez conserver un effort confortable, sans chercher systématiquement à accélérer.",
+            "Tu peux garder un effort confortable, sans chercher systématiquement à accélérer.",
             "Puedes mantener un esfuerzo cómodo, sin intentar acelerar sistemáticamente.",
             refs=("session_classification.type", "session_classification.decision_tier",
                   "session_classification.relative_effort.status",
@@ -455,11 +472,11 @@ def build_narrative_context(
     selected = [catalog["session.kind"]]
     if cls.type == "intervals":
         selected.extend(claim for claim in claims if claim["id"].startswith("interval.")
-                        and claim["id"] != "interval.partial"
-                        and not (claim["id"] == "interval.regularity" and "interval.spread" in catalog))
+                        and claim["id"] not in {"interval.partial", "interval.regularity"}
+                        and not (claim["id"] == "interval.cohort" and "interval.judgment" in catalog))
     else:
         primary = next((catalog[key] for key in (
-            "intensity.relative", "intensity.position", "intensity.hr", "session.unknown",
+            "session.unknown", "intensity.relative", "intensity.position", "intensity.hr",
         ) if key in catalog), None)
         if primary is not None:
             selected.append(primary)

@@ -124,7 +124,9 @@ def test_unknown_no_splits_is_useful_and_localized(language, headline, unavailab
     v3.prescription_assessment = WIV3PrescriptionAssessment(status="unavailable")
     result = narrative.deterministic_fallback(v3, language)
     assert result.headline == headline
-    assert "140" in result.analysis
+    assert {
+        "en": "does not reliably identify", "fr": "de façon fiable", "es": "con fiabilidad",
+    }[language] in result.analysis
     assert unavailable in _text(result)
     assert result.analysis and result.interpretation and result.limitations
     assert result.recommendation is None
@@ -250,10 +252,9 @@ def test_interval_counts_do_not_invent_regularity(count, regularity):
     assert f"{count} effort phases" in result.analysis
     assert f"{count - 1} recovery phases" in result.analysis
     assert "regular repetitions" not in result.analysis
-    if regularity:
-        assert "availability does not establish" in " ".join(result.limitations)
-    else:
-        assert "Effort regularity is unavailable" in " ".join(result.limitations)
+    assert "cannot establish how evenly" in result.interpretation
+    assert "does not mean they were irregular" in result.interpretation
+    assert "regularity" not in " ".join(result.limitations)
     _assert_refs_exist(v3, result.evidence_refs)
     alternate = _selection(v3)
     next(item for item in alternate["selections"] if item["id"] == "interval.count")["variant"] = 1
@@ -321,7 +322,7 @@ def test_reuses_actual_canonical_four_repetition_judgment(language, paces, band,
     )
     assert labels[["en", "fr", "es"].index(language)] in result.interpretation
     assert "4" in result.interpretation
-    gap = f"{conclusion.evidence['absolute_deviation_sec_per_km']:.1f}".removesuffix(".0")
+    gap = narrative.format_narrative_number(conclusion.evidence["absolute_deviation_sec_per_km"], language)
     assert f"{gap} s/km" in result.interpretation
     assert "No regularity verdict" not in _text(result)
     assert "not by itself establish" not in result.interpretation
@@ -426,7 +427,7 @@ def test_four_efforts_reuse_canonical_v2_dispersion_without_regularity_verdict(l
     monkeypatch.setattr("workout_analysis_v2._effort_regularity", forbidden_recalculation)
     monkeypatch.setattr("workout_analysis_v2._phase_observations", forbidden_recalculation)
     result = narrative.deterministic_fallback(v3, language, phase_analysis=phases)
-    spread = f"{phases.effort_regularity.pace_dispersion_sec_per_km:g}"
+    spread = narrative.format_narrative_number(phases.effort_regularity.pace_dispersion_sec_per_km, language)
     assert f"{spread} s/km" in result.analysis
     assert "phase_analysis.effort_regularity" in result.evidence_refs
     assert "interval.spread" in {
@@ -450,7 +451,8 @@ def test_six_efforts_without_canonical_judgment_remain_unknown():
     result = narrative.deterministic_fallback(v3, phase_analysis=phases)
     assert "6 effort phases" in result.analysis
     assert "dispersion" not in result.analysis
-    assert "Effort regularity is unavailable" in " ".join(result.limitations)
+    assert "cannot establish how evenly" in result.interpretation
+    assert "regularity" not in " ".join(result.limitations)
     assert "phase_analysis.effort_regularity.available" in result.evidence_refs
     _assert_refs_exist(v3, result.evidence_refs, phases)
 
@@ -490,7 +492,8 @@ def test_mismatched_phase_counts_do_not_authorize_spread_claims():
     phases = _canonical_phases(4)
     result = narrative.deterministic_fallback(_intervals(6), phase_analysis=phases)
     assert "6 effort phases" in result.analysis and "dispersion" not in result.analysis
-    assert "No regularity verdict" in " ".join(result.limitations)
+    assert "cannot establish how evenly" in result.interpretation
+    assert "regularity" not in " ".join(result.limitations)
 
 
 def test_llm_validation_and_cache_bind_optional_canonical_phase_metrics(monkeypatch):
@@ -908,7 +911,7 @@ def test_relative_context_deterministically_omits_metric_exhaustiveness():
 
 @pytest.mark.parametrize("language,advice", [
     ("en", "keep the effort comfortable"),
-    ("fr", "conserver un effort confortable"),
+    ("fr", "garder un effort confortable"),
     ("es", "mantener un esfuerzo cómodo"),
 ])
 def test_relative_easy_low_effort_has_only_cautious_comfort_advice(language, advice):
@@ -983,3 +986,191 @@ def test_missing_trend_span_stays_missing():
     assert "24 s/km faster" in result.interpretation
     assert "days" not in result.interpretation and "None" not in result.interpretation
     assert "performance_trend.span_days" not in result.evidence_refs
+
+
+@pytest.mark.parametrize("language,decimal", [("fr", ","), ("en", "."), ("es", ",")])
+@pytest.mark.parametrize("value,signed,expected", [
+    (16.5621, False, "16{d}6"),
+    (6.600000, False, "6{d}6"),
+    (-3.0000, False, "−3"),
+    (3, True, "+3"),
+    (-6.6, True, "−6{d}6"),
+    (0, True, "0"),
+    (-0.0, False, "0"),
+    (-0.04, True, "0"),
+    (0.04, True, "0"),
+    (0.06, True, "+0{d}1"),
+    (1234.56, False, "1234{d}6"),
+])
+def test_c357_localized_display_numbers(language, decimal, value, signed, expected):
+    assert narrative.format_narrative_number(value, language, signed=signed) == expected.format(d=decimal)
+
+
+@pytest.mark.parametrize("value", [None, True, False, "", "6.6", float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_c357_absent_or_invalid_number_never_becomes_zero(value, language):
+    assert narrative.format_narrative_number(value, language) is None
+
+
+def _polish_scenarios():
+    """Synthetic analogues only, not observations from the named Garmin dates."""
+    four = _canonical_coached_intervals([240, 241, 240, 241])
+    six = _canonical_phases(6, paced=False)
+    easy = _session()
+    easy.session_classification = WIV3SessionClassification(
+        type="easy_run_probable", decision_tier="individual_history", confidence="low",
+        limitations=["no_splits_whole_session_averages_only"],
+        relative_effort=WIV3RelativeEffortReference(
+            status="used", relative_position="low", reference_count=8,
+        ),
+    )
+    return [
+        ("10/10/2026", _intervals(4), four.phase_analysis, four.coach_language),
+        ("19/09/2026", _intervals(6), six, None),
+        ("12/10/2026", easy, None, None),
+        ("19/10/2026", _session(structure="unknown", activity_type="treadmill_running"), None, None),
+    ]
+
+
+def test_c357_french_catalog_variants_use_tutoiement():
+    scenarios = _polish_scenarios() + [
+        ("missing", None, None, None),
+        ("stable", _trend_session("stable"), None, None),
+        ("improvement", _trend_session(), None, None),
+        ("insufficient", _session(), None, None),
+    ]
+    for _, v3, phases, coach in scenarios:
+        for status in ("consistent", "deviation", "unavailable", "indeterminate"):
+            if v3 is not None:
+                v3.prescription_assessment = WIV3PrescriptionAssessment(status=status)
+            context = narrative.build_narrative_context(v3, "fr", phase_analysis=phases, coach_language=coach)
+            for claim in context["claims"]:
+                for text in claim["variants"]:
+                    assert not re.search(r"\b(vous|votre|vos|relisez)\b", text, re.I), text
+                    assert not re.search(r"\b(dernières|derniers)\b", text, re.I), text
+
+
+@pytest.mark.parametrize("language,decimal", [("fr", ","), ("en", "."), ("es", ",")])
+def test_c357_rounding_is_display_only_for_canonical_phase_evidence(language, decimal, monkeypatch):
+    v2 = _canonical_coached_intervals([240, 241, 240, 241])
+    v3 = _intervals(4)
+    conclusion = next(c for c in v2.coach_language.conclusions if c.category == "repetitions")
+    # Inject an already-judged display metric, not a new regularity calculation.
+    conclusion.evidence["absolute_deviation_sec_per_km"] = 16.5621
+    before = deepcopy((v2.model_dump(), v3.model_dump()))
+    monkeypatch.setattr("coach_language._repetition_judgment",
+                        lambda *args, **kwargs: pytest.fail("Narrative must not recalculate"))
+    result = narrative.deterministic_fallback(
+        v3, language, phase_analysis=v2.phase_analysis, coach_language=v2.coach_language,
+    )
+    assert f"16{decimal}6 s/km" in result.interpretation
+    assert "16.5621" not in _text(result)
+    assert (v2.model_dump(), v3.model_dump()) == before
+    _assert_refs_exist(v3, result.evidence_refs, v2.phase_analysis, v2.coach_language)
+
+
+@pytest.mark.parametrize("language,decimal", [("fr", ","), ("en", "."), ("es", ",")])
+@pytest.mark.parametrize("status,delta,expected", [
+    ("stable", -3.0000, "−3"),
+    ("possible_decline", 6.600000, "+6{d}6"),
+    ("probable_improvement", -16.5621, "16{d}6"),
+])
+def test_c357_rounds_trend_prose_without_changing_trend(language, decimal, status, delta, expected):
+    v3 = _session()
+    v3.performance_trend = WIV3PerformanceTrend(
+        status=status, confidence="medium", observation_count=5, median_change_sec_per_km=delta,
+    )
+    before = deepcopy(v3.model_dump())
+    result = narrative.deterministic_fallback(v3, language)
+    assert expected.format(d=decimal) + " s/km" in result.interpretation
+    assert v3.model_dump() == before
+
+
+@pytest.mark.parametrize("language,decimal", [("fr", ","), ("en", "."), ("es", ",")])
+def test_c357_rounds_measured_hr_and_keeps_absent_hr_absent(language, decimal):
+    v3 = _session()
+    v3.session_classification = WIV3SessionClassification(
+        type="steady_run_probable", decision_tier="personal_thresholds", confidence="medium",
+    )
+    v3.intensity_assessment.hr_used_bpm = 140.5621
+    result = narrative.deterministic_fallback(v3, language)
+    assert f"140{decimal}6" in result.analysis
+    assert v3.intensity_assessment.hr_used_bpm == 140.5621
+    v3.intensity_assessment.hr_used_bpm = None
+    result = narrative.deterministic_fallback(v3, language)
+    assert "bpm" not in result.analysis and "lpm" not in result.analysis
+    assert all(value not in _text(result) for value in ("None", "nan", "inf"))
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_c357_synthetic_scenarios_have_no_redundant_claims_and_keep_uncertainty(language):
+    for date, v3, phases, coach in _polish_scenarios():
+        context = narrative.build_narrative_context(v3, language, phase_analysis=phases, coach_language=coach)
+        ids = [claim["id"] for claim in context["claims"]]
+        result = narrative.deterministic_fallback(v3, language, phase_analysis=phases, coach_language=coach)
+        parts = [result.analysis, result.interpretation, result.recommendation or "", *result.limitations]
+        sentences = [s.strip() for part in parts for s in re.split(r"(?<=[.!?])\s+", part) if s.strip()]
+        assert len(sentences) == len(set(sentences))
+        assert ids.count("prescription.status") == 1
+        assert "interval.regularity" not in ids
+        if date == "10/10/2026":
+            assert "interval.judgment" in ids and "interval.cohort" not in ids
+            assert "4" in result.interpretation
+        elif date == "19/09/2026":
+            assert "6" in result.analysis and "5" in result.analysis
+            assert "interval.execution" in ids and "interval.judgment" not in ids
+            assert {"fr": "ne signifie pas", "en": "does not mean", "es": "no significa"}[language] in result.interpretation
+        elif date == "12/10/2026":
+            assert "intensity.relative" in ids and "intensity.position" not in ids
+            assert _text(result).count("LT1") == 1
+        else:
+            assert "session.unknown" in ids
+            assert "intensity.hr" not in ids
+        _assert_refs_exist(v3, result.evidence_refs, phases, coach)
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_c357_polished_selection_still_rejects_missing_evidence_and_free_prose(language):
+    for _, v3, phases, coach in _polish_scenarios():
+        kwargs = dict(phase_analysis=phases, coach_language=coach)
+        payload = _selection(v3, language, **kwargs)
+        approved = narrative.validate_narrative_selection(payload, v3, language, **kwargs)
+        assert approved is not None
+        fallback = narrative.deterministic_fallback(v3, language, **kwargs)
+        assert approved.model_dump(exclude={"generation_mode"}) == fallback.model_dump(exclude={"generation_mode"})
+        for claim in payload["selections"]:
+            omitted = {"selections": [entry for entry in payload["selections"] if entry != claim]}
+            assert narrative.validate_narrative_selection(omitted, v3, language, **kwargs) is None
+        payload["analysis"] = fallback.analysis
+        assert narrative.validate_narrative_selection(payload, v3, language, **kwargs) is None
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_c357_default_llm_off_and_api_contracts_remain_intact(language):
+    from narrative_coach_v3_models import WorkoutIntelligenceV3NarrativeResponse
+    from workout_analysis_v2 import WorkoutAnalysisV2Response
+
+    async def forbidden(*args):
+        pytest.fail("Default narrative must not call an LLM")
+
+    v2 = _canonical_coached_intervals([240, 241, 240, 241], language)
+    before_v2 = deepcopy(v2.model_dump())
+    for _, v3, phases, coach in _polish_scenarios():
+        before_v3 = deepcopy(v3.model_dump())
+        kwargs = dict(phase_analysis=phases, coach_language=coach)
+        result = _run(v3, language, transport=forbidden, **kwargs)
+        assert result == narrative.deterministic_fallback(v3, language, **kwargs)
+        envelope = WorkoutIntelligenceV3NarrativeResponse(
+            workout_id=v3.workout_id, workout_intelligence_v3=v3, narrative_coach_v3=result,
+        )
+        assert set(envelope.model_dump()) == {"workout_id", "workout_intelligence_v3", "narrative_coach_v3"}
+        assert envelope.model_dump()["workout_intelligence_v3"] == before_v3
+        assert set(result.model_dump()) == {
+            "headline", "analysis", "interpretation", "recommendation", "limitations",
+            "evidence_refs", "language", "generation_mode",
+        }
+    narrative.deterministic_fallback(
+        _intervals(4), language, phase_analysis=v2.phase_analysis, coach_language=v2.coach_language,
+    )
+    assert v2.model_dump() == before_v2
+    assert WorkoutAnalysisV2Response.model_validate(before_v2).model_dump() == before_v2
