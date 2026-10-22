@@ -1,7 +1,7 @@
-"""C359 offline experiment: free synthesis requested, independent proof on HOLD.
+"""C360 offline experiment: validated narrative planning and controlled rendering.
 
-V3 structured observations are the only runtime authority. Literal certificates
-prove only a selected subset of our assertions, never arbitrary entailment.
+V3 structured observations are the only runtime authority. The provider selects
+only authorized fact IDs and operations; the server validates and renders them.
 No route, knowledge loader, persistence or scientific calculation is added.
 """
 
@@ -24,7 +24,80 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
 TIMEOUT_SECONDS = 8.0
 MAX_RESPONSE_CHARS = 700
-VERSION = "c359-selected-facts-hold-3"
+VERSION = "c360-validated-plan-1"
+
+_REQUIRED_LIMITS = {
+    "interval.count": ("no_repetition_durations", "regularity_verdict_unavailable"),
+    "session.long": ("probable_not_certain", "duration_not_effort"),
+    "session.kind": ("probable_not_certain",),
+    "intensity.position": ("average_not_whole_effort", "no_time_in_zones", "no_physiological_cause"),
+    "intensity.hr": ("no_physiological_zone", "average_not_whole_effort"),
+    "session.unknown": ("unknown_not_easy",),
+    "prescription.review": ("no_new_prescription", "no_inferred_cause"),
+}
+
+_LIMIT_TEXT = {
+    "fr": {
+        "no_repetition_durations": "La durée de chaque répétition n'est pas disponible.",
+        "regularity_verdict_unavailable": "La régularité ne peut donc pas être jugée.",
+        "probable_not_certain": "Ce type reste probable, pas certain.",
+        "duration_not_effort": "La durée ne permet pas à elle seule d'estimer l'intensité.",
+        "low_confidence": "La classification reste incertaine.",
+        "relative_effort_not_physiological_intensity": "Cette classification est relative à ton historique, pas à une intensité physiologique.",
+        "average_not_whole_effort": "Cette moyenne ne décrit pas chaque moment de l'effort.",
+        "no_time_in_zones": "Elle n'indique pas le temps passé dans les zones.",
+        "no_physiological_cause": "Elle n'en établit pas la cause.",
+        "no_physiological_zone": "Cette moyenne seule ne permet pas d'établir une zone physiologique.",
+        "unknown_not_easy": "Un type inconnu ne signifie pas que la séance était facile.",
+        "missing_average_hr": "Aucune fréquence cardiaque moyenne n'est disponible.",
+        "threshold_interpretation_unavailable": "Aucune zone physiologique ne peut être établie.",
+        "not_proof_of_fitness": "Ce signal ne prouve pas un changement de forme.",
+        "no_cause": "La cause de cette tendance n'est pas établie.",
+        "terrain_weather_not_controlled": "Les effets du terrain et de la météo ne sont pas isolés.",
+        "no_new_prescription": "Cette lecture ne remplace ni ne modifie la prescription.",
+        "no_inferred_cause": "Aucune cause n'est déduite.",
+    },
+    "en": {
+        "no_repetition_durations": "Individual repetition durations are unavailable.",
+        "regularity_verdict_unavailable": "So repetition regularity cannot be judged.",
+        "probable_not_certain": "This type remains probable, not certain.",
+        "duration_not_effort": "Duration alone does not establish effort intensity.",
+        "low_confidence": "The classification remains uncertain.",
+        "relative_effort_not_physiological_intensity": "This classification is relative to your history, not physiological intensity.",
+        "average_not_whole_effort": "This average does not describe every part of the effort.",
+        "no_time_in_zones": "It does not show time spent in zones.",
+        "no_physiological_cause": "It does not establish a cause.",
+        "no_physiological_zone": "Average HR alone cannot establish a physiological zone.",
+        "unknown_not_easy": "An unknown type does not mean the session was easy.",
+        "missing_average_hr": "No average heart rate is available.",
+        "threshold_interpretation_unavailable": "No physiological zone can be established.",
+        "not_proof_of_fitness": "This signal does not prove a change in fitness.",
+        "no_cause": "The cause of this trend is not established.",
+        "terrain_weather_not_controlled": "Terrain and weather effects are not isolated.",
+        "no_new_prescription": "This reading does not replace or change the prescription.",
+        "no_inferred_cause": "No cause is inferred.",
+    },
+    "es": {
+        "no_repetition_durations": "No están disponibles las duraciones de cada repetición.",
+        "regularity_verdict_unavailable": "Por tanto, no se puede juzgar la regularidad.",
+        "probable_not_certain": "Este tipo sigue siendo probable, no seguro.",
+        "duration_not_effort": "La duración por sí sola no determina la intensidad del esfuerzo.",
+        "low_confidence": "La clasificación sigue siendo incierta.",
+        "relative_effort_not_physiological_intensity": "Esta clasificación es relativa a tu historial, no a la intensidad fisiológica.",
+        "average_not_whole_effort": "Esta media no describe cada momento del esfuerzo.",
+        "no_time_in_zones": "No indica el tiempo pasado en las zonas.",
+        "no_physiological_cause": "No establece la causa.",
+        "no_physiological_zone": "La FC media por sí sola no permite establecer una zona fisiológica.",
+        "unknown_not_easy": "Un tipo desconocido no significa que la sesión fuera fácil.",
+        "missing_average_hr": "No hay una frecuencia cardíaca media disponible.",
+        "threshold_interpretation_unavailable": "No se puede establecer una zona fisiológica.",
+        "not_proof_of_fitness": "Esta señal no demuestra un cambio de forma.",
+        "no_cause": "No se establece la causa de esta tendencia.",
+        "terrain_weather_not_controlled": "No se aíslan los efectos del terreno y del tiempo.",
+        "no_new_prescription": "Esta lectura no sustituye ni modifica la prescripción.",
+        "no_inferred_cause": "No se deduce ninguna causa.",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -66,6 +139,7 @@ class AdmissibleFact:
             "confidence": self.confidence,
             "usage_conditions": list(self.usage_conditions),
             "important_limits": list(self.important_limits), "priority": self.priority,
+            "required_limits": list(_required_limit_ids(self)),
         }
 
 
@@ -84,15 +158,16 @@ class HybridResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str = VERSION
-    mode: Literal["disabled", "denied", "deterministic_fallback", "literal_subset_verified"]
+    mode: Literal["disabled", "denied", "deterministic_fallback", "planned_synthesis"]
     verdict: Literal["HOLD"] = "HOLD"
     reason: str
-    verification_scope: Literal["none", "literal_assertions_only"] = "none"
+    verification_scope: Literal["none", "structured_plan"] = "none"
     blockers: list[str] = Field(default_factory=lambda: [
-        "free_semantic_verification_unavailable", "shared_adapter_700_char_truncation",
+        "free_form_scientific_prose_not_accepted", "shared_adapter_700_char_truncation",
     ])
     text: str = ""
     claims: list[HybridClaim] = Field(default_factory=list)
+    narrative_plan: Optional[dict] = None
     provider_attempted: bool = False
     transport_kind: Literal["none", "runindex", "injected"] = "none"
     elapsed_ms: Optional[float] = None
@@ -110,6 +185,18 @@ def _finite(value) -> bool:
 
 def _count(value) -> bool:
     return _finite(value) and value >= 0 and int(value) == value
+
+
+def _required_limit_ids(fact: AdmissibleFact) -> tuple[str, ...]:
+    required = list(_REQUIRED_LIMITS.get(fact.id, ()))
+    if fact.id in {"session.kind", "session.long"} and "low_confidence" in fact.important_limits:
+        required.append("low_confidence")
+    if (fact.id == "session.kind"
+            and "relative_effort_not_physiological_intensity" in fact.important_limits):
+        required.append("relative_effort_not_physiological_intensity")
+    if fact.id.startswith("trend."):
+        required.extend(("not_proof_of_fitness", "no_cause", "terrain_weather_not_controlled"))
+    return tuple(limit for limit in required if limit in fact.important_limits)
 
 
 def _language(language: str) -> str:
@@ -372,45 +459,101 @@ def _render(claims: list[HybridClaim]) -> str:
     return " ".join(c.text for c in claims)
 
 
-def validate_hybrid_response(
+def validate_narrative_plan(
     payload: object, intelligence: WorkoutIntelligenceV3, *, access: UserAccess,
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
-) -> Optional[list[HybridClaim]]:
-    """Fresh literal assertion certificates only, NOT a semantic verifier.
-
-    Exact assertions bind values, units, confidence and inseparable limits.
-    Every output character is accounted for; no unchecked connectors, hidden
-    sentences, reference laundering or external verifier callback can pass.
-    """
+) -> Optional[dict]:
+    """Validate an ID-only plan against freshly rebuilt facts and permissions."""
     facts = build_admissible_facts(
         intelligence, access=access, permissions=permissions, language=language,
     )
     index = {fact.id: fact for fact in facts}
-    if type(payload) is not dict or set(payload) != {"text", "claims"}:
+    if type(payload) is not dict or set(payload) != {
+        "main_fact_id", "supporting_fact_ids", "conclusion_ids",
+        "required_limit_ids", "detail_level",
+    }:
         return None
-    if type(payload["text"]) is not str or type(payload["claims"]) is not list:
+    main_id = payload["main_fact_id"]
+    supporting = payload["supporting_fact_ids"]
+    conclusions = payload["conclusion_ids"]
+    limits = payload["required_limit_ids"]
+    detail = payload["detail_level"]
+    if (type(main_id) is not str or type(supporting) is not list
+            or any(type(item) is not str for item in supporting)
+            or type(conclusions) is not dict or type(limits) is not dict
+            or type(detail) is not str or detail not in {"concise", "balanced", "detailed"}):
         return None
-    if not 1 <= len(payload["claims"]) <= 3:
+    selected = [main_id, *supporting]
+    maximum = {"concise": 1, "balanced": 2, "detailed": 3}[detail]
+    if (not 1 <= len(selected) <= maximum or len(set(selected)) != len(selected)
+            or any(item not in index for item in selected)
+            or set(conclusions) != set(selected) or set(limits) != set(selected)):
         return None
-    certified = []
-    seen = set()
-    for claim in payload["claims"]:
-        if type(claim) is not dict or set(claim) != {"text", "evidence_ids", "conclusion_ids"}:
+    if "session.unknown" in selected and "intensity.hr" in selected:
+        return None
+    for fact_id in selected:
+        fact = index[fact_id]
+        if (type(conclusions[fact_id]) is not str
+                or conclusions[fact_id] != fact.allowed_conclusion
+                or type(limits[fact_id]) is not list
+                or any(type(item) is not str for item in limits[fact_id])
+                or len(set(limits[fact_id])) != len(limits[fact_id])
+                or not set(_required_limit_ids(fact)).issubset(set(limits[fact_id]))
+                or not set(limits[fact_id]).issubset(set(fact.important_limits))):
             return None
-        ids = claim["evidence_ids"]
-        if type(ids) is not list or len(ids) != 1 or type(ids[0]) is not str:
-            return None
-        fact = index.get(ids[0])
-        if fact is None or fact.id in seen:
-            return None
-        if (type(claim["text"]) is not str or type(claim["conclusion_ids"]) is not list
-                or any(type(id) is not str for id in claim["conclusion_ids"])
-                or claim["conclusion_ids"] != [fact.allowed_conclusion]
-                or claim["text"] != fact.assertion):
-            return None
-        seen.add(fact.id)
-        certified.append(_claim(fact))
-    return certified if payload["text"] == _render(certified) else None
+    return {
+        "main_fact_id": main_id, "supporting_fact_ids": list(supporting),
+        "conclusion_ids": dict(conclusions),
+        "required_limit_ids": {key: list(value) for key, value in limits.items()},
+        "detail_level": detail,
+    }
+
+
+_LIMITS_ALREADY_IN_ASSERTIONS = {
+    "session.long": {"probable_not_certain"},
+    "session.kind": {"probable_not_certain", "low_confidence",
+                     "relative_effort_not_physiological_intensity"},
+    "intensity.position": {"average_not_whole_effort"},
+    "intensity.hr": {"no_physiological_zone", "average_not_whole_effort"},
+    "session.unknown": {"missing_average_hr"},
+    "trend.probable_improvement": {"not_proof_of_fitness"},
+    "trend.stable": {"not_proof_of_fitness"},
+    "trend.possible_decline": {"not_proof_of_fitness"},
+    "prescription.review": {"no_new_prescription"},
+}
+
+
+def render_validated_plan(
+    plan: dict, facts: tuple[AdmissibleFact, ...], *, language: str = "fr",
+) -> list[HybridClaim]:
+    """Render canonical assertions and allowlisted clauses; never accept provider prose."""
+    lang = _language(language)
+    index = {fact.id: fact for fact in facts}
+    ids = [plan["main_fact_id"], *plan["supporting_fact_ids"]]
+    rendered = []
+    for position, fact_id in enumerate(ids):
+        fact = index[fact_id]
+        text = fact.assertion
+        already_stated = _LIMITS_ALREADY_IN_ASSERTIONS.get(fact_id, set())
+        clauses = [
+            _LIMIT_TEXT[lang][limit]
+            for limit in plan["required_limit_ids"][fact_id]
+            if limit not in already_stated
+        ]
+        if clauses:
+            text = text.rstrip() + " " + " ".join(clauses)
+        if position:
+            prefix = {
+                "fr": ("En complément, ", "Autre repère utile : "),
+                "en": ("Alongside that, ", "Another useful detail: "),
+                "es": ("Además, ", "Como dato adicional: "),
+            }[lang][position - 1]
+            text = prefix + text[0].lower() + text[1:]
+        rendered.append(HybridClaim(
+            id=fact.id, text=text, evidence_ids=[fact.id],
+            conclusion_ids=[fact.allowed_conclusion], evidence_refs=list(fact.source_paths),
+        ))
+    return rendered
 
 
 def _unique_object(pairs):
@@ -433,10 +576,11 @@ async def generate_hybrid_coach(
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
     transport: Optional[Transport] = None,
 ) -> HybridResult:
-    """One free synthesis request; unprovable prose withheld without logging.
+    """Request an ID-only narrative plan, validate it, then render locally.
 
     The unchanged shared adapter truncates at 700 characters. Raw responses
-    exceeding that boundary or already truncated JSON fail closed.
+    exceeding that boundary or already truncated JSON fail closed. No provider
+    prose is accepted or interpreted.
     """
     start = perf_counter()
     if not _authorized(access):
@@ -462,19 +606,17 @@ async def generate_hybrid_coach(
     )
     prompt = json.dumps(context, ensure_ascii=False, allow_nan=False)
     system = (
-        "Write a useful, natural running-coach synthesis in the requested language; never prescribe. "
-        "In French, always address the runner with tu (tutoiement), never vous. "
-        "Do not mention administrative V3 or Training implementation internals in the prose. "
-        "Express uncertainty where material to the main conclusions, not as repeated generic reservations. "
-        "Freely select, prioritize, reorder and connect useful conclusions from the authorized facts. "
-        "Do not follow a synonym list or copy a supplied narrative: no wording is prescribed. "
-        "Respect each fact's values, units, confidence, usage conditions and important limits. "
-        "Do not infer causes, recovery, fitness, regularity, zones or advice beyond the allowed conclusions. "
-        'Return only JSON {"text":"complete synthesis","claims":'
-        '[{"text":"factual assertion","evidence_ids":["fact ID"],"conclusion_ids":["allowed conclusion ID"]}]}. '
-        "Report all factual assertions, including connections; choose one to three useful claims. "
-        "An independent proof gate may withhold unverifiable free prose; declared IDs are not proof. "
-        "The existing transport has a 700-character raw response boundary."
+        "Create a narrative plan, not prose. Select the most characteristic authorized fact as main, "
+        "then zero to two useful supporting facts in the order to explain them. Choose concise for one "
+        "fact, balanced for up to two, or detailed for up to three. For each selected fact, use only "
+        "its exact allowed conclusion ID and preserve every required limit ID. Do not repeat facts. "
+        "Never infer physiology, causes, recovery, fitness, regularity, zones, or prescriptions. "
+        "Return only JSON with exactly these keys: "
+        '{"main_fact_id":"ID","supporting_fact_ids":["ID"],'
+        '"conclusion_ids":{"ID":"allowed conclusion ID"},'
+        '"required_limit_ids":{"ID":["required limit ID"]},'
+        '"detail_level":"concise|balanced|detailed"}. '
+        "No natural-language text is accepted; the server renders the validated plan."
     )
     result.provider_attempted = True
     result.transport_kind = "injected" if transport is not None else "runindex"
@@ -491,16 +633,18 @@ async def generate_hybrid_coach(
                 result.reason = "transport_response_limit"
             else:
                 payload = json.loads(text, object_pairs_hook=_unique_object)
-                verified = validate_hybrid_response(
+                plan = validate_narrative_plan(
                     payload, intelligence, access=access, permissions=permissions, language=language,
                 )
-                if verified is not None:
-                    result.claims, result.text = verified, _render(verified)
-                    result.mode = "literal_subset_verified"
-                    result.reason = "literal_subset_only_free_synthesis_on_hold"
-                    result.verification_scope = "literal_assertions_only"
+                if plan is not None:
+                    result.narrative_plan = plan
+                    result.claims = render_validated_plan(plan, facts, language=language)
+                    result.text = _render(result.claims)
+                    result.mode = "planned_synthesis"
+                    result.reason = "validated_narrative_plan"
+                    result.verification_scope = "structured_plan"
                 else:
-                    result.reason = "semantic_verification_unavailable"
+                    result.reason = "invalid_narrative_plan"
     except asyncio.TimeoutError:
         result.reason = "timeout"
     except Exception:
