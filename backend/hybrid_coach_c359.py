@@ -403,14 +403,14 @@ def _render(claims: list[HybridClaim]) -> str:
     return " ".join(c.text for c in claims)
 
 
-_NUMBER_RE = re.compile(r"(?<![\w.])[-+]?\d+(?:[.,]\d+)?")
+_NUMBER_RE = re.compile(r"(?<![\w.])[-+−]?\d+(?:[.,]\d+)?")
 _AVERAGE_HR_CLAIM = re.compile(
     r"(?:fc moyenne|fréquence cardiaque moyenne|average hr|mean heart rate|"
     r"fc media|frecuencia cardíaca media)[^.!?]{0,35}?"
-    r"([-+]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", re.I,
+    r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", re.I,
 )
 _NUMBER_WITH_UNIT = re.compile(
-    r"(?<![\w.])([-+]?\d+(?:[.,]\d+)?)\s*"
+    r"(?<![\w.])([-+−]?\d+(?:[.,]\d+)?)\s*"
     r"(bpm|lpm|min(?:ute)?s?|days?|días|jours?|s/km|sec(?:onds?)?/km)\b", re.I,
 )
 _SENSITIVE_PATTERNS = {
@@ -536,6 +536,10 @@ _REQUIRED_PHRASES = {
 }
 
 
+def _numeric_value(value: str) -> float:
+    return float(value.replace("−", "-").replace(",", "."))
+
+
 def _authorized_numbers(facts: tuple[AdmissibleFact, ...]) -> set[float]:
     return {
         float(value)
@@ -573,7 +577,7 @@ def validate_generated_narrative(
         return False, "unsupported_physiological_zone", []
     authorized = _authorized_numbers(facts)
     for number in _NUMBER_RE.findall(candidate):
-        if float(number.replace(",", ".")) not in authorized:
+        if _numeric_value(number) not in authorized:
             return False, "unsupported_numeric_value", []
     for match in _NUMBER_WITH_UNIT.finditer(candidate):
         number, unit = match.groups()
@@ -593,7 +597,7 @@ def validate_generated_narrative(
             if dict(fact.units).get(key) == unit
             and type(value) in (int, float) and math.isfinite(value)
         }
-        if float(number.replace(",", ".")) not in allowed_for_unit:
+        if _numeric_value(number) not in allowed_for_unit:
             return False, "unsupported_numeric_unit_or_value", []
     average_hr = next(
         (value for fact in facts for key, value in fact.values if key == "average_hr"),
@@ -601,7 +605,7 @@ def validate_generated_narrative(
     )
     if average_hr is not None:
         for match in _AVERAGE_HR_CLAIM.finditer(candidate):
-            if float(match.group(1).replace(",", ".")) != float(average_hr):
+            if _numeric_value(match.group(1)) != float(average_hr):
                 return False, "contradictory_average_hr", []
     position_fact = next((fact for fact in facts if fact.id == "intensity.position"), None)
     if position_fact is not None:

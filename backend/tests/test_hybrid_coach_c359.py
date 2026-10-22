@@ -476,6 +476,20 @@ def test_trend_must_keep_its_canonical_probability_qualification():
     assert not valid and reason == "missing_trend_qualification"
 
 
+def test_authorized_negative_trend_survives_typographic_minus_paraphrase():
+    facts = _facts(
+        synthetic_case("comparable_history"),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    candidate = (
+        "Ton historique suggère une amélioration probable : 6 observations sur 92 jours "
+        "montrent une variation médiane d'allure de −24 s/km. Ce signal reste une tendance, "
+        "pas une preuve de changement de forme."
+    )
+    valid, reason, _ = hybrid.validate_generated_narrative(candidate, facts)
+    assert valid and reason == "heuristic_checks_passed"
+
+
 def test_entitlements_and_flag_precede_provider(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     called = False

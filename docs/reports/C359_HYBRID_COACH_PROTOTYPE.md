@@ -1105,7 +1105,7 @@ sourcées. Le prototype n'autorise pas à déclarer ces critères satisfaits.
 Itération de la PR **#360** uniquement, branche existante
 `copilot/c359-recovery`, base `copilot/dev`
 (`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD du code C360 évalué :
-`04637a3b47ba4b17401ba57ab0971d240e49b246`. Cette référence désigne le code ;
+`1ea72b1bd35698a1348947bb0e04a149fd7bfa48`. Cette référence désigne le code ;
 le commit documentaire final est ultérieur. Flag `C359_HYBRID_COACH_ENABLED`
 désactivé par défaut. Aucun branchement d'interface ou de route, aucun changement
 V2/V3, accès Garmin/GCCLI, écriture MongoDB, séance réelle, déploiement ou merge.
@@ -1261,6 +1261,7 @@ reprendre l'assertion locale à l'identique. Attaques synthétiques vérifiées 
 | --- | --- |
 | FC moyenne inventée à `999 bpm` | rejet `unsupported_numeric_value` |
 | `LT2` affirmé sans preuve de seuil | rejet `unauthorized_physiological_conclusion` |
+| zone d'entraînement numérique déduite d'une FC moyenne, même avec des seuils personnels | rejet `unsupported_physiological_zone` |
 | `140 min` à la place d'une mesure bpm | rejet `unsupported_numeric_unit_or_value` |
 | FC moyenne annoncée à 150 bpm alors que V3 vaut 140 | rejet `contradictory_average_hr` |
 | moyenne 140 bpm dite au-dessus de LT2 alors que V3 dit sous LT1 | rejet `contradictory_threshold_position` |
@@ -1269,6 +1270,7 @@ reprendre l'assertion locale à l'identique. Attaques synthétiques vérifiées 
 | cause de FC attribuée à la fatigue | rejet `unauthorized_causality` |
 | séance prescrite pour le lendemain | rejet `unauthorized_prescription` |
 | réserve de régularité, de FC moyenne ou de tendance omise | rejet `missing_regularity_limit`, `missing_average_effort_limit` ou `missing_trend_limit` |
+| tendance V3 probable rédigée comme une amélioration certaine | rejet `missing_trend_qualification` |
 | tendance historique quand l'historique n'est pas autorisé | Evidence Pack vide de tendance, réponse rejetée |
 | timeout, titre Markdown, réponse trop longue, fournisseur absent | fallback déterministe conservé |
 
@@ -1286,6 +1288,12 @@ l'adaptateur puis rejetée au lieu d'être traitée comme complète. Le chemin
 absence de clé ne rapporte pas la durée placeholder de zéro ; un zéro réellement
 mesuré sur une réponse réussie est conservé.
 
+Le code du dépôt configure `gpt-4.1-mini` avec le fournisseur `openai` via
+Emergent (`llm_coach.py`). Le timeout interne de cet adaptateur est 15 secondes ;
+le timeout externe C360 est 8 secondes. La limite de 700 caractères est un
+nettoyage local, pas une limite de capacité documentée du modèle. Aucun test
+n'a vérifié la capacité réelle du fournisseur à produire 60–110 mots.
+
 Aucun appel réel n'a été tenté : aucune clé n'a été utilisée, aucune séance ou
 donnée personnelle transmise, et le transport de test est simulé. Les tests
 simulés ne mesurent pas le modèle. **Coût fournisseur : non mesuré. Latence
@@ -1302,8 +1310,8 @@ modification de dépendances du dépôt. Commandes lancées depuis
 
 | Vérification | Résultat |
 | --- | --- |
-| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q -o addopts=''` | **47 réussis** |
-| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py -q -o addopts=''` | **367 réussis**, 6 avertissements de dépréciation préexistants lors de l'import API |
+| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q -o addopts=''` | **49 réussis** |
+| `PYTHONPATH=. /tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py tests/test_workout_intelligence_v3.py -q -o addopts=''` | **369 réussis**, 6 avertissements de dépréciation lors de l'import API |
 | `python -m py_compile backend/hybrid_coach_c359.py backend/llm_coach.py backend/tests/test_hybrid_coach_c359.py` | réussi |
 | `git diff --check` | réussi |
 
@@ -1330,6 +1338,6 @@ fournisseur n'est invoqué.
 **GO technique : oui, pour l'essai isolé et les cas testés seulement. GO produit :
 non démontré. Verdict global : HOLD** jusqu'à une évaluation de générations
 réelles isolées, sans données personnelles/secrets, puis audit C360 demandé.
-Le SHA d'audit du code avant ce commit documentaire est
-`04637a3b47ba4b17401ba57ab0971d240e49b246`; aucun merge ni déploiement n'est
-effectué.
+Le SHA du code validé est
+`1ea72b1bd35698a1348947bb0e04a149fd7bfa48`; ce rapport sera ensuite livré dans
+un commit documentaire. Aucun merge ni déploiement n'est effectué.
