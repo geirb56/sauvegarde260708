@@ -1,5 +1,141 @@
 # C359 — Coach hybride V1/V3, prototype contrôlé
 
+## Revalidation de livraison — 22 octobre 2026 — HOLD maintenu
+
+Cette section décrit la dernière itération ; les sections suivantes conservent
+les résultats et l'audit historique des livraisons précédentes.
+
+### Périmètre et architecture réellement présents
+
+- PR **#359 existante**, toujours draft ; aucune nouvelle PR, activation,
+  connexion UI/route, opération Garmin/GCCLI, écriture MongoDB, séance réelle,
+  mise en production ou fusion.
+- Base exacte `copilot/dev` :
+  `720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`.
+- HEAD reçu et relu avant cette itération :
+  `ed41c4dddec4aba98ba44167af7af38c5a047ed7`.
+- HEAD du code validé de cette itération :
+  `bba6a47b5cbf407a34290a3b3fd7d8d2bb7bc82e`.
+  La modification suivante est uniquement ce rapport ; le SHA final de
+  livraison est consigné dans le commentaire de la PR pour éviter une référence
+  autoréférentielle.
+
+La branche reçue contenait **déjà** la correction de l'ancienne paraphrase :
+faits structurés V3, prompt de synthèse libre, affirmations/provenances déclarées,
+contrôle indépendant strict et repli sélectionné, avec verdict HOLD explicite.
+Il serait inexact d'attribuer à cette dernière itération le remplacement initial
+des substitutions. Le tableau avant/après et la méthode détaillée ci-dessous
+décrivent cette architecture, conservée ici. Aucun moteur scientifique V2/V3 ni
+transport de production n'a été modifié.
+
+### Changements exacts de cette itération
+
+Dans `backend/hybrid_coach_c359.py`, génération
+`c359-selected-facts-hold-3`, une tendance n'est plus admise sur son seul
+statut/confiance/delta : les champs **déjà évalués par V3** doivent se corroborer.
+Une amélioration ou baisse exige `variation_confirmed=True`, un statut stable
+exige `False`. La grille de sensibilité doit être présente et ses statuts
+cohérents avec le verdict ; les limites `status_sensitive_to_criteria` et
+`reference_structure_unknown` entraînent l'abstention, même en présence d'une
+confiance contradictoire. La période doit être renseignée et positive.
+
+Il s'agit d'un contrôle d'admission conservateur, **pas** d'une nouvelle analyse
+historique : aucun seuil, cohorte, médiane ou calcul physiologique n'est
+recalculé. Confirmation, limites et statuts de sensibilité sont rattachés aux
+chemins de provenance locaux. La limite de contexte terrain/météo non contrôlé
+figure dans le paquet de faits ; elle n'impose pas une réserve répétitive dans
+chaque phrase, mais interdit d'en déduire une cause.
+
+Dans `backend/tests/test_hybrid_coach_c359.py`, **51 cas supplémentaires** :
+contradictions statut/confirmation/sensibilité/limites/période, refus d'une
+assertion auparavant valide après modification de la preuve, repli sans tendance
+rejetée, admissions positives des trois statuts cohérents et comparaison des
+sept fixtures dans chacune des langues FR/EN/ES. Les fixtures et les tests
+existants sont conservés ; les tests vérifient aussi l'absence de mutation de V3.
+Les cas de statut construits pour tester le contrôleur ne sont pas présentés
+comme de nouvelles séances évaluées scientifiquement.
+
+### Comparaisons et limites du contrôle
+
+Les **sept paires de textes complets**, reproduites dans la table « Comparaison
+qualitative des sept fixtures conservées » ci-dessous, ont été régénérées et
+vérifiées : leurs textes restent identiques après ce durcissement. L'évaluation
+par cas et par critère reste donc applicable, avec les mêmes limites.
+Les 21 comparaisons FR/EN/ES sont toutes en repli et HOLD. Les assertions servies
+sont rattachées aux preuves locales ; les propositions libres simulées restent
+rejetées. Le mock de proposition libre est rédigé en français : il exerce un
+refus, **pas** une génération libre EN/ES réussie. Les admissions positives
+FR/EN/ES portent sur les assertions locales, pas sur un LLM multilingue évalué.
+
+**Aucun gain de qualité d'analyse LLM n'est démontré.** La sélection déterministe
+améliore la pertinence de certains replis, mais ne satisfait pas à elle seule
+l'objectif de synthèse intelligente. Le contrôle exact des assertions locales
+n'est ni une validation sémantique générale, ni un contrôle de chiffres seul :
+tout caractère servi est couvert par une assertion locale reconstruite depuis
+les preuves et les droits. Des formulations libres pourtant correctes sont
+refusées. Les nouvelles corroborations de tendance ne changent pas cette
+frontière, ne garantissent pas la vérité des entrées et ne vérifient pas une
+relation causale libre.
+
+Deux blocages supplémentaires restent inchangés : V3 ne porte pas de verdict
+autonome de régularité des répétitions ; le nettoyage partagé du transport coupe
+à 700 caractères, potentiellement au milieu du JSON. Ni les comptes, ni une
+disponibilité de régularité, ni les références déclarées par le fournisseur ne
+comblent ces manques. Le registre de connaissances scientifiques reste vide.
+
+### Vérifications exécutées sur ce code
+
+Environnement Python isolé, outils de tests existants restaurés sans changer
+les dépendances du dépôt ; `backend/pytest.ini` conserve
+`-n 2 --dist loadscope`. Les erreurs initiales de dépendances absentes ont été
+résolues dans cet environnement uniquement, sans modifier de test.
+
+| Vérification | Résultat constaté |
+| --- | --- |
+| Hybride C359 + Narrative V3 + Workout Intelligence V3 | **498 réussis**, 7 avertissements |
+| Les mêmes suites + V2, CoachLanguage, droits et synthèse de séance | **1452 réussis, 3 échecs**, 14 avertissements |
+| Trois tests V2 concernés sur la base exacte extraite par `git archive` | **Les mêmes 3 échecs reproduits** |
+| Sept comparaisons dans chacune des langues FR/EN/ES | **21 replis vérifiés, 21 HOLD**, aucun appel LLM |
+| Flake8 ciblé existant `E9,F63,F7,F82` ; `git diff --check` | Réussis |
+| Scan de secrets des deux fichiers Python avant commit | Aucune détection |
+| CodeQL Python après commit | **0 alerte** |
+| Revue du diff par agent en lecture seule | Aucun problème significatif signalé |
+| Revue groupée de `parallel_validation` | **Indisponible** : modèle demandé absent du registre, malgré l'enveloppe « Success » |
+
+Les trois échecs sont
+`test_comparable_history_stays_separate_and_metrics_are_unchanged[en/fr/es]`,
+dans `test_workout_analysis_v2.py:1838` : attendu
+`meaning.consistent_pacing`, reçu `meaning.hr_without_intensity_with_pacing`.
+Ils sont reproduits cette fois sur la base exacte, pas seulement repris d'un
+rapport antérieur ; aucun de ces tests ni leur moteur n'a été modifié.
+
+Commandes exécutées depuis le répertoire `backend/` de ce dépôt :
+
+```sh
+/tmp/c359-validation-venv/bin/python -m pytest \
+  tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py \
+  tests/test_workout_intelligence_v3.py -q --tb=line
+
+/tmp/c359-validation-venv/bin/python -m pytest \
+  tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py \
+  tests/test_workout_intelligence_v3.py tests/test_workout_analysis_v2.py \
+  tests/test_workout_analysis_v2_unified.py tests/test_workout_analysis_v2_facts.py \
+  tests/test_workout_analysis_v2_phases.py tests/test_coach_language.py \
+  tests/test_coach_workout_access_pr325.py tests/test_coach_session_synthesis_c351.py \
+  -q --tb=line
+```
+
+Les booléens de prérequis fournisseur ont été vérifiés à nouveau : clé configurée
+absente, SDK fournisseur absent. **Aucun appel LLM réel** n'a été effectué.
+Coût et latence fournisseur restent **non disponibles**, jamais remplacés par
+zéro ou par la durée d'un mock.
+
+**Verdict : HOLD.** La sûreté du repli et les refus sont testés, mais la liberté
+narrative nécessaire n'est toujours pas vérifiable de manière assez fiable.
+Ni un juge LLM, ni une heuristique, ni un catalogue élargi de substitutions ne
+sont présentés comme solution. Ne pas activer : garder #359 en draft et attendre
+l'audit demandé.
+
 ## Correction après audit HOLD — PR #359 uniquement
 
 La première version ci-dessous est conservée comme **instantané historique**,
