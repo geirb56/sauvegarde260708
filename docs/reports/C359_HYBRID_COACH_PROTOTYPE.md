@@ -187,6 +187,19 @@ régularité des quatre efforts évite d'affirmer aussi bien « réguliers » qu
 « irréguliers ». Les limites restent dans le paquet structuré pour empêcher le
 générateur de dépasser ces droits d'interprétation.
 
+Appréciation par cas, limitée aux **replis servis**, sans note chiffrée ni
+attribution au LLM :
+
+| Cas | Exactitude | Personnalisation | Pertinence | Naturel | Concision | Conseil | Fiabilité |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Facile | FC/type autorisés | Type et moyenne propres au cas | Pas de réserve historique sans objet | Plus direct, début encore catégoriel | Deux faits | Aucun conseil nouveau | Réserve sur la moyenne maintenue |
+| Longue | Durées déjà présentes dans V3 | 100 contre 50 min habituelles | Particularité de durée mise en tête | Comparaison compréhensible | Deux faits | Enseignement descriptif, pas de cible | Historique explicitement autorisé |
+| Fractionné | Seulement 4 efforts/3 récupérations | Décompte spécifique | Pas de moyenne FC hors sujet | Simple mais peu explicatif | Un fait | Aucun gain de conseil | Ni régularité ni durées individuelles inventées |
+| Peu documentée | Absence de moyenne, pas de toute FC | Limite propre au cas | Incertitude centrale seulement | Direct | Un fait | Abstention justifiée | Aucun type ou seuil inventé |
+| Tapis | Identique au cas facile | Pas de particularité tapis exploitable | Aucun enseignement tapis démontré | Identique au cas facile | Deux faits | Aucun conseil nouveau | Aucune correction de tapis improvisée |
+| Historique | −24 s/km, 6 observations, 92 jours | Tendance propre au cas | Tendance avant métrique secondaire | Plus dense, technique | Deux faits | Signal descriptif, pas de prescription | « Probable » et absence de preuve de forme maintenus |
+| Sans physiologie suffisante | FC moyenne seule, type incertain | Valeur disponible utilisée | Pas de seuil fictif | Direct | Un fait | Abstention | Aucune zone ou intensité physiologique conclue |
+
 | Critère | Observation sur ces textes servis | Limite / verdict partiel |
 | --- | --- | --- |
 | Exactitude | Valeurs et conclusions rattachées aux assertions locales ; pas de nouvelle mesure ou cause | Certification du sous-cas littéral uniquement, pas de validation sémantique libre |
@@ -223,9 +236,12 @@ restaurés dans `.git/c359-venv`, sans modification des dépendances du dépôt 
 Commande ciblée, depuis `backend/` :
 
 ```sh
-../.git/c359-venv/bin/python -m pytest \
+TMPDIR="$PWD/../.git/c359-venv" ../.git/c359-venv/bin/python -m pytest \
   tests/test_hybrid_coach_c359.py tests/test_narrative_coach_v3.py \
-  tests/test_workout_intelligence_v3.py -q
+  tests/test_workout_intelligence_v3.py \
+  --basetemp=../.git/c359-venv/pytest-target-final \
+  --junitxml=../.git/c359-venv/results-target-final.xml \
+  -o junit_family=xunit1 -q --tb=line
 ```
 
 La régression élargie couvre `test_workout_analysis_v2.py`,
@@ -252,6 +268,23 @@ français/anglais/espagnol. Les sept fixtures initiales sont conservées.
 **Mesures fournisseur : non disponibles.** Les sept comparaisons ont
 `cost=None` et `provider_duration_sec=None`. Aucun coût nul ou temps LLM
 n'est inféré d'un mock. Le timeout de 8 secondes n'est pas une latence mesurée.
+
+**Traçabilité de validation :**
+
+- Base exacte `copilot/dev` :
+  `720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`.
+- HEAD de la correction de code :
+  `c6b9a2bc6ae89c6121f5b0a2b9fb00c9dd3b4fbe`.
+  Les dernières sources testées et le code analysé sont ceux de ce commit ;
+  la mise à jour ultérieure du présent rapport est documentaire uniquement.
+  Le SHA de livraison documentaire final est consigné dans le commentaire de
+  livraison de la PR #359 pour éviter un SHA autoréférentiel dans ce fichier.
+- Contrôle de secrets des trois fichiers modifiés : aucune détection.
+- Validation parallèle après commit : **CodeQL Python, zéro alerte**.
+- Revue automatisée groupée **indisponible**, malgré l'enveloppe « Success » :
+  modèle `claude-sonnet-4.6` absent du registre. Ce résultat ne constitue pas
+  une revue réussie. Une revue indépendante en lecture seule n'a identifié
+  aucun problème significatif dans la correction.
 
 **Verdict : HOLD.** Le prototype démontre une meilleure sélection déterministe
 de certains faits, pas une synthèse intelligente libre suffisamment fiable.
