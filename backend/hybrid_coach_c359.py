@@ -190,13 +190,25 @@ def build_admissible_facts(
             "tempo_probable": tr("tempo", "tempo run", "carrera tempo"),
         }[cls.type]
         uncertain = cls.confidence in {"low", "none"}
+        history_qualification = history_classification
+        uncertainty = tr("; le type reste incertain", "; the type remains uncertain",
+                         "; el tipo sigue siendo incierto") if uncertain else ""
+        relative_effort = tr(
+            "; cette classification est relative à ton historique, pas à une intensité physiologique",
+            "; this classification is relative to your history, not physiological intensity",
+            "; esta clasificación es relativa a tu historial, no a la intensidad fisiológica",
+        ) if history_qualification else ""
+        limits = ["probable_not_certain"] + (["low_confidence"] if uncertain else [])
+        conditions = ["v3_classification"]
+        if history_qualification:
+            conditions.append("history_authorized")
+            limits.append("relative_effort_not_physiological_intensity")
         add("session.kind", {"classification": cls.type}, {}, "probable_session_type",
-            cls.confidence, ["v3_classification"] + (["history_authorized"] if history_classification else []),
-            ["probable_not_certain"] + (["low_confidence"] if uncertain else []), 45,
+            cls.confidence, conditions, limits, 45,
             ["session_classification.type", "session_classification.confidence"],
-            tr(f"Type probable de ta séance : {label}" + (" ; le type reste incertain." if uncertain else "."),
-               f"Your probable session type: {label}" + ("; the type remains uncertain." if uncertain else "."),
-               f"Tipo probable de tu sesión: {label}" + ("; el tipo sigue siendo incierto." if uncertain else ".")))
+            tr(f"Type probable de ta séance : {label}{uncertainty}{relative_effort}.",
+               f"Your probable session type: {label}{uncertainty}{relative_effort}.",
+               f"Tipo probable de tu sesión: {label}{uncertainty}{relative_effort}."))
 
     hr = intensity.hr_used_bpm
     if _finite(hr):
@@ -413,7 +425,7 @@ def _unique_object(pairs):
 async def _transport(system, prompt, user, context_type):
     from llm_coach import _call_gpt
 
-    return await _call_gpt(system, prompt, user, context_type)
+    return await _call_gpt(system, prompt, user, context_type, sanitize_errors=True)
 
 
 async def generate_hybrid_coach(
@@ -471,7 +483,7 @@ async def generate_hybrid_coach(
             (transport or _transport)(system, prompt, "anonymous", "c359_hybrid"),
             timeout=TIMEOUT_SECONDS,
         )
-        duration = metadata.get("duration_sec") if isinstance(metadata, dict) else None
+        duration = metadata.get("duration_sec") if success is True and isinstance(metadata, dict) else None
         if _finite(duration) and duration >= 0:
             result.provider_duration_sec = duration
         if success is True and isinstance(text, str):

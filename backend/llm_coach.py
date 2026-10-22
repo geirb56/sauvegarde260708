@@ -210,7 +210,8 @@ async def _call_gpt(
     system_prompt: str,
     user_prompt: str,
     user_id: str,
-    context_type: str
+    context_type: str,
+    sanitize_errors: bool = False,
 ) -> Tuple[Optional[str], bool, Dict]:
     """Call the configured LLM model via Emergent LLM Key."""
 
@@ -264,7 +265,10 @@ async def _call_gpt(
     except Exception as e:
         elapsed = time.time() - start_time
         metadata["duration_sec"] = round(elapsed, 2)
-        logger.error(f"[LLM] ❌ Error: {e}")
+        if sanitize_errors:
+            logger.error("[LLM] Provider error")
+        else:
+            logger.error(f"[LLM] ❌ Error: {e}")
         return None, False, metadata
 
 

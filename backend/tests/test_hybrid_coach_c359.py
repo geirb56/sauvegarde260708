@@ -4,8 +4,10 @@ import asyncio
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import json
+import logging
 from pathlib import Path
 import sys
+from types import ModuleType
 
 import pytest
 
@@ -378,6 +380,28 @@ def test_history_derived_easy_classification_is_not_leaked():
     assert all("facile" not in f.assertion for f in _facts(v3))
 
 
+@pytest.mark.parametrize("language,qualification", [
+    ("fr", "relative à ton historique, pas à une intensité physiologique"),
+    ("en", "relative to your history, not physiological intensity"),
+    ("es", "relativa a tu historial, no a la intensidad fisiológica"),
+])
+@pytest.mark.parametrize("classification", ["easy_run_probable", "steady_run_probable"])
+def test_history_classification_keeps_relative_effort_qualification(
+    language, qualification, classification,
+):
+    v3 = synthetic_case("no_physiology")
+    v3.session_classification.type = classification
+    v3.session_classification.decision_tier = "individual_history"
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    fact = next(f for f in facts if f.id == "session.kind")
+
+    assert "relative_effort_not_physiological_intensity" in fact.important_limits
+    assert qualification in fact.assertion
+    assert qualification in hybrid.select_deterministic_synthesis(facts)[0].text
+    assert _validate(literal_payload([fact]), v3, permissions=permissions, language=language)
+
+
 def test_prescription_conformity_cannot_launder_unauthorized_history():
     v3 = synthetic_case("long")
     v3.prescription_assessment = WIV3PrescriptionAssessment(status="deviation")
@@ -583,6 +607,65 @@ def test_default_adapter_reuses_runindex_provider_without_private_identity(trunc
     assert result.transport_kind == "runindex"
     assert result.provider_duration_sec == 0.25 and result.cost is None
     assert "shared_adapter_700_char_truncation" in result.blockers
+
+
+def test_default_adapter_sanitizes_provider_exception_logs(monkeypatch, caplog):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    import llm_coach
+
+    monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "sk-emergent-test")
+    emergent = ModuleType("emergentintegrations")
+    emergent.__path__ = []
+    llm = ModuleType("emergentintegrations.llm")
+    llm.__path__ = []
+    chat = ModuleType("emergentintegrations.llm.chat")
+
+    class FailingChat:
+        def __init__(self, **kwargs):
+            pass
+
+        def with_model(self, *args):
+            return self
+
+        async def send_message(self, message):
+            raise RuntimeError("private-request-response-sentinel")
+
+    chat.LlmChat = FailingChat
+
+    def user_message(**kwargs):
+        return object()
+
+    chat.UserMessage = user_message
+    monkeypatch.setitem(sys.modules, "emergentintegrations", emergent)
+    monkeypatch.setitem(sys.modules, "emergentintegrations.llm", llm)
+    monkeypatch.setitem(sys.modules, "emergentintegrations.llm.chat", chat)
+
+    with caplog.at_level(logging.ERROR, logger="llm_coach"):
+        result = _run()
+
+    assert result.transport_kind == "runindex"
+    assert result.reason == "invalid_response_or_provider_error"
+    assert "private-request-response-sentinel" not in caplog.text
+    assert "[LLM] Provider error" in caplog.text
+
+
+def test_default_adapter_missing_key_does_not_report_unmeasured_latency(monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    import llm_coach
+
+    monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "")
+    result = _run()
+    assert result.provider_attempted and result.transport_kind == "runindex"
+    assert result.provider_duration_sec is None
+
+
+def test_successful_zero_duration_is_preserved():
+    async def provider(*args):
+        response, success, _ = await _literal_provider()(*args)
+        return response, success, {"duration_sec": 0}
+
+    result = _run(transport=provider)
+    assert result.provider_duration_sec == 0
 
 
 @pytest.mark.parametrize("metadata", [
