@@ -4,8 +4,8 @@
 
 Cette section est le rapport courant pour la PR **#360**, branche existante
 `copilot/c359-recovery`, base `copilot/dev`. Elle supersède les verdicts C359
-historiques ci-dessous sans les réécrire. HEAD du code évalué et de cette
-livraison C360 : `7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`.
+historiques ci-dessous sans les réécrire. HEAD final du code C360 évalué :
+`7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`.
 
 ### Architecture avant / après
 
@@ -301,8 +301,8 @@ Le feature flag `C359_HYBRID_COACH_ENABLED` reste **OFF par défaut**.
   narrative structurée, mais pas une rédaction libre sûre et une qualité
   supérieure vérifiée. Attendre l'audit C360 ; ne pas activer ni intégrer.
 
-Base : `copilot/dev` (`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD du code
-testé et SHA final C360 : `7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`. Suite ciblée :
+Base : `copilot/dev` (`720fb5cd31faca5f9f6435bb0be4c7cbf0f3fcf6`). HEAD final du
+code C360 testé : `7942e4bc2b14febe10bd0eadb8cb5296eb1563ec`. Suite ciblée :
 `/tmp/c360-validation-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py -q --tb=short`
 depuis `backend/` — **164 passed**.
 
