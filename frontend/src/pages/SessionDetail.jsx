@@ -16,6 +16,7 @@ import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
 import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
+import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
@@ -52,46 +53,53 @@ export default function SessionDetail() {
   const { t, lang } = useLanguage();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
-  const { data: intelligence, error: intelligenceError } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
+  const { data: intelligence, error: intelligenceError, loading: intelligenceLoading, scope } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
   const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
   const { unitSystem } = useUnitSystem();
   const [session, setSession] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [analysisScope, setAnalysisScope] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sessionScope, setSessionScope] = useState(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    setSession(null);
+    setSessionScope(id);
     const loadSession = async () => {
       setLoading(true);
       try {
-        const sessionRes = await axios.get(`${API}/workouts/${id}`);
-        setSession(sessionRes.data);
+        const sessionRes = await axios.get(`${API}/workouts/${id}`, { signal });
+        if (!signal.aborted) setSession(sessionRes.data);
       } catch (error) {
-        setSession(null);
+        if (!signal.aborted) setSession(null);
       } finally {
-        setLoading(false);
+        if (!signal.aborted) setLoading(false);
       }
     };
 
     loadSession();
+    return () => controller.abort();
   }, [id]);
 
   useEffect(() => {
-    let active = true;
-    setAnalysisScope(JSON.stringify([id, lang]));
+    const controller = new AbortController();
+    const { signal } = controller;
+    setAnalysisScope(scope);
     setAnalysis(null);
-    if (!canAccessAnalysis) return () => { active = false; };
+    if (!canAccessAnalysis) return undefined;
 
-    axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`)
+    axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal })
       .then((res) => {
-        if (active) setAnalysis(res.data);
+        if (!signal.aborted) setAnalysis(res.data);
       })
       .catch(() => {
-        if (active) setAnalysis(null);
+        if (!signal.aborted) setAnalysis(null);
       });
 
-    return () => { active = false; };
-  }, [id, lang, canAccessAnalysis]);
+    return () => controller.abort();
+  }, [id, lang, canAccessAnalysis, scope]);
 
   const locale = localeByLang[lang] || "en-US";
   const primaryMetrics = useMemo(() => {
@@ -113,7 +121,7 @@ export default function SessionDetail() {
     return metrics;
   }, [session, t, unitSystem, lang]);
 
-  if (loading) return <DetailSkeleton />;
+  if (loading || sessionScope !== id) return <DetailSkeleton />;
 
   if (!session) {
     return (
@@ -127,7 +135,7 @@ export default function SessionDetail() {
     );
   }
 
-  const analysisForRender = canAccessAnalysis && analysisScope === JSON.stringify([id, lang]) ? analysis : null;
+  const analysisForRender = canAccessAnalysis && analysisScope === scope ? analysis : null;
   const coachConclusions = getCoachConclusions(analysisForRender);
   const classification = getSessionClassification(analysisForRender, t);
   const observation = getDistinctCoachObservation(analysisForRender);
@@ -169,6 +177,7 @@ export default function SessionDetail() {
       </div>
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
+      {intelligenceLoading && <WorkoutCoachPending t={t} />}
       {narrative && <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
         {analysisDetails}
       </NarrativeWorkoutAnalysis>}
@@ -192,7 +201,7 @@ export default function SessionDetail() {
       </section>
 
       {!narrative && <>
-      {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
+      {!intelligenceLoading && coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
         <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
         {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
       </section>}
@@ -200,7 +209,7 @@ export default function SessionDetail() {
       </>}
 
       {canAccessAnalysis ? <>
-        {!narrative && analysisForRender && (observations.length > 0 || fallback || classification || observation
+        {!intelligenceLoading && !narrative && analysisForRender && (observations.length > 0 || fallback || classification || observation
           || (analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text)) && <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">

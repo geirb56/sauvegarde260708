@@ -196,9 +196,9 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
     }[band]
     text = _localized(
         language,
-        f"{label} sur tes {len(paces)} répétitions : écart moyen de {_n(dispersion)} s/km par rapport à l'allure centrale.",
-        f"{label} across your {len(paces)} repetitions: an average gap of {_n(dispersion)} s/km from the central pace.",
-        f"{label} en tus {len(paces)} repeticiones: diferencia media de {_n(dispersion)} s/km respecto al ritmo central.",
+        f"{label} sur tes {len(paces)} répétitions : écart moyen de {_n(dispersion)} s/km par rapport à l'allure médiane.",
+        f"{label} across your {len(paces)} repetitions: an average gap of {_n(dispersion)} s/km from the median pace.",
+        f"{label} en tus {len(paces)} repeticiones: diferencia media de {_n(dispersion)} s/km respecto a la mediana de los ritmos.",
     )
     atypical = []
     if len(paces) >= 4:

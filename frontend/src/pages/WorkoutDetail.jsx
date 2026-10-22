@@ -14,6 +14,7 @@ import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
 import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
+import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { formatAnalysisNumber } from "@/lib/analysisFormat";
 import {
   ArrowLeft,
@@ -80,9 +81,10 @@ export default function WorkoutDetail() {
   const { unitSystem } = useUnitSystem();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
-  const { data: intelligence, error: intelligenceError } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
+  const { data: intelligence, error: intelligenceError, loading: intelligenceLoading, scope } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
   const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
   const [workout, setWorkout] = useState(null);
+  const [workoutScope, setWorkoutScope] = useState(null);
   const [workoutLoading, setWorkoutLoading] = useState(true);
   const [workoutError, setWorkoutError] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -92,6 +94,7 @@ export default function WorkoutDetail() {
 
   useEffect(() => {
     setWorkout(null);
+    setWorkoutScope(id);
     setWorkoutLoading(true);
     setWorkoutError(null);
 
@@ -115,7 +118,7 @@ export default function WorkoutDetail() {
   }, [id]);
 
   useEffect(() => {
-    setAnalysisScope(JSON.stringify([id, lang]));
+    setAnalysisScope(scope);
     setAnalysis(null);
     setAnalysisError(false);
     setAnalysisLoading(canAccessAnalysis);
@@ -137,12 +140,12 @@ export default function WorkoutDetail() {
       });
 
     return () => controller.abort();
-  }, [id, lang, canAccessAnalysis]);
+  }, [id, lang, canAccessAnalysis, scope]);
 
   const goToAskCoach = () => navigate(id ? `/coach?analyze=${encodeURIComponent(id)}` : "/coach");
   const backTo = ALLOWED_BACK_ROUTES.has(location.state?.from) ? location.state.from : "/sessions";
 
-  if (workoutLoading) {
+  if (workoutLoading || workoutScope !== id) {
     return (
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
@@ -174,7 +177,7 @@ export default function WorkoutDetail() {
     month: "short",
     day: "numeric",
   }) : t("workoutDetailExtended.dataUnavailable");
-  const analysisForRender = canAccessAnalysis && analysisScope === JSON.stringify([id, lang])
+  const analysisForRender = canAccessAnalysis && analysisScope === scope
     && !analysisLoading && !analysisError ? analysis : null;
   const physiology = analysisForRender?.physiology;
   const pacing = analysisForRender?.pacing;
@@ -249,9 +252,9 @@ export default function WorkoutDetail() {
               <dd className="text-base font-semibold">{value}</dd>
             </div>)}
           </dl>
-          {canAccessAnalysis && analysisLoading ? (
+          {canAccessAnalysis && !narrative && analysisLoading ? (
             <AnalysisSkeleton />
-          ) : canAccessAnalysis && analysisError ? (
+          ) : canAccessAnalysis && !narrative && analysisError ? (
             <AnalysisError t={t} />
           ) : !canAccessAnalysis && !subscriptionLoading ? (
             <WorkoutAnalysisAccessNotice t={t} />
@@ -261,7 +264,7 @@ export default function WorkoutDetail() {
       </section>
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
-      {narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+      {intelligenceLoading ? <><WorkoutCoachPending t={t} />{analysisDetails}</> : narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
         {analysisDetails}
       </NarrativeWorkoutAnalysis> : <>
       {hasAvailableSynthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
@@ -308,7 +311,7 @@ export default function WorkoutDetail() {
       </>}
 
       {canAccessAnalysis && <section aria-labelledby="coach-advice-title">
-        {!narrative && coachObservation && <div className="mb-3">
+        {!intelligenceLoading && !narrative && coachObservation && <div className="mb-3">
           <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachObservation")}</h2>
           <p className="text-sm leading-relaxed" data-testid="advice-text">{coachObservation}</p>
         </div>}

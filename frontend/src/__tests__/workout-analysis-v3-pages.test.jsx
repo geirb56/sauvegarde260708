@@ -198,7 +198,7 @@ function setAccess({ loading = false, allowed = true, plan = "PREMIUM" } = {}) {
   });
 }
 
-function mockRequests({ analysis = makeAnalysis(), workoutPayload = workout, intelligence, rejectV3 = false, v3Request } = {}) {
+function mockRequests({ analysis = makeAnalysis(), workoutPayload = workout, intelligence, rejectV3 = false, v3Request, v2Request, workoutRequest } = {}) {
   axios.get.mockImplementation((url, options) => {
     const parsed = new URL(url, "http://localhost");
     const id = parsed.pathname.split("/").pop();
@@ -206,13 +206,15 @@ function mockRequests({ analysis = makeAnalysis(), workoutPayload = workout, int
     if (parsed.pathname.includes("/coach/workout-intelligence/")) {
       if (v3Request) return v3Request({ id, language, options });
       return rejectV3
-        ? Promise.reject(new Error("Private upstream diagnostics must not be exposed."))
+        ? Promise.reject(Object.assign(new Error("Private upstream diagnostics must not be exposed."), { response: { status: 500 } }))
         : Promise.resolve({ data: intelligence === undefined ? makeIntelligence(language) : intelligence });
     }
     if (parsed.pathname.includes("/coach/workout-analysis/")) {
+      if (v2Request) return v2Request({ id, language, options });
       return Promise.resolve({ data: { ...analysis, workout: { ...analysis.workout, id } } });
     }
     if (parsed.pathname.includes("/workouts/")) {
+      if (workoutRequest) return workoutRequest({ id, language, options });
       return Promise.resolve({ data: { ...workoutPayload, id } });
     }
     return Promise.reject(new Error(`Unexpected request: ${url}`));
@@ -230,7 +232,7 @@ function Controls({ nextRoute }) {
 function renderPage(route, path, Page, language = "en") {
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
   window.localStorage.setItem("runindex_unit_system", "metric");
-  return render(
+  const tree = () => (
     <LanguageProvider>
       <UnitProvider>
         <MemoryRouter initialEntries={[route]}>
@@ -238,8 +240,10 @@ function renderPage(route, path, Page, language = "en") {
           <Routes><Route path={path} element={<Page />} /></Routes>
         </MemoryRouter>
       </UnitProvider>
-    </LanguageProvider>,
+    </LanguageProvider>
   );
+  const result = render(tree());
+  return { ...result, refresh: () => result.rerender(tree()) };
 }
 
 function expectNoLegacyNarrative() {
@@ -257,8 +261,9 @@ function expectIndependentRequests(id = "w1", language = "en") {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -298,7 +303,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     const evidence = screen.getByTestId("workout-evidence");
     expect(evidence).toHaveTextContent("6");
     expect(evidence).toHaveTextContent("5");
-    expect(evidence).toHaveTextContent(language === "en" ? "6.6" : "6,6");
+    expect(evidence).not.toHaveTextContent(/6[,.]6|standard deviation|Écart-type|Desviación estándar/);
     expect(narrative.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     const phases = screen.getByTestId("structured-phase-analysis");
@@ -313,6 +318,8 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(within(phases).getAllByTestId("phase-recovery-row")).toHaveLength(5);
     expect(within(phases).getByTestId("effort-regularity"))
       .toHaveTextContent(language === "en" ? "6.6 s/km" : "6,6 s/km");
+    expect(within(phases).getByTestId("effort-regularity"))
+      .toHaveTextContent(translations[language].workoutNarrative.regularity);
 
     const splits = screen.getByTestId("kilometer-splits");
     expect(splits.tagName).toBe("DETAILS");
@@ -337,14 +344,14 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
   });
 
-  test.each([null, NaN, Infinity, -1])("does not display invalid regularity %s as a recorded measurement", async (dispersion) => {
+  test.each(languages.flatMap((language) => [null, NaN, Infinity, -1, undefined].map((value) => [language, value])))("does not display invalid %s regularity %s as a recorded measurement", async (language, dispersion) => {
     const analysis = makeAnalysis();
     analysis.phase_analysis.effort_regularity.pace_dispersion_sec_per_km = dispersion;
     mockRequests({ analysis });
-    renderPage(route, path, Page);
+    renderPage(route, path, Page, language);
     await screen.findByTestId("narrative-coach");
     expect(screen.getByTestId("workout-evidence"))
-      .not.toHaveTextContent(translations.en.workoutNarrative.regularity);
+      .not.toHaveTextContent(translations[language].workoutNarrative.regularity);
     expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
   });
 
@@ -354,7 +361,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     mockRequests({ analysis });
     renderPage(route, path, Page);
     await screen.findByTestId("narrative-coach");
-    expect(screen.getByTestId("workout-evidence")).toHaveTextContent("0 s/km");
+    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent("0 s/km");
     expect(screen.getByTestId("effort-regularity")).toHaveTextContent("0 s/km");
   });
 
@@ -504,6 +511,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
     expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
     expect(screen.queryByTestId("workout-evidence")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
   });
 
   test.each(["TRIAL", "PREMIUM"])("uses feature entitlement rather than a plan-name restriction for %s", async (plan) => {
@@ -515,16 +523,20 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expectIndependentRequests();
   });
 
-  test("loads V2 independently while the V3 response remains pending", async () => {
+  test.each(languages)("keeps only factual V2 evidence and a local %s placeholder while V3 is pending", async (language) => {
     const pending = deferred();
     mockRequests({ v3Request: () => pending.promise });
-    renderPage(route, path, Page);
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(legacyText);
+    renderPage(route, path, Page, language);
+    expect(await screen.findByTestId("coach-pending")).toHaveTextContent(translations[language].workoutNarrative.pending);
+    expectNoLegacyNarrative();
+    expect(screen.queryByText("Recorded session.")).not.toBeInTheDocument();
     expect(screen.getByTestId("structured-phase-analysis")).toBeInTheDocument();
-    expectIndependentRequests();
-    await act(async () => { pending.resolve({ data: makeIntelligence() }); });
+    expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
+    expectIndependentRequests("w1", language);
+    await act(async () => { pending.resolve({ data: makeIntelligence(language) }); });
     expect(await screen.findByTestId("narrative-coach")).toBeInTheDocument();
     expectNoLegacyNarrative();
+    expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
   });
 
   test("ignores a late response for a previous workout route", async () => {
@@ -559,5 +571,345 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(screen.getByTestId("narrative-coach")).toHaveTextContent(copy.es.headline);
     expect(screen.queryByText(copy.en.headline)).not.toBeInTheDocument();
     expectIndependentRequests("w1", "es");
+  });
+
+  test.each(languages)("keeps backend MAD narrative distinct from the detailed standard deviation in %s", async (language) => {
+    const intelligence = makeIntelligence(language);
+    const mad = language === "en" ? "MAD 6.6 s/km" : "MAD 6,6 s/km";
+    intelligence.narrative_coach_v3.analysis = `${copy[language].analysis} ${mad}`;
+    const analysis = makeAnalysis();
+    Object.assign(analysis.phase_analysis.effort_regularity, {
+      pace_dispersion_sec_per_km: 7.7, pace_sample_count: 4,
+      comparable_effort_count: 4, effort_count: 6, partial_comparison: true,
+    });
+    mockRequests({ intelligence, analysis });
+    renderPage(route, path, Page, language);
+    expect(await screen.findByTestId("narrative-coach")).toHaveTextContent(mad);
+    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(/6[,.]6|7[,.]7/);
+    const details = screen.getByTestId("workout-analysis-details");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(details.querySelector("summary"));
+    const deviation = within(details).getByTestId("effort-regularity");
+    expect(deviation).toBeVisible();
+    expect(deviation).toHaveTextContent(translations[language].workoutNarrative.regularity);
+    expect(deviation).toHaveTextContent(language === "en" ? "7.7 s/km" : "7,7 s/km");
+    expect(deviation).toHaveTextContent("4/6");
+    expect(deviation).toHaveTextContent(translations[language].workoutDetailExtended.partialEffortComparison);
+    expect(screen.getAllByText(/7[,.]7 s\/km/)).toHaveLength(1);
+    expectNoLegacyNarrative();
+  });
+
+  test.each(languages)("renders valid %s V3 and factual workout before slow V2", async (language) => {
+    const pending = deferred();
+    mockRequests({ v2Request: () => pending.promise });
+    renderPage(route, path, Page, language);
+    expect(await screen.findByTestId("narrative-coach")).toBeVisible();
+    expect(screen.getByText("Morning Run")).toBeVisible();
+    expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+    expectNoLegacyNarrative();
+    expectIndependentRequests("w1", language);
+    await act(async () => { pending.resolve({ data: makeAnalysis() }); });
+    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(screen.getByTestId("structured-phase-analysis").closest("details")).toBeInTheDocument();
+    expectNoLegacyNarrative();
+  });
+
+  test("shows factual workout and a local Coach placeholder while both analysis requests are pending", async () => {
+    const v2 = deferred();
+    const v3 = deferred();
+    mockRequests({ v2Request: () => v2.promise, v3Request: () => v3.promise });
+    renderPage(route, path, Page);
+    expect(await screen.findByText("Morning Run")).toBeVisible();
+    expect(screen.getByTestId("coach-pending")).toBeVisible();
+    expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
+    expectNoLegacyNarrative();
+    await act(async () => {
+      v2.resolve({ data: makeAnalysis() });
+      v3.resolve({ data: makeIntelligence() });
+    });
+    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+  });
+
+  test("does not declare missing factual data while its request is pending after analysis errors", async () => {
+    const pendingWorkout = deferred();
+    mockRequests({
+      rejectV3: true, v2Request: () => Promise.reject(new Error("V2 unavailable")),
+      workoutRequest: () => pendingWorkout.promise,
+    });
+    renderPage(route, path, Page);
+    await act(async () => {});
+    expect(screen.queryByTestId("analysis-not-found")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-not-found")).not.toBeInTheDocument();
+    await act(async () => { pendingWorkout.resolve({ data: workout }); });
+    expect(screen.getByText("Morning Run")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(translations.en.workoutNarrative.unavailable);
+  });
+
+  test.each(languages.flatMap((language) => ["absent", "error"].map((outcome) => [language, outcome])))(
+    "does not show a V2 load error before V2 finishes after %s V3 is terminal %s",
+    async (language, outcome) => {
+      const pendingV2 = deferred();
+      mockRequests({ intelligence: {}, rejectV3: outcome === "error", v2Request: () => pendingV2.promise });
+      renderPage(route, path, Page, language);
+      expect(await screen.findByText("Morning Run")).toBeVisible();
+      await waitFor(() => expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument());
+      expect(screen.queryByText(translations[language].workoutDetailExtended.analysisLoadError)).not.toBeInTheDocument();
+      expect(screen.queryByTestId("analysis-not-found")).not.toBeInTheDocument();
+      expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
+      expectNoLegacyNarrative();
+      await act(async () => { pendingV2.reject(new Error("V2 now terminal unavailable")); });
+      if (Page !== SessionDetail) {
+        expect(screen.getByText(translations[language].workoutDetailExtended.analysisLoadError)).toBeVisible();
+      }
+      expect(screen.getByText("Morning Run")).toBeVisible();
+      expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+    },
+  );
+
+  test.each(languages)("does not flash older conclusions during a 2500ms %s V3 request", async (language) => {
+    jest.useFakeTimers();
+    try {
+      mockRequests({ v3Request: () => new Promise((resolve) => {
+        setTimeout(() => resolve({ data: makeIntelligence(language) }), 2500);
+      }) });
+      renderPage(route, path, Page, language);
+      await act(async () => {});
+      expect(screen.getByTestId("coach-pending")).toBeVisible();
+      expect(screen.getByText("Morning Run")).toBeVisible();
+      expectNoLegacyNarrative();
+      await act(async () => { jest.advanceTimersByTime(2499); });
+      expect(screen.getByTestId("coach-pending")).toBeVisible();
+      expectNoLegacyNarrative();
+      await act(async () => { jest.advanceTimersByTime(1); });
+      expect(screen.getByTestId("narrative-coach")).toBeVisible();
+      expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+      expectNoLegacyNarrative();
+      expectIndependentRequests("w1", language);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test.each(languages)("omits missing and nonfinite %s factual metrics without inventing zeros", async (language) => {
+    const analysis = makeAnalysis();
+    analysis.pacing = {};
+    analysis.physiology = {};
+    analysis.comparison = {};
+    analysis.phase_analysis = { available: false };
+    mockRequests({
+      analysis,
+      workoutPayload: { ...workout, distance_km: null, duration_minutes: undefined,
+        avg_pace_min_km: NaN, avg_speed_kmh: Infinity, avg_heart_rate: null, km_splits: [] },
+    });
+    const { container } = renderPage(route, path, Page, language);
+    expect(await screen.findByTestId("narrative-coach")).toBeVisible();
+    expect(container).not.toHaveTextContent(/NaN|Infinity|undefined|0 bpm|0 s\/km/);
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expectNoLegacyNarrative();
+  });
+
+  test.each(languages)("does not flash a legacy header summary with missing %s metrics while V3 is pending", async (language) => {
+    const pending = deferred();
+    const analysis = makeAnalysis();
+    delete analysis.coach_language;
+    analysis.summary.text = "Legacy header summary must stay hidden.";
+    analysis.pacing = {};
+    analysis.physiology = {};
+    analysis.comparison = {};
+    analysis.phase_analysis = { available: false };
+    mockRequests({
+      analysis, v3Request: () => pending.promise,
+      workoutPayload: { ...workout, distance_km: null, duration_minutes: undefined,
+        avg_pace_min_km: NaN, avg_speed_kmh: Infinity, avg_heart_rate: null, km_splits: [] },
+    });
+    const { container } = renderPage(route, path, Page, language);
+    expect(await screen.findByTestId("coach-pending")).toBeVisible();
+    expect(screen.getByText("Morning Run")).toBeVisible();
+    expect(screen.queryByTestId("header-context")).not.toBeInTheDocument();
+    expect(screen.queryByText(analysis.summary.text)).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/NaN|Infinity|undefined|0 bpm|0 s\/km/);
+    expectNoLegacyNarrative();
+    await act(async () => { pending.resolve({ data: makeIntelligence(language) }); });
+    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(screen.queryByText(analysis.summary.text)).not.toBeInTheDocument();
+    expectNoLegacyNarrative();
+  });
+
+  test("aborts every owned request on unmount and ignores late results", async () => {
+    const pending = deferred();
+    mockRequests({
+      v3Request: () => pending.promise, v2Request: () => pending.promise,
+      workoutRequest: () => pending.promise,
+    });
+    const { unmount } = renderPage(route, path, Page);
+    const signals = axios.get.mock.calls.map(([, options]) => options.signal);
+    expect(signals).toHaveLength(3);
+    unmount();
+    signals.forEach((signal) => expect(signal.aborted).toBe(true));
+    await act(async () => { pending.resolve({ data: makeIntelligence() }); });
+    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+  });
+
+  test("uses a finite real HTTP timeout and terminal error fallback", async () => {
+    let fail;
+    mockRequests({ v3Request: ({ options }) => {
+      expect(options.timeout).toBe(15000);
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+      return new Promise((resolve, reject) => { fail = reject; });
+    } });
+    renderPage(route, path, Page);
+    await screen.findByTestId("coach-pending");
+    await act(async () => { fail(Object.assign(new Error("timeout"), { code: "ECONNABORTED" })); });
+    expect(screen.getByTestId("coach-primary")).toHaveTextContent(legacyText);
+    expect(screen.getByRole("status")).toHaveTextContent(translations.en.workoutNarrative.unavailable);
+    expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+  });
+
+  test.each(languages.flatMap((language) => ["absent", "incomplete", "HTTP500"].map((outcome) => [language, outcome])))(
+    "waits for the %s V3 terminal %s response before revealing legacy fallback",
+    async (language, outcome) => {
+      const pending = deferred();
+      mockRequests({ v3Request: () => pending.promise });
+      renderPage(route, path, Page, language);
+      await screen.findByTestId("coach-pending");
+      expectNoLegacyNarrative();
+      await act(async () => {
+        if (outcome === "HTTP500") {
+          pending.reject(Object.assign(new Error("private"), { response: { status: 500 } }));
+        } else if (outcome === "absent") {
+          pending.resolve({ data: null });
+        } else {
+          const incomplete = makeIntelligence(language);
+          incomplete.narrative_coach_v3.analysis = "";
+          pending.resolve({ data: incomplete });
+        }
+      });
+      expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+      expect(screen.getAllByText(legacyText)).toHaveLength(1);
+      if (outcome === "HTTP500") {
+        expect(screen.getByRole("status")).toHaveTextContent(translations[language].workoutNarrative.unavailable);
+      } else {
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      }
+      expectIndependentRequests("w1", language);
+    },
+  );
+
+  test.each(languages)("does not mislabel a first-to-last pace change as standard deviation in %s", async (language) => {
+    const analysis = makeAnalysis();
+    analysis.phase_analysis.effort_regularity.pace_dispersion_sec_per_km = null;
+    analysis.phase_analysis.effort_regularity.first_to_last_pace_change_sec_per_km = 12;
+    mockRequests({ analysis });
+    renderPage(route, path, Page, language);
+    await screen.findByTestId("narrative-coach");
+    const details = screen.getByTestId("workout-analysis-details");
+    fireEvent.click(details.querySelector("summary"));
+    expect(screen.getByTestId("effort-regularity")).toHaveTextContent(translations[language].workoutDetailExtended.firstToLastPace);
+    expect(screen.getByTestId("effort-regularity")).toHaveTextContent("+12 s/km");
+    expect(screen.getByTestId("effort-regularity")).not.toHaveTextContent(translations[language].workoutNarrative.regularity);
+  });
+
+  test("revocation hides completed Premium data and restoration starts a fresh scope", async () => {
+    mockRequests();
+    const { refresh } = renderPage(route, path, Page);
+    await screen.findByTestId("narrative-coach");
+    const previousSignals = axios.get.mock.calls.filter(([url]) => url.includes("/coach/")).map(([, options]) => options.signal);
+    setAccess({ allowed: false, plan: "FREE" });
+    refresh();
+    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+    previousSignals.forEach((signal) => expect(signal.aborted).toBe(true));
+
+    const current = deferred();
+    mockRequests({ v3Request: () => current.promise, v2Request: () => current.promise });
+    setAccess();
+    refresh();
+    await screen.findByTestId("coach-pending");
+    expectNoLegacyNarrative();
+    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    await act(async () => { current.resolve({ data: makeIntelligence() }); });
+    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/"))).toHaveLength(2);
+  });
+
+  test("ignores stale V2 and V3 results through a rapid revoke/restore cycle", async () => {
+    const staleV2 = deferred();
+    const staleV3 = deferred();
+    mockRequests({ v2Request: () => staleV2.promise, v3Request: () => staleV3.promise });
+    const { refresh } = renderPage(route, path, Page);
+    await screen.findByTestId("coach-pending");
+    const oldSignals = axios.get.mock.calls.filter(([url]) => url.includes("/coach/")).map(([, options]) => options.signal);
+    setAccess({ allowed: false, plan: "FREE" });
+    refresh();
+    const freshV2 = deferred();
+    const freshV3 = deferred();
+    mockRequests({ v2Request: () => freshV2.promise, v3Request: () => freshV3.promise });
+    setAccess();
+    refresh();
+    await screen.findByTestId("coach-pending");
+    oldSignals.forEach((signal) => expect(signal.aborted).toBe(true));
+    await act(async () => {
+      staleV2.resolve({ data: makeAnalysis() });
+      staleV3.resolve({ data: makeIntelligence() });
+    });
+    expect(screen.getByTestId("coach-pending")).toBeVisible();
+    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    expectNoLegacyNarrative();
+    await act(async () => { freshV3.resolve({ data: {} }); });
+    expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+    await act(async () => { freshV2.resolve({ data: makeAnalysis() }); });
+    expect(screen.getByTestId("coach-primary")).toHaveTextContent(legacyText);
+  });
+
+  test("aborts stale session and V2 route requests without replacing current facts or fallback", async () => {
+    const staleV2 = deferred();
+    const staleWorkout = deferred();
+    mockRequests({
+      intelligence: {},
+      v2Request: ({ id }) => id === "w1" ? staleV2.promise
+        : Promise.resolve({ data: { ...makeAnalysis(), workout: { ...makeAnalysis().workout, id, name: "Current workout." }, coach_language: {
+          version: "v1", conclusions: [{ ...makeAnalysis().coach_language.conclusions[0], text: "Current fallback." }],
+        } } }),
+      workoutRequest: ({ id }) => id === "w1" ? staleWorkout.promise
+        : Promise.resolve({ data: { ...workout, id, name: "Current workout." } }),
+    });
+    renderPage(route, path, Page);
+    const oldSignals = axios.get.mock.calls.map(([, options]) => options.signal);
+    fireEvent.click(screen.getByRole("link", { name: "Next test workout" }));
+    expect(await screen.findByText("Current workout.")).toBeVisible();
+    expect(await screen.findByTestId("coach-primary")).toHaveTextContent("Current fallback.");
+    oldSignals.forEach((signal) => expect(signal.aborted).toBe(true));
+    await act(async () => {
+      staleV2.resolve({ data: makeAnalysis() });
+      staleWorkout.resolve({ data: workout });
+    });
+    expect(screen.getByTestId("coach-primary")).toHaveTextContent("Current fallback.");
+    expect(screen.queryByText("Morning Run")).not.toBeInTheDocument();
+    expect(screen.queryByText(legacyText)).not.toBeInTheDocument();
+  });
+
+  test("aborts stale V2 language requests and keeps localized terminal fallback", async () => {
+    const stale = deferred();
+    mockRequests({
+      intelligence: {},
+      v2Request: ({ language }) => language === "en" ? stale.promise
+        : Promise.resolve({ data: { ...makeAnalysis(), coach_language: {
+          version: "v1", conclusions: [{ ...makeAnalysis().coach_language.conclusions[0], text: "Conclusión actual." }],
+        } } }),
+    });
+    renderPage(route, path, Page);
+    await waitFor(() => expectIndependentRequests());
+    const oldSignal = axios.get.mock.calls.find(([url]) => url.includes("/coach/workout-analysis/"))[1].signal;
+    fireEvent.click(screen.getByRole("button", { name: "Switch test language" }));
+    expect(await screen.findByTestId("coach-primary")).toHaveTextContent("Conclusión actual.");
+    expect(oldSignal.aborted).toBe(true);
+    await act(async () => { stale.resolve({ data: makeAnalysis() }); });
+    expect(screen.getByTestId("coach-primary")).toHaveTextContent("Conclusión actual.");
+    expect(screen.queryByText(legacyText)).not.toBeInTheDocument();
   });
 });
