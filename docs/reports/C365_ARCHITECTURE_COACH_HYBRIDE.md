@@ -160,8 +160,10 @@ de prose arbitraire, avec un test positif distinct des significations admises.
 
 Base exacte : `e12f543f89d6cf9e64b4b581430512d96ac7724a`.
 HEAD applicatif testé : `0ecc3edd5b2965c21712e8da49edfb045b461946`.
-Les commits suivants ajoutent les tests C365 et complètent ce rapport ;
-le HEAD final exact et les tests réexécutés sont consignés dans la PR.
+HEAD des tests et du diff revus :
+`f4afe322b2d11de089b95c9226e0ed358684969a`.
+Le commit suivant complète uniquement ce rapport ; le HEAD final exact et les
+tests réexécutés sont consignés dans la PR.
 
 Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/backend` :
 
@@ -187,6 +189,14 @@ timeout effectif avec annulation, exception, troncature et snapshot d’autorit�
 Ce sont des tests déterministes, pas une mesure du comportement d’un véritable LLM.
 Une revue indépendante du diff en lecture seule n’a signalé aucun problème
 significatif ; elle ne certifie pas une garantie absolue de vérité scientifique.
+
+`parallel_validation` exécuté sur le diff commité, déclaré **non trivial** :
+**CodeQL Python exécuté, zéro alerte**. La partie revue automatique de cet outil
+est **indisponible** (binaire `autofind` absent), malgré le libellé global
+« Success » ; ne pas confondre avec une revue accomplie. La revue indépendante
+ci-dessus a bien été réalisée séparément. Scan de secrets de tous les fichiers
+modifiés/créés avant chaque commit : aucun secret détecté.
+Contre-vérification C364 isolée au HEAD revu : **32 passed**, zéro xfail.
 
 ### Sorties synthétiques constatées (sélecteur simulé)
 
