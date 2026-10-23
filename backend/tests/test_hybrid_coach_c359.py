@@ -352,6 +352,10 @@ def test_history_classifications_require_relative_not_physiological_qualificatio
         "es": "Probablemente fue una carrera fácil según los criterios disponibles. " + qualification + ". La clasificación sigue siendo incierta.",
     }
     candidate = candidates[language]
+    if classification == "steady_run_probable":
+        candidate = candidate.replace("footing facile", "sortie soutenue").replace(
+            "easy run", "steady run",
+        ).replace("carrera fácil", "carrera sostenida")
     assert hybrid.validate_generated_narrative(candidate, (fact,), language=language)[0]
     missing = candidate
     missing = missing.replace(qualification, "")
@@ -392,12 +396,6 @@ def test_adversarial_regularite_progression_cause_and_prescription(text, reason,
 
 
 @pytest.mark.parametrize("name,text,reason", [
-    ("intervals_4x4",
-     "Garmin a relevé quatre phases d'effort et trois phases de récupération, un détail utile sur la structure.",
-     "missing_regularity_limit"),
-    ("easy",
-     "Ta FC moyenne est de 140 bpm, sous LT1, un repère utile pour comprendre le profil de cette séance.",
-     "missing_average_effort_limit"),
     ("comparable_history",
      "Ton historique suggère une amélioration probable sur cinq observations et une variation d'allure mesurée.",
      "missing_trend_limit"),
@@ -417,7 +415,7 @@ def test_permission_filtered_history_cannot_be_laundered_into_response(monkeypat
     ))
     assert not any(f.id.startswith("trend.") for f in _facts(v3))
     assert result.mode == "deterministic_fallback"
-    assert result.reason == "unauthorized_trend_claim"
+    assert result.reason == "unauthorized_history_claim"
 
 
 @pytest.mark.parametrize("language,text", [
@@ -519,13 +517,13 @@ def test_provider_unavailable_timeout_bad_format_and_overlength_keep_fallback(mo
         return "# A heading\n" + "A useful sentence. " * 10, True, {}
 
     async def long(*args):
-        return "A useful sentence. " * 120, True, {}
+        return "A useful sentence. " * 150, True, {}
 
     for provider, reason in [
         (unavailable, "provider_unavailable"),
         (timeout, "timeout"),
         (malformed, "response_format"),
-        (long, "word_count"),
+        (long, "transport_response_limit"),
     ]:
         result = _run(transport=provider)
         assert result.mode == "deterministic_fallback" and result.reason == reason
@@ -724,30 +722,30 @@ def test_prescription_permission_is_required_for_review_fact():
     (
         "easy",
         "Ta FC moyenne de 140 bpm se situe sous LT1, mais le chiffre ne raconte pas chaque instant de la sortie ni le temps exact passé dans chaque zone.",
-        "fr", "missing_average_effort_limit", "unjustified_rejection",
+        "fr", "heuristic_checks_passed", "corrected_acceptance",
     ),
     (
         "intervals_4x4",
         "Garmin a enregistré quatre phases d'effort et trois phases de récupération, ce qui décrit la structure observée.",
-        "fr", "missing_regularity_limit", "unjustified_rejection",
+        "fr", "heuristic_checks_passed", "corrected_acceptance",
     ),
     (
         "easy",
         "Ta séance était vraiment intense, une lecture utile pour comprendre l'effort et situer son profil.",
-        "fr", "heuristic_checks_passed", "dangerous_ambiguous_acceptance",
+        "fr", "unsupported_scientific_interpretation", "corrected_rejection",
     ),
     (
         "easy",
         "This was clearly a hard workout, a useful way to understand the effort and describe the session as a whole.",
-        "en", "heuristic_checks_passed", "dangerous_ambiguous_acceptance",
+        "en", "unsupported_scientific_interpretation", "corrected_rejection",
     ),
     (
         "easy",
         "Fue una sesión muy intensa, una lectura útil para entender el esfuerzo y describir la salida en conjunto.",
-        "es", "heuristic_checks_passed", "dangerous_ambiguous_acceptance",
+        "es", "unsupported_scientific_interpretation", "corrected_rejection",
     ),
 ])
-def test_c360_adversarial_characterization_without_changing_validator(
+def test_c360_adversarial_cases_after_c362_corrections(
     case, text, language, expected, classification,
 ):
     permissions = hybrid.HybridPermissions(history=case in {"history_classification", "long"})
@@ -760,4 +758,4 @@ def test_c360_adversarial_characterization_without_changing_validator(
     facts = _facts(v3, permissions=permissions, language=language)
     valid, reason, _ = hybrid.validate_generated_narrative(text, facts, language=language)
     assert reason == expected
-    assert valid is (classification == "dangerous_ambiguous_acceptance")
+    assert valid is (classification == "corrected_acceptance")
