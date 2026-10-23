@@ -1,4 +1,4 @@
-"""C360 offline experiment: evidence-grounded LLM coaching with heuristic checks."""
+"""C362 offline experiment: selective, evidence-grounded coaching with risk checks."""
 
 from __future__ import annotations
 
@@ -20,7 +20,27 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
 TIMEOUT_SECONDS = 8.0
 MAX_RESPONSE_CHARS = 2400
-VERSION = "c360-evidence-grounded-llm-1"
+VERSION = "c362-evidence-grounded-llm-1"
+
+_VALUE_MEANINGS = {
+    "efforts": "Number of recorded Garmin effort phases, not their duration.",
+    "recoveries": "Number of recorded Garmin recovery phases, not their duration.",
+    "duration": "Recorded session duration.",
+    "usual_duration": "Habitual duration established by V3 from prior sessions.",
+    "classification": "V3 classification; probable labels are never certain.",
+    "average_hr": "Session-average heart rate, not every moment of the session.",
+    "average_hr_available": "Availability indicator, not a measured value.",
+    "lt1": "Personal LT1 heart-rate threshold used by V3.",
+    "lt2": "Personal LT2 heart-rate threshold used by V3.",
+    "position": "V3 position of session-average HR relative to personal thresholds.",
+    "status": "V3 assessment status, not an independently inferred conclusion.",
+    "observations": "Number of observations used by V3.",
+    "median_change": "V3 median pace change: later minus earlier; negative is faster.",
+    "span": "Time span covered by the V3 trend.",
+    "pace_difference": "Current pace minus mean reference pace at comparable HR; negative is faster.",
+    "hr_difference": "Current HR minus mean reference HR at comparable pace.",
+    "references": "Number of comparable prior sessions used by V3.",
+}
 
 _REQUIRED_LIMITS = {
     "interval.count": ("no_repetition_durations", "regularity_verdict_unavailable"),
@@ -69,7 +89,10 @@ class AdmissibleFact:
             "evidence_id": self.id, "values": dict(self.values),
             "units": dict(self.units), "allowed_conclusion": self.allowed_conclusion,
             "confidence": self.confidence,
+            "meaning": {key: _VALUE_MEANINGS[key] for key, _ in self.values},
+            "priority": self.priority,
             "usage_conditions": list(self.usage_conditions),
+            "forbidden_conclusions": list(self.important_limits),
             "required_limits": list(_required_limit_ids(self)),
         }
 
@@ -250,6 +273,8 @@ def build_admissible_facts(
             and _finite(lt1.value_bpm) and _finite(lt2.value_bpm)
             and lt1.value_bpm > 0 and lt2.value_bpm > lt1.value_bpm
             and lt1.confidence in {"medium", "high"} and lt2.confidence in {"medium", "high"}
+            and lt1.source in {"lab_test", "field_test", "device_estimate"}
+            and lt2.source in {"lab_test", "field_test", "device_estimate"}
         )
         position = intensity.position
         consistent = threshold_ok and (
@@ -303,6 +328,34 @@ def build_admissible_facts(
                else f"Tu FC media es de {num(hr)} lpm; el tipo de tu sesión sigue siendo incierto."))
 
     trend = intelligence.performance_trend
+    comparison = intelligence.historical_comparison
+    if (history and comparison.status == "available"
+            and comparison.comparability == "strong"
+            and "reference_structure_unknown" not in comparison.limitations):
+        for suffix, block, field, key, unit, conclusion, labels in (
+            ("pace", comparison.pace_at_comparable_hr, "pace_difference_sec_per_km",
+             "pace_difference", "s/km", "observed_pace_difference_at_comparable_hr",
+             ("À FC comparable, l'écart d'allure observé est de",
+              "At comparable HR, the observed pace difference is",
+              "A FC comparable, la diferencia de ritmo observada es de")),
+            ("hr", comparison.hr_at_comparable_pace, "hr_difference_bpm",
+             "hr_difference", "bpm", "observed_hr_difference_at_comparable_pace",
+             ("À allure comparable, l'écart de FC observé est de",
+              "At comparable pace, the observed HR difference is",
+              "A ritmo comparable, la diferencia de FC observada es de")),
+        ):
+            delta = getattr(block, field)
+            if (_finite(delta) and _count(block.reference_count)
+                    and block.reference_count >= 2):
+                path = ("historical_comparison.pace_at_comparable_hr" if suffix == "pace"
+                        else "historical_comparison.hr_at_comparable_pace")
+                add("comparison." + suffix, {key: delta, "references": block.reference_count},
+                    {key: unit, "references": "count"}, conclusion, "high",
+                    ["history_authorized", "v3_strong_comparability"],
+                    ["not_proof_of_fitness", "no_cause", "terrain_weather_not_controlled"],
+                    80, [path + "." + field, path + ".reference_count",
+                         "historical_comparison.comparability"],
+                    tr(*labels) + f" {num(delta)} {unit}.")
     directional_trend = trend.status in {"probable_improvement", "possible_decline"}
     corroborated_trend = (
         bool(trend.sensitivity)
@@ -346,11 +399,18 @@ def build_admissible_facts(
                f"Your history suggests {label}: {n} observations{span}, median pace change {num(delta)} s/km (later minus earlier); not proof of a fitness change.",
                f"Tu historial sugiere {label}: {n} observaciones{span}, cambio de ritmo mediano de {num(delta)} s/km (reciente menos antiguo); no es una prueba de cambio de forma."))
 
-    if prescription and allowed_classification and intelligence.prescription_assessment.status == "deviation":
-        add("prescription.review", {"status": "deviation"}, {}, "review_training_prescription",
+    prescription_status = intelligence.prescription_assessment.status
+    if (prescription and allowed_classification
+            and prescription_status in {"consistent", "deviation"}):
+        add("prescription.review", {"status": prescription_status}, {}, "review_training_prescription",
             "none", ["prescription_authorized", "training_is_prescription_authority"],
-            ["no_new_prescription", "no_inferred_cause"], 85, ["prescription_assessment.status"],
-            tr("Un écart à ta prescription a été relevé ; cette lecture ne la remplace ni ne la modifie.",
+            ["no_new_prescription", "no_inferred_cause", "type_only_not_full_compliance",
+             "classification_uncertainty_preserved"], 85, ["prescription_assessment.status"],
+            tr("Le type observé correspond au type prescrit, selon la classification V3.",
+               "The observed type matches the prescribed type under the V3 classification.",
+               "El tipo observado coincide con el tipo prescrito según la clasificación V3.")
+            if prescription_status == "consistent" else
+            tr("Un écart au type prescrit a été relevé ; cette lecture ne le remplace ni ne le modifie.",
                "A deviation from your prescription was identified; this reading neither replaces nor changes it.",
                "Se ha identificado una desviación de tu prescripción; esta lectura no la sustituye ni modifica."))
     return tuple(facts)
@@ -364,7 +424,15 @@ def build_hybrid_context(
     facts = build_admissible_facts(
         intelligence, access=access, permissions=permissions, language=language,
     )
-    return {"language": _language(language), "facts": [f.provider_fact() for f in facts]}
+    return {
+        "language": _language(language), "facts": [f.provider_fact() for f in facts],
+        "threshold_conventions": {
+            "LT1": "Personal first lactate threshold; use only the value admitted by V3.",
+            "LT2": "Personal second lactate threshold; use only the value admitted by V3.",
+            "boundary": "Not FCmax percentages or interchangeable ventilatory thresholds; "
+                        "a session average establishes neither time in zones nor whole-session intensity.",
+        },
+    }
 
 
 def _claim(fact: AdmissibleFact) -> HybridClaim:
@@ -409,9 +477,64 @@ _AVERAGE_HR_CLAIM = re.compile(
     r"fc media|frecuencia cardíaca media)[^.!?]{0,35}?"
     r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", re.I,
 )
+_AVERAGE_HR_POST_CLAIM = re.compile(
+    r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\s*"
+    r"(?:de moyenne|en moyenne|on average|de media)\b", re.I,
+)
 _NUMBER_WITH_UNIT = re.compile(
     r"(?<![\w.])([-+−]?\d+(?:[.,]\d+)?)\s*"
-    r"(bpm|lpm|min(?:ute)?s?|days?|días|jours?|s/km|sec(?:onds?)?/km)\b", re.I,
+    r"(bpm|lpm|min(?:ute)?s?|days?|días|jours?|s/km|sec(?:onds?)?/km|km|%|h)\b", re.I,
+)
+_UNSUPPORTED_SCIENCE = re.compile(
+    r"\b(?:base a[ée]robie|aerobic base|base aer[oó]bica|"
+    r"favorise la r[ée]cup[ée]ration|promotes recovery|favorece la recuperaci[oó]n|"
+    r"risque de blessure|injury risk|riesgo de lesi[oó]n|"
+    r"progr[èe]s durable|progresses durablement|sustainable progress|"
+    r"efforts portent leurs fruits|efforts? (?:are )?paying off|"
+    r"d[ée]veloppe (?:ton |votre |l')endurance|builds? (?:your )?endurance|"
+    r"stimule (?:ton|le) (?:syst[èe]me|m[ée]tabolisme)|"
+    r"r[ée]cup[ée]ration active|active recovery|recuperaci[oó]n activa|"
+    r"forme (?:s'am[ée]liore|physiologique)|fitness (?:gain|improvement)|"
+    r"vraiment intense|s[ée]ance intense|hard workout|very intense|muy intensa|"
+    r"efficacit[ée] (?:a[ée]robie|physiologique)|physiological efficiency|"
+    r"d[ée]rive cardiaque|cardiac drift|deriva card[ií]aca|"
+    r"tout l'effort (?:est|[ée]tait)|toute la s[ée]ance (?:est|[ée]tait)|"
+    r"whole (?:run|session) was|temps pass[ée] (?:sous|au-dessus)|time spent (?:below|above))\b",
+    re.I,
+)
+_GENERIC_SIGNOFF = re.compile(
+    r"\b(?:bravo|continue comme [çc]a|keep it up|well done|great (?:run|workout)|"
+    r"belle s[ée]ance|buen trabajo|sigue as[ií])\b", re.I,
+)
+_DIRECTIVE = re.compile(
+    r"(?:^|[.!?;,:]\s*|\b(?:demain|ensuite|et|and|mais|but|pero),?\s+)"
+    r"(?:ajoute|augmente|r[ée]duis|ralentis|acc[ée]l[èe]re|pr[ée]vois|"
+    r"cours demain|fais (?:une|un|des)|repose-toi|"
+    r"run tomorrow|add (?:a|an)|increase your|reduce your|take a rest|"
+    r"corre ma[ñn]ana|a[ñn]ade|reduce tu)\b", re.I,
+)
+_WHOLE_EFFORT_CLAIM = re.compile(
+    r"\b(?:rest[ée]e?|stayed|remained|mantenido)\b[^.!?;]{0,80}\b(?:lt\s*[12]|bpm|zones?)\b|"
+    r"\b(?:lt\s*[12]|bpm|zones?)\b[^.!?;]{0,80}"
+    r"\b(?:pendant toute|durant toute|tout au long|throughout|entire run|whole run|toda la carrera)\b|"
+    r"\b(?:pendant toute|durant toute|tout au long|throughout|entire run|whole run|toda la carrera)"
+    r"\b[^.!?;]{0,80}\b(?:lt\s*[12]|bpm|zones?)\b",
+    re.I,
+)
+_HISTORY_CLAIM = re.compile(
+    r"\b(?:historique|habituellement|s[ée]ances (?:compar[ée]es|de r[ée]f[ée]rence)|"
+    r"history|usually|reference sessions|historial|habitualmente)\b", re.I,
+)
+_PRESCRIPTION_CLAIM = re.compile(
+    r"\b(?:prescription|prescripci[oó]n|entraînement prévu|planned workout|"
+    r"objectif d'entraînement|training goal|objetivo de entrenamiento)\b", re.I,
+)
+_FULL_COMPLIANCE_CLAIM = re.compile(
+    r"\b(?:prescription|prescripción)\b[^.!?;]{0,35}"
+    r"\b(?:respect[ée]e?|suivie|r[ée]alis[ée]e|fulfilled|respected|cumplida)\b|"
+    r"\b(?:s[ée]ance|sortie|workout|session)\b[^.!?;]{0,35}\b(?:conforme|compliant)\b|"
+    r"\b(?:conformit[ée] (?:totale|compl[èe]te)|full compliance|fully compliant)\b",
+    re.I,
 )
 _SENSITIVE_PATTERNS = {
     "physiological_threshold": re.compile(
@@ -438,7 +561,10 @@ _POSITIVE_REGULARITY = re.compile(
     r"\b(?:regular intervals|regular repetitions|regularly paced|"
     r"repetitions (?:are|look) regular|intervals (?:are|were|look) regular|"
     r"regularity (?:is|looks) (?:good|high|consistent)|"
-    r"régulières|régulièrement|régularité (?:est|semble) (?:bonne|excellente|constante)|"
+    r"irrégulières|régulières|régulièrement|homogènes|homogeneous|"
+    r"consistent repetitions|consistent intervals|repetitions are consistent|"
+    r"répétitions (?:sont|étaient) stables|irregular repetitions|irregular intervals|"
+    r"régularité (?:est|semble) (?:bonne|excellente|constante)|"
     r"repeticiones regulares|intervalos regulares|regularidad (?:es|parece) (?:buena|constante))\b",
     re.I,
 )
@@ -455,6 +581,11 @@ _CLASSIFICATION_CLAIM = re.compile(
     r"sortie soutenue|séance tempo|soutenue|carrera fácil|fácil|"
     r"carrera sostenida|sesión tempo)\b", re.I,
 )
+_CLASSIFICATION_LABELS = {
+    "easy_run_probable": re.compile(r"\b(?:easy(?: run| pace)?|footing facile|facile|carrera fácil|fácil)\b", re.I),
+    "steady_run_probable": re.compile(r"\b(?:steady run|sortie soutenue|soutenue|carrera sostenida)\b", re.I),
+    "tempo_probable": re.compile(r"\b(?:tempo run|séance tempo|sesión tempo)\b", re.I),
+}
 _TREND_QUALIFICATIONS = {
     "trend.probable_improvement": {
         "fr": re.compile(r"\b(?:amélioration|progression) probable\b", re.I),
@@ -551,11 +682,11 @@ def _authorized_numbers(facts: tuple[AdmissibleFact, ...]) -> set[float]:
 
 
 def _has_unqualified(pattern: re.Pattern, text: str, language: str) -> bool:
-    match = pattern.search(text)
-    if not match:
-        return False
-    prefix = text[max(0, match.start() - 90):match.start()].lower()
-    return not any(phrase in prefix for phrase in _NEGATED[language])
+    for match in pattern.finditer(text):
+        prefix = re.split(r"[.!?;]|\b(?:mais|but|pero)\b", text[:match.start()])[-1][-90:].lower()
+        if not any(phrase in prefix for phrase in _NEGATED[language]):
+            return True
+    return False
 
 
 def validate_generated_narrative(
@@ -567,9 +698,6 @@ def validate_generated_narrative(
     candidate = text.strip()
     if not candidate or len(candidate) > MAX_RESPONSE_CHARS:
         return False, "response_length", []
-    words = re.findall(r"\b[\wÀ-ÿ'-]+\b", candidate)
-    if len(words) < 8 or len(words) > 150:
-        return False, "word_count", []
     if candidate.startswith(("#", "-", "*", "{", "[")) or "```" in candidate:
         return False, "response_format", []
     lang = _language(language)
@@ -604,9 +732,10 @@ def validate_generated_narrative(
         None,
     )
     if average_hr is not None:
-        for match in _AVERAGE_HR_CLAIM.finditer(candidate):
-            if _numeric_value(match.group(1)) != float(average_hr):
-                return False, "contradictory_average_hr", []
+        for pattern in (_AVERAGE_HR_CLAIM, _AVERAGE_HR_POST_CLAIM):
+            for match in pattern.finditer(candidate):
+                if _numeric_value(match.group(1)) != float(average_hr):
+                    return False, "contradictory_average_hr", []
     position_fact = next((fact for fact in facts if fact.id == "intensity.position"), None)
     if position_fact is not None:
         actual_position = dict(position_fact.values).get("position")
@@ -616,15 +745,50 @@ def validate_generated_narrative(
         }
         if mentioned_positions and mentioned_positions != {actual_position}:
             return False, "contradictory_threshold_position", []
+        values = dict(position_fact.values)
+        for match in re.finditer(
+            r"\b(LT[12])\s*(?:(?:personnel|personal)\s*)?"
+            r"(?:(?:de|of|at|à|es)\s*|[=:(]\s*)"
+            r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", candidate, re.I,
+        ):
+            if _numeric_value(match.group(2)) != values[match.group(1).lower()]:
+                return False, "contradictory_threshold_value", []
+    interval_fact = next((f for f in facts if f.id == "interval.count"), None)
+    if interval_fact is not None:
+        for key, labels in (
+            ("efforts", r"phases? d['’]effort|efforts?|effort phases?|répétitions|repetitions|fases de esfuerzo"),
+            ("recoveries", r"phases? de récupération|récupérations?|recovery phases?|recoveries|fases de recuperación"),
+        ):
+            for match in re.finditer(r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:" + labels + r")\b", candidate, re.I):
+                if _numeric_value(match.group(1)) != dict(interval_fact.values)[key]:
+                    return False, "contradictory_interval_count", []
 
     lowered = candidate.lower()
+    if _GENERIC_SIGNOFF.search(lowered):
+        return False, "generic_encouragement", []
+    if _has_unqualified(_UNSUPPORTED_SCIENCE, lowered, lang):
+        return False, "unsupported_scientific_interpretation", []
+    if _has_unqualified(_WHOLE_EFFORT_CLAIM, lowered, lang):
+        return False, "unsupported_whole_session_intensity", []
+    if _DIRECTIVE.search(lowered):
+        return False, "unauthorized_prescription", []
+    if _has_unqualified(_FULL_COMPLIANCE_CLAIM, lowered, lang):
+        return False, "unsupported_full_prescription_compliance", []
+    if not any("history_authorized" in f.usage_conditions for f in facts) and _has_unqualified(
+        _HISTORY_CLAIM, lowered, lang,
+    ):
+        return False, "unauthorized_history_claim", []
+    if not any(f.id == "prescription.review" for f in facts) and _has_unqualified(
+        _PRESCRIPTION_CLAIM, lowered, lang,
+    ):
+        return False, "unauthorized_prescription_claim", []
     has_intensity_position = any(f.id == "intensity.position" for f in facts)
     has_intensity_hr = any(f.id == "intensity.hr" for f in facts)
     if not has_intensity_position and _has_unqualified(
         _SENSITIVE_PATTERNS["physiological_threshold"], lowered, lang,
     ):
         return False, "unauthorized_physiological_conclusion", []
-    if any(f.id == "interval.count" for f in facts) and _POSITIVE_REGULARITY.search(lowered):
+    if _has_unqualified(_POSITIVE_REGULARITY, lowered, lang):
         return False, "unsupported_regularity_claim", []
     if not any(f.id.startswith("trend.") for f in facts) and _has_unqualified(
         _SENSITIVE_PATTERNS["trend"], lowered, lang,
@@ -642,6 +806,14 @@ def validate_generated_narrative(
         for fact in facts
     )
     classification_claim = _has_unqualified(_CLASSIFICATION_CLAIM, lowered, lang)
+    if classification_claim and not any(f.id == "session.kind" for f in facts):
+        return False, "unsupported_session_classification", checks
+    kind = next((dict(f.values)["classification"] for f in facts if f.id == "session.kind"), None)
+    if classification_claim and any(
+        label != kind and _has_unqualified(pattern, lowered, lang)
+        for label, pattern in _CLASSIFICATION_LABELS.items()
+    ):
+        return False, "contradictory_session_classification", checks
     if relative and classification_claim:
         if not all(phrase in lowered for phrase in _REQUIRED_PHRASES[
             "relative_effort_not_physiological_intensity"
@@ -649,8 +821,11 @@ def validate_generated_narrative(
             return False, "missing_history_relative_qualification", checks
         checks.append("history_relative_qualification")
     if classification_claim and "probable_not_certain" in required:
-        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["probable_not_certain"][lang]):
-            return False, "missing_probability_qualification", checks
+        for sentence in re.split(r"[.!?;]", lowered):
+            if _has_unqualified(_CLASSIFICATION_CLAIM, sentence, lang) and not any(
+                phrase in sentence for phrase in _REQUIRED_PHRASES["probable_not_certain"][lang]
+            ):
+                return False, "missing_probability_qualification", checks
         checks.append("probability_qualification")
     if classification_claim and any(
         f.id == "session.kind" and "low_confidence" in f.important_limits for f in facts
@@ -658,15 +833,21 @@ def validate_generated_narrative(
         if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["low_confidence"][lang]):
             return False, "missing_low_confidence_qualification", checks
         checks.append("low_confidence_qualification")
-    long_claim = any(f.id == "session.long" for f in facts) and re.search(
-        r"\b(?:longue|long run|tirada larga|longer run)\b", lowered, re.I,
+    long_pattern = re.compile(
+        r"\b(?:sortie (?:(?:est|était) )?longue|long run|tirada larga|longer run)\b", re.I,
     )
+    long_claim = _has_unqualified(long_pattern, lowered, lang)
     if long_claim:
+        if not any(f.id == "session.long" for f in facts):
+            return False, "unsupported_session_classification", checks
         if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["probable_not_certain"][lang]):
             return False, "missing_probability_qualification", checks
-        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["duration_not_effort"][lang]):
-            return False, "missing_duration_limit", checks
         checks.append("duration_limits")
+    if not any(f.id == "interval.count" for f in facts) and _has_unqualified(
+        re.compile(r"\b(?:fractionn[ée]e?|interval session|interval workout|sesión de intervalos)\b", re.I),
+        lowered, lang,
+    ):
+        return False, "unsupported_session_classification", checks
     intensity_claim = has_intensity_position and bool(re.search(
         r"\b(?:lt\s*[12]|threshold|seuil|umbral|zone|zona|sous|below|por debajo|"
         r"fc moyenne|fréquence cardiaque|average hr|mean heart rate|fc media|"
@@ -677,23 +858,7 @@ def validate_generated_narrative(
         r"frecuencia cardíaca media)\b", lowered, re.I,
     ))
     if intensity_claim:
-        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["average_not_whole_effort"][lang]):
-            return False, "missing_average_effort_limit", checks
-        if has_intensity_position and "no_time_in_zones" in required and not any(
-            phrase in lowered for phrase in _REQUIRED_PHRASES["no_time_in_zones"][lang]
-        ):
-            return False, "missing_time_in_zones_limit", checks
-        if has_intensity_hr and "no_physiological_zone" in required and not any(
-            phrase in lowered for phrase in _REQUIRED_PHRASES["no_physiological_zone"][lang]
-        ):
-            return False, "missing_no_zone_limit", checks
         checks.append("average_effort_limits")
-    if any(f.id == "interval.count" for f in facts) and re.search(
-        r"\b(?:phase|phases|interval|intervalles|repeticiones|repetitions)\b", lowered, re.I,
-    ):
-        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["regularity_verdict_unavailable"][lang]):
-            return False, "missing_regularity_limit", checks
-        checks.append("regularity_limit")
     if any(f.id.startswith("trend.") for f in facts) and _has_unqualified(
         _SENSITIVE_PATTERNS["trend"], lowered, lang,
     ):
@@ -704,17 +869,6 @@ def validate_generated_narrative(
         if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["not_proof_of_fitness"][lang]):
             return False, "missing_trend_limit", checks
         checks.append("trend_limit")
-    if any(f.id == "prescription.review" for f in facts) and re.search(
-        r"\b(?:prescription|prescription|prescripción|entraînement prévu|planned workout)\b",
-        lowered, re.I,
-    ):
-        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["no_new_prescription"][lang]):
-            return False, "missing_prescription_limit", checks
-        checks.append("prescription_limit")
-    if any(f.id == "session.unknown" and "missing_average_hr" in f.important_limits for f in facts):
-        if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["missing_average_hr"][lang]):
-            return False, "missing_average_hr_limit", checks
-        checks.append("missing_average_hr_limit")
     return True, "heuristic_checks_passed", checks
 
 
@@ -760,14 +914,23 @@ async def generate_hybrid_coach(
         "You are a running coach responding naturally to the workout described only by the "
         "authorized evidence pack in the user message. Write an original, useful analysis in the "
         "requested language; in French, address the runner as tu. React to a concrete session "
-        "observation, explain why it matters simply, and use a positive but unforced tone. "
-        "When evidence is rich, aim for 60–110 words; use fewer when it is limited. Use one natural "
-        "paragraph unless another structure genuinely helps. Select and prioritize compatible facts "
-        "yourself, and preserve the essential qualifications attached to them. Only V3-authorized "
+        "observation. Be direct, precise, personal and sober. Length follows analytical value, "
+        "never a word quota: a simple session may need only one or two sentences. Select the "
+        "distinctive observation first; priority is guidance, not a checklist. Ignore secondary facts. "
+        "Do not catalogue metrics. Recorded intervals deserve structure evidence, not an explanation "
+        "from average HR. A measured historical difference is not physiological progress. "
+        "Prefer established descriptive facts over uncertain classification. Never turn probable "
+        "classification into certainty, even at high confidence. Do not routinely say 'semble', "
+        "'probablement', 'il est possible', 'could indicate' or equivalent hesitant filler. "
+        "Forbidden conclusions constrain what you assert; they are NOT caveats to recite. "
+        "Mention a limitation only when it materially changes the conclusion you actually make. "
+        "A factual average HR or interval count needs no automatic disclaimer. Only V3-authorized "
         "facts and conclusions are scientific authority. Do not invent or recalculate values; infer "
         "no LT1/LT2 from average HR, repetition regularity, progression from one workout, fatigue "
         "causes, or a new prescription. A history-relative classification is not physiological "
         "intensity. Never claim a conclusion excluded by permissions. No RAG or outside knowledge. "
+        "Never add generic benefits (aerobic base, recovery, injury prevention, durable progress), "
+        "congratulations, encouragement, or advice to close the text. No invented training goal. "
         "Return only the analysis prose, without headings, IDs, JSON, or a generic sign-off."
     )
     result.provider_attempted = True
