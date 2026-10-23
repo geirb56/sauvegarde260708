@@ -33,6 +33,8 @@ Cette section consigne les observations effectuées **avant toute édition**.
 Les références ci-dessous portent sur les fichiers de la base exacte indiquée
 ci-dessus, sous `/home/runner/work/sauvegarde260708/sauvegarde260708/`.
 Les rapports historiques ne sont pas utilisés comme autorité sur le code courant.
+L'audit a été commité avant l'ajout des tests C364 :
+`e451fcd2d4cad6e8254246cd95286e4b8a3f0e1c`.
 
 ### 1.1 HEAD et intégration C360 / C361 / C362
 
@@ -203,8 +205,90 @@ Les sondes synthétiques en lecture seule ont notamment accepté :
 et un faux comptage écrit en lettres. Elles ont rejeté la négation correcte
 « Ces données ne permettent pas de conclure à une progression ».
 
-Les spécifications exécutables et leurs résultats détaillés seront ajoutés
-dans cette PR ; aucune réussite produit réelle n'est revendiquée.
+### 3.1 Spécifications exécutables A–E
+
+Fichier ajouté :
+`backend/tests/test_hybrid_coach_c364_audit.py`.
+Les 32 cas vérifient à la fois le validateur direct et le chemin complet avec
+transport injecté, flag actif, permissions explicites et fixtures V3 existantes.
+Pour les rejets conformes, le texte et les claims du fallback sont comparés
+à la synthèse déterministe existante. Aucun test préexistant n'est modifié.
+
+Les lacunes connues sont marquées **`xfail(strict=True, raises=AssertionError)`** :
+ce sont des exigences **non satisfaites**, pas des cas corrigés ou ignorés.
+Un futur succès inattendu rendra le test rouge et imposera de réexaminer son
+marqueur. `--runxfail` réexécute les mêmes assertions sans suppression.
+
+| Groupe | Cas conformes à la spécification | Lacunes non corrigées |
+| --- | --- | --- |
+| A — Régularité / comptages / paraphrase inédite | 4 | 6 |
+| B — FC moyenne / portée temporelle | 2 | 3 |
+| C — Bénéfices et paraphrase inédite | 3 | 3 |
+| D — Comparaisons / unités / signe / références / forme | 4 | 4 |
+| E — Négation et identité du seuil | 0 | 2 |
+| Prescription ajoutée sans autorité | 1 | 0 |
+| **Total** | **14** | **18** |
+
+Les 18 lacunes sont **15 acceptations indues** et **3 faux rejets** :
+
+| ID du test | Observation actuelle, non résultat souhaité |
+| --- | --- |
+| `regularity-without` | « Sans régularité dans leur durée. » accepté |
+| `regularity-lacking` | « Les intervalles manquent de régularité. » accepté |
+| `regularity-stable-intensity` | « Les intervalles ont une intensité stable. » accepté |
+| `regularity-no-strict-structure` | « Sans structure stricte des intervalles. » accepté |
+| `invented-count-words` | Cinq efforts / deux récupérations acceptés pour quatre / trois |
+| `unseen-regularity-paraphrase` | « Chaque effort reproduit exactement le précédent. » accepté |
+| `hr-stability` | « Ta fréquence cardiaque est restée stable. » accepté |
+| `hr-low-throughout` | Intensité faible pendant toute la sortie acceptée |
+| `hr-entire-session-paraphrase` | Ensemble de la séance sous LT1 accepté |
+| `benefit-conditional` | Bénéfice conditionnel pour l'endurance accepté |
+| `benefit-fatigue` | Fatigue limitée acceptée |
+| `unseen-benefit-paraphrase` | Organisme renforcé accepté |
+| `comparison-direction` | « plus lent » avec un écart V3 d'allure négatif accepté |
+| `comparison-wrong-reference` | Écart courant/moyenne de −14,4 s/km attribué aux médianes entre périodes accepté |
+| `comparison-wrong-observation-count` | Cinq observations empruntées au nombre de références, au lieu des six de la tendance, acceptées |
+| `comparison-reasonable-rounding` | −14 s/km pour −14,4 s/km rejeté : égalité numérique exacte exigée |
+| `negated-progression` | Négation correcte « ne permettent pas de conclure à une progression » rejetée |
+| `threshold-label-not-measurement` | « seuil lactique 1 » pris pour une valeur numérique non autorisée |
+
+La fixture historique conserve exactement les résultats de V3 :
+`comparison.pace = −14,4 s/km / 5 références`,
+`comparison.hr = 0 bpm / 2 références`,
+`trend = −24 s/km / 6 observations / 92 jours`.
+Aucun calcul scientifique alternatif n'est ajouté.
+Les descriptions factuelles demandées (quatre/trois phases et FC moyenne
+140 bpm sous LT1 150 bpm) restent acceptées sans réserve automatique.
+
+### 3.2 Commandes et résultats
+
+Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/backend` :
+
+```sh
+python -m pytest tests/test_hybrid_coach_c364_audit.py -q -rx
+python -m pytest tests/test_hybrid_coach_c359.py tests/test_hybrid_coach_c362.py tests/test_hybrid_coach_c364_audit.py tests/test_workout_intelligence_v3.py tests/test_narrative_coach_v3.py -q
+python -m pytest tests/test_hybrid_coach_c364_audit.py --runxfail --tb=no -q
+python -m flake8 tests/test_hybrid_coach_c364_audit.py --select=E9,F63,F7,F82
+```
+
+- Nouvelle spécification : **14 passed, 18 xfailed**.
+- Ensemble ciblé : **468 passed, 18 xfailed, 7 avertissements préexistants**.
+  Les 454 tests existants restent verts ; les xfails ne sont pas inclus dans
+  les réussites. Ce résultat ne satisfait **pas** la sécurité C364.
+- Contre-vérification sans marqueurs : **18 failed, 14 passed**, sortie pytest
+  **1 attendue** ; les 15 textes dangereux atteignent réellement
+  `generated_narrative`, les trois descriptions correctes partent en fallback.
+- Flake8, sélection existante d'erreurs Python : aucune erreur.
+- `git diff --check` depuis
+  `/home/runner/work/sauvegarde260708/sauvegarde260708` : aucune erreur.
+- Imports de dépendances existantes restaurés dans l'environnement seulement ;
+  aucun nouveau framework, manifeste ou lockfile.
+- Aucun appel de service réel. Le test API existant utilise ses doublures,
+  sans démarrage de l'application ni requête MongoDB/Garmin.
+- La revue automatisée et son résultat sont consignés après commit de ces
+  spécifications ; ils ne certifient pas l'architecture de prose libre.
+
+Aucune réussite produit réelle n'est revendiquée.
 
 ## 4. Risques résiduels et garanties
 
