@@ -507,10 +507,19 @@ _GENERIC_SIGNOFF = re.compile(
     r"belle s[ée]ance|buen trabajo|sigue as[ií])\b", re.I,
 )
 _DIRECTIVE = re.compile(
-    r"(?:^|[.!?;]\s*|\b(?:demain|ensuite),?\s+)(?:ajoute|augmente|r[ée]duis|ralentis|acc[ée]l[èe]re|pr[ée]vois|"
+    r"(?:^|[.!?;,:]\s*|\b(?:demain|ensuite|et|and|mais|but|pero),?\s+)"
+    r"(?:ajoute|augmente|r[ée]duis|ralentis|acc[ée]l[èe]re|pr[ée]vois|"
     r"cours demain|fais (?:une|un|des)|repose-toi|"
     r"run tomorrow|add (?:a|an)|increase your|reduce your|take a rest|"
     r"corre ma[ñn]ana|a[ñn]ade|reduce tu)\b", re.I,
+)
+_WHOLE_EFFORT_CLAIM = re.compile(
+    r"\b(?:rest[ée]e?|stayed|remained|mantenido)\b[^.!?;]{0,80}\b(?:lt\s*[12]|bpm|zones?)\b|"
+    r"\b(?:lt\s*[12]|bpm|zones?)\b[^.!?;]{0,80}"
+    r"\b(?:pendant toute|durant toute|tout au long|throughout|entire run|whole run|toda la carrera)\b|"
+    r"\b(?:pendant toute|durant toute|tout au long|throughout|entire run|whole run|toda la carrera)"
+    r"\b[^.!?;]{0,80}\b(?:lt\s*[12]|bpm|zones?)\b",
+    re.I,
 )
 _HISTORY_CLAIM = re.compile(
     r"\b(?:historique|habituellement|s[ée]ances (?:compar[ée]es|de r[ée]f[ée]rence)|"
@@ -519,6 +528,13 @@ _HISTORY_CLAIM = re.compile(
 _PRESCRIPTION_CLAIM = re.compile(
     r"\b(?:prescription|prescripci[oó]n|entraînement prévu|planned workout|"
     r"objectif d'entraînement|training goal|objetivo de entrenamiento)\b", re.I,
+)
+_FULL_COMPLIANCE_CLAIM = re.compile(
+    r"\b(?:prescription|prescripción)\b[^.!?;]{0,35}"
+    r"\b(?:respect[ée]e?|suivie|r[ée]alis[ée]e|fulfilled|respected|cumplida)\b|"
+    r"\b(?:s[ée]ance|sortie|workout|session)\b[^.!?;]{0,35}\b(?:conforme|compliant)\b|"
+    r"\b(?:conformit[ée] (?:totale|compl[èe]te)|full compliance|fully compliant)\b",
+    re.I,
 )
 _SENSITIVE_PATTERNS = {
     "physiological_threshold": re.compile(
@@ -545,7 +561,9 @@ _POSITIVE_REGULARITY = re.compile(
     r"\b(?:regular intervals|regular repetitions|regularly paced|"
     r"repetitions (?:are|look) regular|intervals (?:are|were|look) regular|"
     r"regularity (?:is|looks) (?:good|high|consistent)|"
-    r"irrégulières|régulières|régulièrement|irregular repetitions|irregular intervals|"
+    r"irrégulières|régulières|régulièrement|homogènes|homogeneous|"
+    r"consistent repetitions|consistent intervals|repetitions are consistent|"
+    r"répétitions (?:sont|étaient) stables|irregular repetitions|irregular intervals|"
     r"régularité (?:est|semble) (?:bonne|excellente|constante)|"
     r"repeticiones regulares|intervalos regulares|regularidad (?:es|parece) (?:buena|constante))\b",
     re.I,
@@ -729,19 +747,33 @@ def validate_generated_narrative(
             return False, "contradictory_threshold_position", []
         values = dict(position_fact.values)
         for match in re.finditer(
-            r"\b(LT[12])\s*(?:(?:personnel|personal)\s*)?(?:(?:de|of|at|à|es)\s*|[=:]\s*)"
+            r"\b(LT[12])\s*(?:(?:personnel|personal)\s*)?"
+            r"(?:(?:de|of|at|à|es)\s*|[=:(]\s*)"
             r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", candidate, re.I,
         ):
             if _numeric_value(match.group(2)) != values[match.group(1).lower()]:
                 return False, "contradictory_threshold_value", []
+    interval_fact = next((f for f in facts if f.id == "interval.count"), None)
+    if interval_fact is not None:
+        for key, labels in (
+            ("efforts", r"phases? d['’]effort|efforts?|effort phases?|répétitions|repetitions|fases de esfuerzo"),
+            ("recoveries", r"phases? de récupération|récupérations?|recovery phases?|recoveries|fases de recuperación"),
+        ):
+            for match in re.finditer(r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:" + labels + r")\b", candidate, re.I):
+                if _numeric_value(match.group(1)) != dict(interval_fact.values)[key]:
+                    return False, "contradictory_interval_count", []
 
     lowered = candidate.lower()
     if _GENERIC_SIGNOFF.search(lowered):
         return False, "generic_encouragement", []
     if _has_unqualified(_UNSUPPORTED_SCIENCE, lowered, lang):
         return False, "unsupported_scientific_interpretation", []
+    if _has_unqualified(_WHOLE_EFFORT_CLAIM, lowered, lang):
+        return False, "unsupported_whole_session_intensity", []
     if _DIRECTIVE.search(lowered):
         return False, "unauthorized_prescription", []
+    if _has_unqualified(_FULL_COMPLIANCE_CLAIM, lowered, lang):
+        return False, "unsupported_full_prescription_compliance", []
     if not any("history_authorized" in f.usage_conditions for f in facts) and _has_unqualified(
         _HISTORY_CLAIM, lowered, lang,
     ):
@@ -801,7 +833,9 @@ def validate_generated_narrative(
         if not any(phrase in lowered for phrase in _REQUIRED_PHRASES["low_confidence"][lang]):
             return False, "missing_low_confidence_qualification", checks
         checks.append("low_confidence_qualification")
-    long_pattern = re.compile(r"\b(?:sortie longue|long run|tirada larga|longer run)\b", re.I)
+    long_pattern = re.compile(
+        r"\b(?:sortie (?:(?:est|était) )?longue|long run|tirada larga|longer run)\b", re.I,
+    )
     long_claim = _has_unqualified(long_pattern, lowered, lang)
     if long_claim:
         if not any(f.id == "session.long" for f in facts):

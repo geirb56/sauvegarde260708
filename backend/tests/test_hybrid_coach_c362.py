@@ -199,6 +199,13 @@ def test_consistency_is_limited_to_type_and_requires_prescription_permission():
     ) if f.id == "prescription.review")
     assert dict(fact.values) == {"status": "consistent"}
     assert "type_only_not_full_compliance" in fact.important_limits
+    facts = _facts(v3, permissions=hybrid.HybridPermissions(prescription=True))
+    assert hybrid.validate_generated_narrative(
+        "Le type observé correspond au type prescrit selon la classification disponible.", facts,
+    )[0]
+    for text in ("Ta prescription est respectée.", "Ta séance est conforme à ta prescription."):
+        assert hybrid.validate_generated_narrative(text, facts)[1] == \
+            "unsupported_full_prescription_compliance"
 
 
 def test_zero_historical_difference_is_not_missing():
@@ -254,3 +261,29 @@ def test_rejected_science_still_uses_deterministic_fallback(monkeypatch):
     assert result.mode == "deterministic_fallback"
     assert result.text == hybrid._render(hybrid.select_deterministic_synthesis(_facts()))
     assert result.verdict == "HOLD"
+
+
+@pytest.mark.parametrize("name,text,reason", [
+    ("easy", "Ta FC moyenne est de 140 bpm, tu es resté sous LT1 pendant toute la course.",
+     "unsupported_whole_session_intensity"),
+    ("easy", "Ta FC moyenne est de 140 bpm, sous LT1 pendant toute la course.",
+     "unsupported_whole_session_intensity"),
+    ("easy", "Your average HR is 140 bpm, you stayed below LT1 throughout the run.",
+     "unsupported_whole_session_intensity"),
+    ("intervals_4x4", "Garmin a enregistré 4 phases d'effort : les répétitions sont homogènes.",
+     "unsupported_regularity_claim"),
+    ("easy", "Ta FC moyenne est de 140 bpm, sous LT1 (170 bpm).",
+     "contradictory_threshold_value"),
+    ("intervals_4x4", "Garmin a enregistré 3 phases d'effort et 4 phases de récupération.",
+     "contradictory_interval_count"),
+    ("intervals_4x4", "Garmin a enregistré 4 phases d'effort et 4 phases de récupération.",
+     "contradictory_interval_count"),
+    ("easy", "Ta FC moyenne est de 140 bpm, prévois une récupération demain.",
+     "unauthorized_prescription"),
+    ("easy", "Ta FC moyenne est de 140 bpm et ajoute une récupération demain.",
+     "unauthorized_prescription"),
+])
+def test_independent_review_regressions_trigger_fallback(name, text, reason, monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = _run(synthetic_case(name), transport=_provider(lambda *_: text))
+    assert result.mode == "deterministic_fallback" and result.reason == reason
