@@ -1,4 +1,4 @@
-"""C362 offline experiment: selective, evidence-grounded coaching with risk checks."""
+"""C365 offline prototype: V3 authority, LLM editing, closed realization."""
 
 from __future__ import annotations
 
@@ -14,13 +14,17 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from access_control import UserAccess
+from hybrid_coach_editorial_c365 import (
+    EditorialSelection, allowed_forms, editorial_intent, fact_category, format_evidence_number,
+    realize_clause, validate_editorial_selection,
+)
 from narrative_coach_v3 import Transport, format_narrative_number
 from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
 TIMEOUT_SECONDS = 8.0
 MAX_RESPONSE_CHARS = 2400
-VERSION = "c362-evidence-grounded-llm-1"
+VERSION = "c365-editorial-realization-1"
 
 _VALUE_MEANINGS = {
     "efforts": "Number of recorded Garmin effort phases, not their duration.",
@@ -94,6 +98,12 @@ class AdmissibleFact:
             "usage_conditions": list(self.usage_conditions),
             "forbidden_conclusions": list(self.important_limits),
             "required_limits": list(_required_limit_ids(self)),
+            "category": fact_category(self),
+            "required_permissions": [
+                permission for permission in ("history", "prescription")
+                if permission + "_authorized" in self.usage_conditions
+            ],
+            "admissible_relations": [self.allowed_conclusion],
         }
 
 
@@ -112,15 +122,16 @@ class HybridResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str = VERSION
-    mode: Literal["disabled", "denied", "deterministic_fallback", "generated_narrative"]
+    mode: Literal["disabled", "denied", "deterministic_fallback", "editorial_realization"]
     verdict: Literal["HOLD"] = "HOLD"
     reason: str
-    verification_scope: Literal["none", "heuristic_risk_checks"] = "none"
+    verification_scope: Literal["none", "closed_realization"] = "none"
     blockers: list[str] = Field(default_factory=lambda: [
-        "heuristic_checks_are_not_semantic_proof",
+        "real_llm_editorial_quality_not_evaluated",
     ])
     text: str = ""
     claims: list[HybridClaim] = Field(default_factory=list)
+    editorial_selection: Optional[EditorialSelection] = None
     checks: list[str] = Field(default_factory=list)
     provider_attempted: bool = False
     transport_kind: Literal["none", "runindex", "injected"] = "none"
@@ -185,7 +196,7 @@ def build_admissible_facts(
         return {"fr": fr, "en": en, "es": es}[lang]
 
     def num(value):
-        return format_narrative_number(value, lang)
+        return format_evidence_number(value, lang)
 
     def add(id, values, units, conclusion, confidence, conditions, limits, priority, refs, text):
         facts.append(AdmissibleFact(
@@ -292,11 +303,13 @@ def build_admissible_facts(
                                       "position": position},
                 {"average_hr": "bpm", "lt1": "bpm", "lt2": "bpm"}, "average_hr_threshold_position",
                 intensity.confidence, ["reliable_v3_personal_thresholds"],
-                ["average_not_whole_effort", "no_time_in_zones", "no_physiological_cause"], 70,
+                ["average_not_whole_effort", "no_time_in_zones", "no_physiological_cause",
+                 "no_progression_from_average"], 70,
                 ["intensity_assessment.hr_used_bpm", "intensity_assessment.position",
                  "intensity_assessment.confidence", "intensity_assessment.lt1.value_bpm",
-                 "intensity_assessment.lt1.confidence", "intensity_assessment.lt2.value_bpm",
-                 "intensity_assessment.lt2.confidence"],
+                 "intensity_assessment.lt1.confidence", "intensity_assessment.lt1.source",
+                 "intensity_assessment.lt2.value_bpm", "intensity_assessment.lt2.confidence",
+                 "intensity_assessment.lt2.source"],
                 tr(f"Ta FC moyenne est de {num(hr)} bpm, {relation} ; elle ne décrit pas tout l'effort.",
                    f"Your average HR is {num(hr)} bpm, {relation}; it does not describe the entire effort.",
                    f"Tu FC media es de {num(hr)} lpm, {relation}; no describe todo el esfuerzo."))
@@ -410,9 +423,9 @@ def build_admissible_facts(
                "The observed type matches the prescribed type under the V3 classification.",
                "El tipo observado coincide con el tipo prescrito según la clasificación V3.")
             if prescription_status == "consistent" else
-            tr("Un écart au type prescrit a été relevé ; cette lecture ne le remplace ni ne le modifie.",
-               "A deviation from your prescription was identified; this reading neither replaces nor changes it.",
-               "Se ha identificado una desviación de tu prescripción; esta lectura no la sustituye ni modifica."))
+            tr("Le type observé diffère du type prescrit selon la classification V3 ; cette lecture ne modifie pas la prescription.",
+               "The observed type differs from the prescribed type under the V3 classification; this reading does not change the prescription.",
+               "El tipo observado difiere del tipo prescrito según la clasificación V3; esta lectura no modifica la prescripción."))
     return tuple(facts)
 
 
@@ -425,7 +438,14 @@ def build_hybrid_context(
         intelligence, access=access, permissions=permissions, language=language,
     )
     return {
-        "language": _language(language), "facts": [f.provider_fact() for f in facts],
+        "language": _language(language),
+        "facts": [
+            {**f.provider_fact(), "allowed_forms": allowed_forms(f, _language(language)),
+             "editorial_intent": editorial_intent(f)}
+            for f in facts
+        ],
+        "selection_schema": EditorialSelection.model_json_schema(),
+        "composition": "Independent sentences only; no causal or interpretive transitions.",
         "threshold_conventions": {
             "LT1": "Personal first lactate threshold; use only the value admitted by V3.",
             "LT2": "Personal second lactate threshold; use only the value admitted by V3.",
@@ -453,12 +473,12 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     trends = sorted((f for f in facts if f.id.startswith("trend.")), key=lambda f: (-f.priority, f.id))
     primary_ids = ["interval.count", "session.long"]
     primary_ids += [f.id for f in trends]
-    primary_ids += ["session.unknown", "session.kind", "intensity.position", "intensity.hr"]
+    primary_ids += ["intensity.position", "intensity.hr", "session.unknown", "session.kind"]
     primary = next((index[id] for id in primary_ids if id in index), None)
     if primary is None:
         return [_claim(index["prescription.review"])] if "prescription.review" in index else []
     selected = [primary]
-    if (primary.id in {"session.long", "session.kind"} or primary.id.startswith("trend.")):
+    if (primary.id in {"interval.count", "session.long"} or primary.id.startswith("trend.")):
         support = index.get("intensity.position")
         if support is not None:
             selected.append(support)
@@ -469,6 +489,20 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
 
 def _render(claims: list[HybridClaim]) -> str:
     return " ".join(c.text for c in claims)
+
+
+def realize_editorial_selection(
+    selection: EditorialSelection, facts: tuple[AdmissibleFact, ...], language: str,
+) -> list[HybridClaim]:
+    # Revalidate even local callers; never realize an unchecked ID or form.
+    selection = validate_editorial_selection(selection.model_dump_json(), facts, _language(language))
+    index = {fact.id: fact for fact in facts}
+    return [
+        _claim(index[clause.fact_id]).model_copy(update={
+            "text": realize_clause(index[clause.fact_id], clause.form, _language(language)),
+        })
+        for clause in [selection.primary, *selection.supporting]
+    ]
 
 
 _NUMBER_RE = re.compile(r"(?<![\w.])[-+−]?\d+(?:[.,]\d+)?")
@@ -692,7 +726,10 @@ def _has_unqualified(pattern: re.Pattern, text: str, language: str) -> bool:
 def validate_generated_narrative(
     text: object, facts: tuple[AdmissibleFact, ...], *, language: str = "fr",
 ) -> tuple[bool, str, list[str]]:
-    """Apply conservative risk heuristics, not a semantic proof of the prose."""
+    """Historical C362 diagnostic only; never used to admit C365 output.
+
+    Known unsound cases are retained for audit reproducibility, not certification.
+    """
     if not isinstance(text, str):
         return False, "response_not_text", []
     candidate = text.strip()
@@ -886,7 +923,7 @@ async def generate_hybrid_coach(
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
     transport: Optional[Transport] = None,
 ) -> HybridResult:
-    """Generate original prose from admitted facts; reject risky text to fallback."""
+    """Ask for editorial decisions only; no provider prose reaches the result."""
     start = perf_counter()
     if not _authorized(access):
         return HybridResult(mode="denied", reason="workout_analysis_not_authorized")
@@ -898,7 +935,7 @@ async def generate_hybrid_coach(
     claims = select_deterministic_synthesis(facts)
     result = HybridResult(
         mode="deterministic_fallback", reason="provider_unavailable",
-        text=_render(claims), claims=claims,
+        text=_render(claims), claims=claims, verification_scope="closed_realization",
     )
     if intelligence.session_classification.type == "intervals":
         result.blockers.append("regularity_verdict_authority_unavailable")
@@ -911,27 +948,21 @@ async def generate_hybrid_coach(
     )
     prompt = json.dumps(context, ensure_ascii=False, allow_nan=False)
     system = (
-        "You are a running coach responding naturally to the workout described only by the "
-        "authorized evidence pack in the user message. Write an original, useful analysis in the "
-        "requested language; in French, address the runner as tu. React to a concrete session "
-        "observation. Be direct, precise, personal and sober. Length follows analytical value, "
-        "never a word quota: a simple session may need only one or two sentences. Select the "
-        "distinctive observation first; priority is guidance, not a checklist. Ignore secondary facts. "
-        "Do not catalogue metrics. Recorded intervals deserve structure evidence, not an explanation "
-        "from average HR. A measured historical difference is not physiological progress. "
-        "Prefer established descriptive facts over uncertain classification. Never turn probable "
-        "classification into certainty, even at high confidence. Do not routinely say 'semble', "
-        "'probablement', 'il est possible', 'could indicate' or equivalent hesitant filler. "
-        "Forbidden conclusions constrain what you assert; they are NOT caveats to recite. "
-        "Mention a limitation only when it materially changes the conclusion you actually make. "
-        "A factual average HR or interval count needs no automatic disclaimer. Only V3-authorized "
-        "facts and conclusions are scientific authority. Do not invent or recalculate values; infer "
-        "no LT1/LT2 from average HR, repetition regularity, progression from one workout, fatigue "
-        "causes, or a new prescription. A history-relative classification is not physiological "
-        "intensity. Never claim a conclusion excluded by permissions. No RAG or outside knowledge. "
-        "Never add generic benefits (aerobic base, recovery, injury prevention, durable progress), "
-        "congratulations, encouragement, or advice to close the text. No invented training goal. "
-        "Return only the analysis prose, without headings, IDs, JSON, or a generic sign-off."
+        "You are the editorial selector for a running coach, not a scientific author. "
+        "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
+        "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
+        "transitions or extra fields. Select the distinctive observation first; priority is guidance, "
+        "not a checklist. Prefer recorded structure for intervals, duration comparison for long runs, "
+        "a corroborated trend or a strong comparison for rich history, a direct average/threshold "
+        "observation over its derived probable type. Select zero to two useful, nonredundant supports. "
+        "Omit banal or redundant facts; length follows evidence, not a word quota. "
+        "Do not pair session.kind with intensity.position, session.unknown with intensity facts, "
+        "or multiple comparison/trend facts. Use each fact once. Intent must match the primary fact's "
+        "editorial_intent. direct is concise; explain retains interpretation limits; rounded marks "
+        "an approximate comparison; threshold_label spells out lactate thresholds; count_words "
+        "spells phase counts; scope explains why an average alone cannot establish progress. "
+        "There are no causal relationships between clauses. Scientific relations are internal to "
+        "each admitted fact only. Backend realization supplies all scientific assertions."
     )
     result.provider_attempted = True
     result.transport_kind = "injected" if transport is not None else "runindex"
@@ -948,21 +979,19 @@ async def generate_hybrid_coach(
                     or len(text) > MAX_RESPONSE_CHARS):
                 result.reason = "transport_response_limit"
             else:
-                render_facts = build_admissible_facts(
-                    intelligence, access=access, permissions=permissions, language=language,
-                )
-                valid, reason, checks = validate_generated_narrative(
-                    text, render_facts, language=language,
-                )
-                if valid:
-                    result.text = text.strip()
-                    result.claims = []
-                    result.mode = "generated_narrative"
-                    result.reason = reason
-                    result.verification_scope = "heuristic_risk_checks"
-                    result.checks = checks
+                try:
+                    selection = validate_editorial_selection(text, facts, _language(language))
+                    realized = realize_editorial_selection(selection, facts, language)
+                except (ValueError, TypeError):
+                    result.reason = "invalid_editorial_selection"
                 else:
-                    result.reason = reason
+                    result.claims = realized
+                    result.text = _render(realized)
+                    result.editorial_selection = selection
+                    result.mode = "editorial_realization"
+                    result.reason = "editorial_selection_validated"
+                    result.checks = ["schema", "admitted_ids", "forms", "intent", "nonredundancy",
+                                     "backend_values", "closed_composition"]
     except asyncio.TimeoutError:
         result.reason = "timeout"
     except Exception:

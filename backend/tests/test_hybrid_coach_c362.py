@@ -6,7 +6,9 @@ import json
 import pytest
 
 import hybrid_coach_c359 as hybrid
-from test_hybrid_coach_c359 import CASES, _access, _context, _facts, _provider, _run, synthetic_case
+from test_hybrid_coach_c359 import (
+    CASES, _access, _context, _editorial_text, _facts, _provider, _run, synthetic_case,
+)
 from workout_intelligence_v3_models import WIV3PrescriptionAssessment
 
 
@@ -25,16 +27,16 @@ DIRECT_TEXT = {
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_direct_descriptions_need_no_recital_of_unused_caveats(name, monkeypatch):
+def test_direct_descriptions_are_realized_not_copied_from_provider(name, monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     v3 = synthetic_case(name)
     before = deepcopy(v3.model_dump())
     result = _run(
         v3, permissions=hybrid.HybridPermissions(history=True),
-        transport=_provider(lambda *_: DIRECT_TEXT[name]),
+        transport=_provider(),
     )
-    assert result.mode == "generated_narrative"
-    assert result.text == DIRECT_TEXT[name]
+    assert result.mode == "editorial_realization"
+    assert result.text == " ".join(c.text for c in result.claims)
     assert v3.model_dump() == before
 
 
@@ -225,13 +227,13 @@ def test_postfixed_average_hr_uses_the_same_measured_value():
 
 def test_rich_and_poor_responses_follow_value_not_word_quota(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
-    poor = _run(synthetic_case("sparse"), transport=_provider(lambda *_: DIRECT_TEXT["sparse"]))
+    poor = _run(synthetic_case("sparse"), transport=_provider())
     rich = _run(
         synthetic_case("comparable_history"),
         permissions=hybrid.HybridPermissions(history=True),
-        transport=_provider(lambda *_: DIRECT_TEXT["comparable_history"]),
+        transport=_provider(),
     )
-    assert poor.mode == rich.mode == "generated_narrative"
+    assert poor.mode == rich.mode == "editorial_realization"
     assert len(poor.text) < len(rich.text)
     assert len(_context(synthetic_case("sparse"))["facts"]) < len(_context(
         synthetic_case("comparable_history"), permissions=hybrid.HybridPermissions(history=True),
@@ -240,19 +242,18 @@ def test_rich_and_poor_responses_follow_value_not_word_quota(monkeypatch):
     assert not hybrid.validate_generated_narrative("x" * (hybrid.MAX_RESPONSE_CHARS + 1), _facts())[0]
 
 
-def test_prompt_preserves_free_writing_and_scientific_selection(monkeypatch):
+def test_prompt_requests_editorial_decisions_not_scientific_prose(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
 
     async def provider(system, prompt, user, context_type):
         assert "word quota" in system and "60–110" not in system
-        assert "NOT caveats to recite" in system
-        assert "Never turn probable classification into certainty" in system
-        assert "No invented training goal" in system
+        assert "Never return prose" in system
+        assert "Backend realization supplies all scientific assertions" in system
         assert "Select the distinctive observation first" in system
         assert json.loads(prompt)["threshold_conventions"]["LT1"].startswith("Personal first lactate")
-        return DIRECT_TEXT["easy"], True, {}
+        return _editorial_text(json.loads(prompt)), True, {}
 
-    assert _run(transport=provider).mode == "generated_narrative"
+    assert _run(transport=provider).mode == "editorial_realization"
 
 
 def test_rejected_science_still_uses_deterministic_fallback(monkeypatch):
@@ -286,4 +287,5 @@ def test_rejected_science_still_uses_deterministic_fallback(monkeypatch):
 def test_independent_review_regressions_trigger_fallback(name, text, reason, monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(synthetic_case(name), transport=_provider(lambda *_: text))
-    assert result.mode == "deterministic_fallback" and result.reason == reason
+    assert hybrid.validate_generated_narrative(text, _facts(synthetic_case(name)))[1] == reason
+    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"

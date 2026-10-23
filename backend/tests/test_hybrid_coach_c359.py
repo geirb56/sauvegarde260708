@@ -249,11 +249,27 @@ def _writer_text(packet, language="fr"):
     )
 
 
-def _provider(text_factory=_writer_text, *, permissions=hybrid.HybridPermissions(), language="fr"):
+def _editorial_text(packet, language="fr"):
+    by_id = {fact["evidence_id"]: fact for fact in packet["facts"]}
+    order = ["interval.count", "session.long", "trend.probable_improvement",
+             "comparison.pace", "intensity.position", "intensity.hr", "session.unknown", "session.kind"]
+    primary = next(id for id in order if id in by_id)
+    supports = []
+    if (primary in {"interval.count", "session.long"} or primary.startswith("trend.")):
+        if "intensity.position" in by_id:
+            supports.append({"fact_id": "intensity.position", "form": "direct"})
+    return json.dumps({
+        "primary": {"fact_id": primary, "form": "direct"},
+        "supporting": supports,
+        "editorial_intent": by_id[primary]["editorial_intent"],
+    })
+
+
+def _provider(text_factory=_editorial_text, *, permissions=hybrid.HybridPermissions(), language="fr"):
     async def provider(system, prompt, user, context_type):
         assert user == "anonymous" and context_type == "c359_hybrid"
-        assert "Write an original, useful analysis" in system
-        assert "Return only the analysis prose" in system
+        assert "editorial selector" in system
+        assert "Return only JSON" in system
         packet = json.loads(prompt)
         assert "facts" in packet and "source_paths" not in prompt
         assert all("assertion" not in fact for fact in packet["facts"])
@@ -274,7 +290,7 @@ def comparison_outputs():
     for name in CASES:
         v3 = synthetic_case(name)
         packet = _context(v3, permissions=permissions)
-        proposed = _writer_text(packet)
+        proposed = _editorial_text(packet)
         result = _run(v3, permissions=permissions, transport=_provider(
             lambda _packet, _language, value=proposed: value, permissions=permissions,
         ))
@@ -286,11 +302,11 @@ def comparison_outputs():
             "accepted_text": result.text,
             "mode": result.mode,
             "reason": result.reason,
-            "rejection_reason": None if result.mode == "generated_narrative" else result.reason,
+            "rejection_reason": None if result.mode == "editorial_realization" else result.reason,
             "qualitative_evaluation": {
                 "relevance": "the sample prioritizes an admissible session-specific observation",
-                "naturalness": "handwritten mock text; not a model-generation assessment",
-                "scientific_fidelity": "heuristics passed; semantic fidelity remains unproven",
+                "naturalness": "mock selection; not a model-generation assessment",
+                "scientific_fidelity": "closed backend realization; depends on V3 and adapter correctness",
             },
             "provider_duration_sec": result.provider_duration_sec,
         })
@@ -298,22 +314,23 @@ def comparison_outputs():
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_seven_synthetic_fixtures_accept_natural_original_prose(name, monkeypatch):
+def test_seven_synthetic_fixtures_realize_editorial_selections(name, monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     v3 = synthetic_case(name)
     before = deepcopy(v3.model_dump())
     permissions = hybrid.HybridPermissions(history=True, prescription=True)
     result = _run(v3, permissions=permissions, transport=_provider(permissions=permissions))
-    assert result.mode == "generated_narrative" and result.verdict == "HOLD"
-    assert result.reason == "heuristic_checks_passed"
-    assert result.verification_scope == "heuristic_risk_checks"
+    assert result.mode == "editorial_realization" and result.verdict == "HOLD"
+    assert result.reason == "editorial_selection_validated"
+    assert result.verification_scope == "closed_realization"
     assert result.provider_attempted and result.transport_kind == "injected"
-    assert result.claims == [] and result.checks
+    assert result.claims and result.checks and result.editorial_selection
     assert result.provider_duration_sec is None and result.cost is None
     assert result.elapsed_ms >= 0 and v3.model_dump() == before
     assert result.text and 8 <= len(result.text.split()) <= 150
     if name == "intervals_4x4":
-        assert "régularité ne peut pas être jugée" in result.text
+        assert "4 phases d'effort et 3 phases de récupération" in result.text
+        assert "régularité" not in result.text
     if name == "comparable_history":
         assert "pas une preuve" in result.text
 
@@ -325,8 +342,8 @@ def test_seven_fixture_comparison_records_full_contract(monkeypatch):
     for item in outputs:
         assert item["evidence_pack"]["facts"]
         assert item["narrative_v3"] and item["llm_proposed"]
-        assert item["accepted_text"] == item["llm_proposed"]
-        assert item["mode"] == "generated_narrative"
+        assert item["accepted_text"] != item["llm_proposed"]
+        assert item["mode"] == "editorial_realization"
         assert item["provider_duration_sec"] is None
 
 
@@ -379,7 +396,8 @@ def test_adversarial_invented_numbers_and_physiology_fall_back(text, reason, mon
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     v3 = synthetic_case("no_physiology")
     result = _run(v3, transport=_provider(lambda *_: text))
-    assert result.mode == "deterministic_fallback" and result.reason == reason
+    assert hybrid.validate_generated_narrative(text, _facts(v3))[1] == reason
+    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
 
 
 @pytest.mark.parametrize("text,reason", [
@@ -392,7 +410,8 @@ def test_adversarial_regularite_progression_cause_and_prescription(text, reason,
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     v3 = synthetic_case("intervals_4x4") if "répétitions" in text else synthetic_case()
     result = _run(v3, transport=_provider(lambda *_: text))
-    assert result.mode == "deterministic_fallback" and result.reason == reason
+    assert hybrid.validate_generated_narrative(text, _facts(v3))[1] == reason
+    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
 
 
 @pytest.mark.parametrize("name,text,reason", [
@@ -404,7 +423,10 @@ def test_omitted_essential_qualification_falls_back(name, text, reason, monkeypa
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(synthetic_case(name), permissions=hybrid.HybridPermissions(history=True),
                   transport=_provider(lambda *_: text))
-    assert result.mode == "deterministic_fallback" and result.reason == reason
+    assert hybrid.validate_generated_narrative(
+        text, _facts(synthetic_case(name), permissions=hybrid.HybridPermissions(history=True)),
+    )[1] == reason
+    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
 
 
 def test_permission_filtered_history_cannot_be_laundered_into_response(monkeypatch):
@@ -415,7 +437,7 @@ def test_permission_filtered_history_cannot_be_laundered_into_response(monkeypat
     ))
     assert not any(f.id.startswith("trend.") for f in _facts(v3))
     assert result.mode == "deterministic_fallback"
-    assert result.reason == "unauthorized_history_claim"
+    assert result.reason == "invalid_editorial_selection"
 
 
 @pytest.mark.parametrize("language,text", [
@@ -522,7 +544,7 @@ def test_provider_unavailable_timeout_bad_format_and_overlength_keep_fallback(mo
     for provider, reason in [
         (unavailable, "provider_unavailable"),
         (timeout, "timeout"),
-        (malformed, "response_format"),
+        (malformed, "invalid_editorial_selection"),
         (long, "transport_response_limit"),
     ]:
         result = _run(transport=provider)
@@ -539,11 +561,11 @@ def test_default_adapter_uses_c360_limit_without_changing_chat_default(monkeypat
 
     async def adapter(system, prompt, user, context_type, **kwargs):
         calls.append(kwargs)
-        return _writer_text(json.loads(prompt)), True, {"duration_sec": 0.25}
+        return _editorial_text(json.loads(prompt)), True, {"duration_sec": 0.25}
 
     monkeypatch.setattr(llm_coach, "_call_gpt", adapter)
     result = _run()
-    assert result.mode == "generated_narrative"
+    assert result.mode == "editorial_realization"
     assert calls == [{"sanitize_errors": True, "response_max_chars": 2400}]
     assert llm_coach._clean_response("x" * 800) == "x" * 700
     assert llm_coach._clean_response("x" * 800, max_chars=2400) == "x" * 800
