@@ -19,8 +19,12 @@ ce n'est pas une démonstration d'impossibilité de toute recherche future.
 - Branche de livraison : `copilot/c364-secure-hybrid-coach-architecture`.
 - Date de vérification : 2026-10-23.
 - HEAD du code applicatif testé : identique à cette base ; aucun fichier
-  applicatif n'est modifié. Le HEAD documentaire/de tests de livraison sera
-  consigné dans la description de PR et le message final.
+  applicatif n'est modifié.
+- HEAD commité des spécifications et du rapport revus et retestés :
+  `08d1a46e85df047993d6cace1f30428593b803e8`.
+  Le commit suivant complète uniquement les références et résultats de revue
+  de ce rapport ; son HEAD de livraison est consigné dans la PR et le message
+  final, sans référence circulaire au commit qui contient ce texte.
 - Aucun appel réel au LLM ; aucune requête Garmin ou MongoDB ; aucune donnée
   utilisateur réelle. Les contrôles utilisent uniquement les fixtures synthétiques.
 - Aucun changement V3, Training V2, routes, interface, abonnements, dépendances
@@ -285,8 +289,16 @@ python -m flake8 tests/test_hybrid_coach_c364_audit.py --select=E9,F63,F7,F82
   aucun nouveau framework, manifeste ou lockfile.
 - Aucun appel de service réel. Le test API existant utilise ses doublures,
   sans démarrage de l'application ni requête MongoDB/Garmin.
-- La revue automatisée et son résultat sont consignés après commit de ces
-  spécifications ; ils ne certifient pas l'architecture de prose libre.
+- Scan de secrets avant chaque commit des fichiers livrés : aucun secret
+  détecté.
+- `parallel_validation` exécuté après commit :
+  **revue automatique indisponible** (modèle absent du registre), malgré le
+  libellé global « Success » ; ne pas interpréter l'absence de commentaires
+  comme une revue accomplie. **CodeQL non exécuté**, car diff uniquement
+  documentaire et tests, déclaré trivial selon les critères de l'outil.
+- Revue indépendante du diff en lecture seule : aucun problème significatif
+  signalé. Elle n'a modifié aucun fichier ni exécuté de tests. Ces revues ne
+  certifient pas l'architecture de prose libre.
 
 Aucune réussite produit réelle n'est revendiquée.
 
