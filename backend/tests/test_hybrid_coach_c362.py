@@ -98,6 +98,7 @@ def test_invented_prescriptions_are_rejected_even_without_numeric_values(text):
 @pytest.mark.parametrize("text", [
     "Ta FC moyenne est de 140 km.",
     "Ta FC moyenne est de 150 bpm.",
+    "Tu as couru à 150 bpm de moyenne, sous ton LT1.",
     "Ta FC moyenne est de 140 bpm, sous ton LT1 de 170 bpm.",
     "Ta FC moyenne est de 140 bpm, avec LT2 = 150 bpm.",
     "Ta FC moyenne de 140 bpm se situe au-dessus de LT2.",
@@ -207,6 +208,12 @@ def test_zero_historical_difference_is_not_missing():
         v3, permissions=hybrid.HybridPermissions(history=True),
     ) if f.id == "comparison.pace")
     assert dict(fact.values)["pace_difference"] == 0
+
+
+def test_postfixed_average_hr_uses_the_same_measured_value():
+    assert hybrid.validate_generated_narrative(
+        "Tu as couru à 140 bpm de moyenne, sous ton LT1 de 150 bpm.", _facts(),
+    )[0]
 
 
 def test_rich_and_poor_responses_follow_value_not_word_quota(monkeypatch):

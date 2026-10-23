@@ -477,6 +477,10 @@ _AVERAGE_HR_CLAIM = re.compile(
     r"fc media|frecuencia cardíaca media)[^.!?]{0,35}?"
     r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\b", re.I,
 )
+_AVERAGE_HR_POST_CLAIM = re.compile(
+    r"([-+−]?\d+(?:[.,]\d+)?)\s*(?:bpm|lpm)\s*"
+    r"(?:de moyenne|en moyenne|on average|de media)\b", re.I,
+)
 _NUMBER_WITH_UNIT = re.compile(
     r"(?<![\w.])([-+−]?\d+(?:[.,]\d+)?)\s*"
     r"(bpm|lpm|min(?:ute)?s?|days?|días|jours?|s/km|sec(?:onds?)?/km|km|%|h)\b", re.I,
@@ -710,9 +714,10 @@ def validate_generated_narrative(
         None,
     )
     if average_hr is not None:
-        for match in _AVERAGE_HR_CLAIM.finditer(candidate):
-            if _numeric_value(match.group(1)) != float(average_hr):
-                return False, "contradictory_average_hr", []
+        for pattern in (_AVERAGE_HR_CLAIM, _AVERAGE_HR_POST_CLAIM):
+            for match in pattern.finditer(candidate):
+                if _numeric_value(match.group(1)) != float(average_hr):
+                    return False, "contradictory_average_hr", []
     position_fact = next((fact for fact in facts if fact.id == "intensity.position"), None)
     if position_fact is not None:
         actual_position = dict(position_fact.values).get("position")
