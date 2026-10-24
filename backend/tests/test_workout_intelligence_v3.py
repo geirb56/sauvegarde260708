@@ -388,6 +388,242 @@ def test_c368_additive_contract_preserves_existing_science_and_consumers():
     assert len(data.effort_pace_observations.efforts) == 3
 
 
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c369_four_durations_reuse_v2_without_new_reads(monkeypatch):
+    rows = [
+        {"type": "INTERVAL_ACTIVE", "duration": duration, "distance": 600}
+        for duration in (180.125, 181, 179.5, 182)
+    ]
+    db = _c368_db(rows)
+    before = [deepcopy(coll.docs) for coll in vars(db).values()]
+    captured = []
+    original = wiv3_service.build_workout_analysis_v2
+
+    def build(**kwargs):
+        v2 = original(**kwargs)
+        captured.append((v2, v2.model_dump()))
+        return v2
+
+    monkeypatch.setattr(wiv3_service, "build_workout_analysis_v2", build)
+    result = _load(db)
+    block = result.effort_duration_observations
+    assert block.status == "available" and block.unavailable_reason is None
+    assert block.recorded_effort_count == block.available_duration_count == 4
+    assert len(captured) == 1
+    v2, snapshot = captured[0]
+    assert [row.duration_s for row in block.efforts] == [
+        phase.duration_s for phase in v2.phase_analysis.efforts
+    ] == [180.125, 181, 179.5, 182]
+    for index, row in enumerate(block.efforts):
+        assert (row.order, row.effort_number) == (index, index + 1)
+        assert row.id == f"recorded_effort_duration:{row.order}"
+        assert row.available and row.unavailable_reason is None
+        assert (row.unit, row.source, row.endpoint) == ("s", "garmin", "typed-splits")
+        assert row.method == "workout_analysis_v2._build_phase_analysis"
+        assert row.source_paths == [
+            f"garmin_activities.activity_details.phases[{row.order}].duration_s",
+            f"workout_analysis_v2.phase_analysis.efforts[{index}].duration_s",
+        ]
+    assert v2.model_dump() == snapshot
+    assert [coll.docs for coll in vars(db).values()] == before
+    actual_queries = [deepcopy(coll.queries) for coll in vars(db).values()]
+    legacy_db = _c368_db(rows)
+    from workout_intelligence_v3_models import WIV3EffortDurationObservations
+
+    monkeypatch.setattr(wiv3, "_effort_duration_observations", lambda _: WIV3EffortDurationObservations())
+    legacy = _load(legacy_db)
+    assert actual_queries == [coll.queries for coll in vars(legacy_db).values()]
+    assert result.model_dump(exclude={"effort_duration_observations"}) == legacy.model_dump(
+        exclude={"effort_duration_observations"},
+    )
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+@pytest.mark.parametrize("measurement,reason", [
+    ({}, "v2_phase_duration_missing_or_rejected_upstream"),
+    ({"duration": None}, "v2_phase_duration_missing_or_rejected_upstream"),
+    ({"duration": 0}, "invalid_v2_phase_duration"),
+    ({"duration": -1}, "v2_phase_duration_missing_or_rejected_upstream"),
+    ({"duration": "180"}, "v2_phase_duration_missing_or_rejected_upstream"),
+    ({"duration": True}, "v2_phase_duration_missing_or_rejected_upstream"),
+    ({"duration": float("nan")}, "v2_phase_duration_missing_or_rejected_upstream"),
+    ({"duration": float("inf")}, "v2_phase_duration_missing_or_rejected_upstream"),
+])
+def test_c369_partial_durations_preserve_effort_identity(measurement, reason):
+    rows = [
+        {"type": "INTERVAL_ACTIVE", "duration": 180, "distance": 600},
+        {"type": "INTERVAL_REST", "duration": 60},
+        {"type": "INTERVAL_ACTIVE", **measurement},
+        {"type": "INTERVAL_REST", "duration": 60},
+        {"type": "INTERVAL_ACTIVE", "duration": 181, "distance": 650},
+    ]
+    result = _load(_c368_db(rows))
+    block = result.effort_duration_observations
+    assert block.status == "partial" and block.unavailable_reason is None
+    assert (block.recorded_effort_count, block.available_duration_count) == (3, 2)
+    assert [row.order for row in block.efforts] == [0, 2, 4]
+    assert [row.effort_number for row in block.efforts] == [1, 2, 3]
+    assert [row.id for row in block.efforts] == [
+        "recorded_effort_duration:0", "recorded_effort_duration:2", "recorded_effort_duration:4",
+    ]
+    assert [row.duration_s for row in block.efforts] == [180, None, 181]
+    assert not block.efforts[1].available
+    assert block.efforts[1].unavailable_reason == reason
+    assert "v2_null_does_not_distinguish_missing_from_upstream_rejected_duration" in block.limitations
+    assert WorkoutIntelligenceV3.model_validate_json(result.model_dump_json()) == result
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+@pytest.mark.parametrize("mode,reason", [
+    ("absent", "structured_phases_unavailable_or_invalid"),
+    ("empty", "structured_phases_unavailable_or_invalid"),
+    ("invalid_cache", "structured_phases_unavailable_or_invalid"),
+    ("unknown", "no_recorded_efforts"),
+    ("missing", "no_usable_effort_durations"),
+    ("zero", "no_usable_effort_durations"),
+])
+def test_c369_unavailable_durations_do_not_fallback_to_session(mode, reason):
+    rows = [{"type": "INTERVAL_ACTIVE"}]
+    if mode == "unknown":
+        rows = [{"type": "UNKNOWN", "duration": 180}]
+    elif mode == "zero":
+        rows[0]["duration"] = 0
+    db = _c368_db(rows)
+    if mode == "absent":
+        db.garmin_activities.docs[-1].pop("activity_details")
+    elif mode == "empty":
+        db.garmin_activities.docs[-1]["activity_details"]["phases"] = []
+    elif mode == "invalid_cache":
+        db.garmin_activities.docs[-1]["activity_details"]["phases"][0]["duration_s"] = -1
+    block = _load(db).effort_duration_observations
+    assert block.status == "unavailable" and block.unavailable_reason == reason
+    assert block.available_duration_count == 0
+    assert all(row.duration_s is None and not row.available for row in block.efforts)
+
+
+@pytest.mark.parametrize("duration", [0, -1, "invalid", True, float("nan"), float("inf")])
+def test_c369_defensively_rejects_invalid_v2_duration_without_recalculation(duration):
+    current = _w("cur", CURRENT_DAY)
+    v2 = build_workout_analysis_v2(current, [], phases=[
+        ActivityPhase(order=0, phase_type="effort", duration_s=180, source="garmin"),
+    ])
+    effort = v2.phase_analysis.efforts[0].model_copy(update={"duration_s": duration})
+    analysis = v2.model_copy(update={
+        "phase_analysis": v2.phase_analysis.model_copy(update={"efforts": [effort]}),
+    })
+    block = extract_workout_intelligence_input(current, [], v2_analysis=analysis).effort_duration_observations
+    assert block.status == "unavailable"
+    assert block.efforts[0].duration_s is None
+    assert block.efforts[0].unavailable_reason == "invalid_v2_phase_duration"
+
+
+def test_c369_preserves_v2_order_numbering_and_rejects_unverified_sources():
+    current = _w("cur", CURRENT_DAY)
+    v2 = build_workout_analysis_v2(current, [], phases=[
+        ActivityPhase(order=5, phase_type="effort", duration_s=180, source="garmin"),
+        ActivityPhase(order=9, phase_type="effort", duration_s=None, source="garmin"),
+    ])
+    efforts = [
+        phase.model_copy(update={"effort_number": number})
+        for phase, number in zip(v2.phase_analysis.efforts, [2, 7])
+    ]
+    v2.phase_analysis.efforts = efforts
+    block = wiv3._effort_duration_observations(v2)
+    assert [(row.order, row.effort_number) for row in block.efforts] == [(5, 2), (9, 7)]
+    v2.phase_analysis.efforts = [efforts[0].model_copy(update={"source": "manual"})]
+    block = wiv3._effort_duration_observations(v2)
+    assert block.efforts == [] and block.unavailable_reason == "unverified_phase_source"
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c369_recorded_order_comes_from_normalized_v2_not_arrival_order():
+    rows = [
+        {"type": "INTERVAL_ACTIVE", "messageIndex": 2, "duration": 182},
+        {"type": "INTERVAL_ACTIVE", "messageIndex": 0, "duration": 180},
+        {"type": "INTERVAL_REST", "messageIndex": 1, "duration": 60},
+    ]
+    block = _load(_c368_db(rows)).effort_duration_observations
+    assert [(row.order, row.effort_number, row.duration_s) for row in block.efforts] == [
+        (0, 1, 180), (2, 2, 182),
+    ]
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c369_additive_json_contract_nonmutation_and_no_new_conclusions(monkeypatch):
+    from narrative_coach_v3 import build_narrative_context, deterministic_fallback
+    from workout_intelligence_v3_models import WIV3EffortDurationObservations
+
+    db = _c368_db()
+    current = db.workouts.docs[0]
+    phases = wiv3_service._cached_activity_phases(db.garmin_activities.docs[-1])
+    v2 = build_workout_analysis_v2(current, [], phases=phases)
+    before = v2.model_dump()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("C369 must reuse the supplied V2 result")
+
+    monkeypatch.setattr(wiv3, "_build_phase_analysis", forbidden)
+    data = extract_workout_intelligence_input(current, [], v2_analysis=v2)
+    original = deepcopy(data)
+    result = build_workout_intelligence_v3(data)
+    legacy = build_workout_intelligence_v3(data.model_copy(update={
+        "effort_duration_observations": WIV3EffortDurationObservations(),
+    }))
+    assert result.model_dump(exclude={"effort_duration_observations"}) == legacy.model_dump(
+        exclude={"effort_duration_observations"},
+    )
+    assert build_narrative_context(result, "en") == build_narrative_context(legacy, "en")
+    assert deterministic_fallback(result) == deterministic_fallback(legacy)
+    assert v2.model_dump() == before and data == original
+    old_payload = result.model_dump(exclude={"effort_duration_observations"})
+    assert WorkoutIntelligenceV3(**old_payload).effort_duration_observations.status == "unavailable"
+    assert WorkoutIntelligenceV3.model_validate_json(result.model_dump_json()) == result
+    assert set(result.effort_duration_observations.model_dump()) == {
+        "status", "recorded_effort_count", "available_duration_count", "efforts",
+        "unavailable_reason", "validity_conditions", "limitations",
+    }
+    result.effort_duration_observations.efforts.clear()
+    assert len(data.effort_duration_observations.efforts) == 3
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c369_existing_http_response_serializes_both_observation_blocks(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import httpx
+    from narrative_coach_v3 import deterministic_fallback
+
+    server = _server()
+    db = _c368_db()
+    result = _load(db)
+    monkeypatch.setattr(server, "_coach_access", AsyncMock(return_value=(None, True)))
+    monkeypatch.setattr(server, "get_current_user", AsyncMock(return_value={"id": "user-a"}))
+    monkeypatch.setattr(
+        server, "get_user_access", AsyncMock(return_value=SimpleNamespace(has_premium_access=True)),
+    )
+    monkeypatch.setattr(
+        server, "load_scoped_workout_intelligence_v3_with_narrative",
+        AsyncMock(return_value=(db.workouts.docs[0], result, deterministic_fallback(result))),
+    )
+
+    async def request():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://synthetic.test",
+        ) as client:
+            return await client.get(
+                "/api/coach/workout-intelligence/cur?language=en",
+                headers={"Authorization": " ".join(("Bearer", "synthetic-placeholder"))},
+            )
+
+    response = asyncio.run(request())
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"workout_id", "workout_intelligence_v3", "narrative_coach_v3"}
+    facts = payload["workout_intelligence_v3"]
+    assert facts["effort_duration_observations"] == result.effort_duration_observations.model_dump(mode="json")
+    assert facts["effort_pace_observations"] == result.effort_pace_observations.model_dump(mode="json")
+
+
 @pytest.mark.parametrize("recovery_type", ["INTERVAL_REST", "INTERVAL_RECOVERY"])
 @pytest.mark.parametrize("effort_speed,confidence", [(None, "medium"), (4.0, "high")])
 def test_synthetic_garmin_intervals_through_normalization_v2_and_v3(

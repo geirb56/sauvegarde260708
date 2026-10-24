@@ -202,6 +202,49 @@ class WIV3EffortPaceObservations(BaseModel):
     ])
 
 
+class WIV3EffortDuration(BaseModel):
+    """Recorded phase duration classified as effort by V2, not certified physiology."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    code: Literal["recorded_effort_duration"] = "recorded_effort_duration"
+    order: int
+    effort_number: int
+    duration_s: Optional[float] = None
+    unit: Literal["s"] = "s"
+    available: bool = False
+    unavailable_reason: Optional[str] = None
+    source: Literal["garmin"] = "garmin"
+    endpoint: Literal["typed-splits"] = "typed-splits"
+    method: Literal["workout_analysis_v2._build_phase_analysis"] = "workout_analysis_v2._build_phase_analysis"
+    source_paths: List[str] = Field(default_factory=list)
+
+
+class WIV3EffortDurationObservations(BaseModel):
+    """Coverage of admissible V2 durations among recorded efforts only."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["available", "partial", "unavailable"] = "unavailable"
+    recorded_effort_count: int = 0
+    available_duration_count: int = 0
+    efforts: List[WIV3EffortDuration] = Field(default_factory=list)
+    unavailable_reason: Optional[str] = "structured_phases_unavailable_or_invalid"
+    validity_conditions: List[str] = Field(default_factory=lambda: [
+        "validated_garmin_typed_splits", "classified_effort",
+        "finite_positive_v2_phase_duration",
+    ])
+    limitations: List[str] = Field(default_factory=lambda: [
+        "recorded_efforts_only_not_proof_of_whole_session_coverage",
+        "v2_classified_phase_not_certified_physiological_effort",
+        "recorded_order_not_verified_absolute_chronology",
+        "sensor_accuracy_not_certified",
+        "v2_null_does_not_distinguish_missing_from_upstream_rejected_duration",
+        "no_regularity_fatigue_or_physiological_conclusion",
+    ])
+
+
 class WorkoutIntelligenceV3Input(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -211,6 +254,7 @@ class WorkoutIntelligenceV3Input(BaseModel):
     v2_reference: WIV3V2Reference = Field(default_factory=WIV3V2Reference)
     prescription: WIV3PrescriptionContext = Field(default_factory=WIV3PrescriptionContext)
     effort_pace_observations: WIV3EffortPaceObservations = Field(default_factory=WIV3EffortPaceObservations)
+    effort_duration_observations: WIV3EffortDurationObservations = Field(default_factory=WIV3EffortDurationObservations)
 
 
 # ── Outputs ──────────────────────────────────────────────────────────────────
@@ -390,6 +434,7 @@ class WorkoutIntelligenceV3(BaseModel):
     prescription_assessment: WIV3PrescriptionAssessment
     coach_assessment: WIV3CoachAssessment
     effort_pace_observations: WIV3EffortPaceObservations = Field(default_factory=WIV3EffortPaceObservations)
+    effort_duration_observations: WIV3EffortDurationObservations = Field(default_factory=WIV3EffortDurationObservations)
 
 
 class WorkoutIntelligenceV3Response(BaseModel):

@@ -46,6 +46,8 @@ from workout_intelligence_v3_models import (
     WIV3CoachAssessment,
     WIV3CoachItem,
     WIV3CurrentSession,
+    WIV3EffortDuration,
+    WIV3EffortDurationObservations,
     WIV3EffortPace,
     WIV3EffortPaceObservations,
     WIV3FcMax,
@@ -180,6 +182,47 @@ def _effort_pace_observations(analysis: WorkoutAnalysisV2Response) -> WIV3Effort
         unavailable_reason=None if count else "no_usable_effort_paces",
     )
     return result.model_copy(update={"limitations": result.limitations + list(phases.limitations)})
+
+
+def _effort_duration_observations(analysis: WorkoutAnalysisV2Response) -> WIV3EffortDurationObservations:
+    """Echo admissible V2 durations; never recover upstream rejected measurements."""
+    phases = analysis.phase_analysis
+    if not phases.available:
+        return WIV3EffortDurationObservations()
+    if phases.source != "garmin" or any(phase.source != "garmin" for phase in phases.efforts):
+        return WIV3EffortDurationObservations(unavailable_reason="unverified_phase_source")
+    if not phases.efforts:
+        return WIV3EffortDurationObservations(unavailable_reason="no_recorded_efforts")
+    efforts = []
+    for index, phase in enumerate(phases.efforts):
+        duration = phase.duration_s
+        available = _valid_positive_number(duration)
+        reason = None
+        if not available:
+            reason = (
+                "v2_phase_duration_missing_or_rejected_upstream"
+                if duration is None else "invalid_v2_phase_duration"
+            )
+        efforts.append(WIV3EffortDuration(
+            id=f"recorded_effort_duration:{phase.order}",
+            order=phase.order,
+            effort_number=phase.effort_number,
+            duration_s=duration if available else None,
+            available=available,
+            unavailable_reason=reason,
+            source_paths=[
+                f"garmin_activities.activity_details.phases[{phase.order}].duration_s",
+                f"workout_analysis_v2.phase_analysis.efforts[{index}].duration_s",
+            ],
+        ))
+    count = sum(effort.available for effort in efforts)
+    return WIV3EffortDurationObservations(
+        status="available" if count == len(efforts) else "partial" if count else "unavailable",
+        recorded_effort_count=len(efforts),
+        available_duration_count=count,
+        efforts=efforts,
+        unavailable_reason=None if count else "no_usable_effort_durations",
+    )
 
 
 def _structure_of(workout: dict, phases: Optional[List[ActivityPhase]]) -> StructureStatus:
@@ -387,6 +430,7 @@ def extract_workout_intelligence_input(
         v2_reference=v2_reference,
         prescription=prescription or WIV3PrescriptionContext(),
         effort_pace_observations=_effort_pace_observations(v2_analysis),
+        effort_duration_observations=_effort_duration_observations(v2_analysis),
     )
 
 
@@ -1303,4 +1347,5 @@ def build_workout_intelligence_v3(data: WorkoutIntelligenceV3Input, language: st
         prescription_assessment=prescription,
         coach_assessment=build_coach_assessment(language, intensity, classification, comparison, trend, prescription),
         effort_pace_observations=data.effort_pace_observations.model_copy(deep=True),
+        effort_duration_observations=data.effort_duration_observations.model_copy(deep=True),
     )
