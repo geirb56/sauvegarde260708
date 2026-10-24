@@ -44,6 +44,13 @@ _VALUE_MEANINGS = {
     "pace_difference": "Current pace minus mean reference pace at comparable HR; negative is faster.",
     "hr_difference": "Current HR minus mean reference HR at comparable pace.",
     "references": "Number of comparable prior sessions used by V3.",
+    "effort_number": "Positive effort number preserved from V3, not a phase order or verified absolute chronology.",
+    "recorded_pace": "Recorded effort aggregate pace, not instantaneous pace or prescribed pace.",
+    "recorded_duration": "Recorded effort duration, not a prescribed duration.",
+    "recorded_total": "Number of recorded effort identities in the supplied observation block, not whole-session coverage.",
+    "pace_count": "Number of individually admitted recorded effort paces.",
+    "duration_count": "Number of individually admitted recorded effort durations.",
+    "both_count": "Number of coherent recorded identities with both admitted metrics.",
 }
 
 _REQUIRED_LIMITS = {
@@ -145,7 +152,10 @@ def _authorized(access: Optional[UserAccess]) -> bool:
 
 
 def _finite(value) -> bool:
-    return type(value) in (int, float) and math.isfinite(value)
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _count(value) -> bool:
@@ -167,6 +177,177 @@ def _required_limit_ids(fact: AdmissibleFact) -> tuple[str, ...]:
 def _language(language: str) -> str:
     code = language.lower().split("-")[0] if isinstance(language, str) else "fr"
     return code if code in {"fr", "en", "es"} else "fr"
+
+
+def _recorded_effort_facts(intelligence: WorkoutIntelligenceV3, language: str) -> list[AdmissibleFact]:
+    """Recheck bypassable models; admit at most two endpoints and one coverage.
+
+    Pair canonical phase/index identities, never list positions. Conflicting
+    order/number mappings are quarantined across blocks; other safe metrics
+    may survive independently. Endpoints use recorded identities, not available
+    measurements or speed. Coverage is omitted unless every supplied block
+    establishes the same complete identity set; absent blocks imply no counts.
+    Positive, unique V3 effort numbers are preserved, not assumed contiguous
+    or substituted for the independently checked V2 source index.
+    Unresolved identities never promote an inner effort to an endpoint.
+    """
+    blocks, indices, source_rows = {}, {}, {}
+    mappings, unresolved = [], []
+    for kind, field, unit, method in (
+        ("pace", "pace_sec_per_km", "s/km", "_phase_pace"),
+        ("duration", "duration_s", "s", "_build_phase_analysis"),
+    ):
+        block = getattr(intelligence, f"effort_{kind}_observations", None)
+        rows = getattr(block, "efforts", None)
+        if (getattr(block, "status", None) not in ("available", "partial", "unavailable")
+                or not isinstance(rows, (list, tuple)) or not rows):
+            continue
+        indices[kind] = {}
+        source_rows[kind] = {}
+        source_index = re.compile(
+            r"workout_analysis_v2\.phase_analysis\.efforts\[(0|[1-9][0-9]{0,"
+            + str(len(str(len(rows))) - 1) + r"})\]\." + field
+        )
+        entries = []
+        for row_index, row in enumerate(rows):
+            order, number = getattr(row, "order", None), getattr(row, "effort_number", None)
+            valid_order = type(order) is int and order >= 0
+            valid_number = type(number) is int and number > 0
+            if not (valid_order and valid_number):
+                unresolved.append((kind, order if valid_order else None, number if valid_number else None))
+                entries.append(None)
+                continue
+            key = (order, number)
+            mappings.append((kind, key))
+            source_rows[kind][key] = row_index
+            if getattr(row, "id", None) != f"recorded_effort_{kind}:{order}":
+                entries.append(None)
+                continue
+            supplied_paths = getattr(row, "source_paths", None)
+            match = (
+                source_index.fullmatch(supplied_paths[1])
+                if isinstance(supplied_paths, list) and len(supplied_paths) == 2
+                and isinstance(supplied_paths[1], str) else None
+            )
+            index = int(match[1]) if match is not None else None
+            indices[kind][key] = index
+            paths = [
+                f"garmin_activities.activity_details.phases[{order}]" + (".duration_s" if kind == "duration" else ""),
+                f"workout_analysis_v2.phase_analysis.efforts[{index}].{field}",
+            ]
+            provenance = (
+                index is not None and index < len(rows)
+                and getattr(row, "source", None) == "garmin"
+                and getattr(row, "endpoint", None) == "typed-splits"
+                and getattr(row, "code", None) == f"recorded_effort_{kind}"
+                and getattr(row, "unit", None) == unit
+                and getattr(row, "method", None) == f"workout_analysis_v2.{method}"
+                and getattr(row, "source_paths", None) == paths
+            )
+            value = getattr(row, field, None)
+            admitted = (
+                provenance and block.status in ("available", "partial")
+                and getattr(row, "available", None) is True
+                and getattr(row, "unavailable_reason", None) is None
+                and _finite(value) and value > 0
+            )
+            entries.append((key, value if admitted else None, provenance, index))
+        index_keys = {}
+        for entry in entries:
+            if entry is not None and entry[2]:
+                index_keys.setdefault(entry[3], set()).add(entry[0])
+        entries = [
+            (entry[0], None, False, entry[3])
+            if entry is not None and entry[2] and len(index_keys[entry[3]]) != 1
+            else entry for entry in entries
+        ]
+        blocks[kind] = (block, entries)
+    orders, numbers, duplicates = {}, {}, set()
+    seen = set()
+    for kind, key in mappings:
+        order, number = key
+        orders.setdefault(order, set()).add(number)
+        numbers.setdefault(number, set()).add(order)
+        if (kind, key) in seen:
+            duplicates.add(key)
+        seen.add((kind, key))
+    unsafe = {
+        key for _, key in mappings
+        if len(orders[key[0]]) != 1 or len(numbers[key[1]]) != 1 or key in duplicates
+    }
+    identities = sorted({key for _, key in mappings})
+    recorded_orders = set(orders)
+    unknown_order = False
+    for kind, order, number in unresolved:
+        if order is not None:
+            recorded_orders.add(order)
+        else:
+            counterpart_orders = {
+                entry[0][0] for other_kind, (_, entries) in blocks.items()
+                if other_kind != kind for entry in entries
+                if entry is not None and entry[2] and entry[0] not in unsafe
+                and entry[0][1] == number
+            }
+            if len(counterpart_orders) == 1:
+                recorded_orders.update(counterpart_orders)
+            else:
+                unknown_order = True
+    safe = {}
+    for kind, (_, entries) in blocks.items():
+        safe[kind] = {
+            entry[0]: entry[1] for entry in entries
+            if entry is not None and entry[0] not in unsafe and entry[1] is not None
+        }
+    if "pace" in safe and "duration" in safe:
+        for key in safe["pace"].keys() & safe["duration"].keys():
+            if indices["pace"][key] != indices["duration"][key]:
+                del safe["pace"][key]
+                del safe["duration"][key]
+
+    def fact(id, values, units, refs, priority):
+        result = AdmissibleFact(
+            id, tuple(values.items()), tuple(units.items()), "recorded_effort_description_only",
+            "high", ("validated_garmin_typed_splits",),
+            ("recorded_order_not_verified_absolute_chronology", "no_regularity_or_fatigue",
+             "no_progress_or_physiological_inference", "no_prescription_compliance"),
+            priority, tuple(refs), "",
+        )
+        return AdmissibleFact(**{**result.__dict__, "assertion": realize_clause(result, "direct", language)})
+
+    facts = []
+    endpoints = []
+    if identities and not unknown_order:
+        if identities[0][0] == min(recorded_orders):
+            endpoints.append((identities[0], "first"))
+        if len(identities) > 1 and identities[-1][0] == max(recorded_orders):
+            endpoints.append((identities[-1], "last"))
+    for key, label in endpoints:
+        values, units, refs = {"effort_number": key[1]}, {}, []
+        for kind, field, unit in (("pace", "pace_sec_per_km", "s/km"), ("duration", "duration_s", "s")):
+            value = safe.get(kind, {}).get(key)
+            if value is not None:
+                values[f"recorded_{kind}"] = value
+                units[f"recorded_{kind}"] = unit
+                refs.append(f"effort_{kind}_observations.efforts[{source_rows[kind][key]}].{field}")
+        if units:
+            facts.append(fact(f"effort.{label}", values, units, refs, 110 if label == "first" else 105))
+    complete_sets = []
+    for block, entries in blocks.values():
+        keys = {entry[0] for entry in entries if entry is not None}
+        if (any(entry is None or not entry[2] or entry[0] in unsafe for entry in entries)
+                or type(block.recorded_effort_count) is not int
+                or block.recorded_effort_count != len(entries)):
+            break
+        complete_sets.append(keys)
+    else:
+        if complete_sets and all(keys == complete_sets[0] for keys in complete_sets):
+            values = {"recorded_total": len(complete_sets[0])}
+            values.update({f"{kind}_count": len(rows) for kind, rows in safe.items()})
+            if "pace" in safe and "duration" in safe:
+                values["both_count"] = len(safe["pace"].keys() & safe["duration"].keys())
+            facts.append(fact("effort.coverage", values, {key: "count" for key in values},
+                              [f"effort_{kind}_observations" for kind in blocks], 75))
+    return facts
 
 
 def build_admissible_facts(
@@ -426,6 +607,7 @@ def build_admissible_facts(
             tr("Le type observé diffère du type prescrit selon la classification V3 ; cette lecture ne modifie pas la prescription.",
                "The observed type differs from the prescribed type under the V3 classification; this reading does not change the prescription.",
                "El tipo observado difiere del tipo prescrito según la clasificación V3; esta lectura no modifica la prescripción."))
+    facts.extend(_recorded_effort_facts(intelligence, lang))
     return tuple(facts)
 
 
@@ -470,6 +652,21 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     Unknown-type assertions already contain any available HR observation.
     """
     index = {fact.id: fact for fact in facts}
+    effort = next((index[id] for id in ("effort.first", "effort.last") if id in index), None)
+    if effort is not None:
+        selected = [effort]
+        historical = sorted(
+            (f for f in facts if f.id.startswith(("trend.", "comparison.")) or f.id == "session.long"),
+            key=lambda f: (-f.priority, f.id),
+        )
+        if historical:
+            selected.append(historical[0])
+        if "prescription.review" in index:
+            selected.append(index["prescription.review"])
+        for id in ("effort.last", "effort.coverage", "intensity.position"):
+            if len(selected) < 3 and id in index and index[id] not in selected:
+                selected.append(index[id])
+        return [_claim(f) for f in selected]
     trends = sorted((f for f in facts if f.id.startswith("trend.")), key=lambda f: (-f.priority, f.id))
     primary_ids = ["interval.count", "session.long"]
     primary_ids += [f.id for f in trends]
@@ -952,7 +1149,9 @@ async def generate_hybrid_coach(
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
         "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
         "transitions or extra fields. Select the distinctive observation first; priority is guidance, "
-        "not a checklist. Prefer recorded structure for intervals, duration comparison for long runs, "
+        "not a checklist. Prefer bounded recorded effort endpoints when admitted; never pair "
+        "effort.coverage with interval.count (duplicate total). Otherwise prefer recorded structure "
+        "for intervals, duration comparison for long runs, "
         "a corroborated trend or a strong comparison for rich history, a direct average/threshold "
         "observation over its derived probable type. Select zero to two useful, nonredundant supports. "
         "Omit banal or redundant facts; length follows evidence, not a word quota. "

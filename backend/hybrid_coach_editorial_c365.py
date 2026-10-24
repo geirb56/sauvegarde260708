@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,6 +36,20 @@ def format_evidence_number(value: float | int, language: str, *, signed: bool = 
     if language in {"fr", "es"}:
         magnitude = magnitude.replace(".", ",")
     return sign + magnitude
+
+
+def format_recorded_seconds(value: float | int, language: str, *, pace: bool = False) -> str:
+    """Decompose decimal seconds exactly, including exponent and subsecond inputs."""
+    whole, _, fraction = format(Decimal(str(value)), "f").partition(".")
+    minutes, seconds = divmod(int(whole), 60)
+    fraction = fraction.rstrip("0")
+    decimal = ("," if language in {"fr", "es"} else ".") + fraction if fraction else ""
+    if pace:
+        separator = "'" if language == "fr" else ":"
+        return f"{minutes}{separator}{seconds:02d}{decimal}/km"
+    if minutes and not seconds and not fraction:
+        return f"{minutes} min"
+    return f"{minutes} min {seconds:02d}{decimal} s" if minutes else f"{seconds}{decimal} s"
 
 
 def fact_category(fact: AdmissibleFact) -> str:
@@ -103,6 +118,7 @@ def validate_editorial_selection(
     selected = set(ids)
     if ("session.unknown" in selected and selected & {"intensity.hr", "intensity.position"}
             or {"session.kind", "intensity.position"} <= selected
+            or {"interval.count", "effort.coverage"} <= selected
             or sum(id.startswith(("comparison.", "trend.")) for id in ids) > 1):
         raise ValueError("redundant_selection")
     return selection
@@ -122,6 +138,48 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
     def num(key):
         return format_evidence_number(values[key], language)
 
+    if fact.id in {"effort.first", "effort.last"}:
+        label = tr("premier", "first", "primer") if fact.id == "effort.first" else tr(
+            "dernier", "last", "último",
+        )
+        number = num("effort_number")
+        duration = (
+            format_recorded_seconds(values["recorded_duration"], language)
+            if "recorded_duration" in values else None
+        )
+        pace = (
+            format_recorded_seconds(values["recorded_pace"], language, pace=True)
+            if "recorded_pace" in values else None
+        )
+        if duration is not None:
+            detail = tr(f"a duré {duration}", f"lasted {duration}", f"duró {duration}")
+            if pace is not None:
+                detail += tr(f", à {pace}", f" at {pace}", f", a {pace}")
+        else:
+            detail = tr(f"présente une allure de {pace}", f"has a recorded pace of {pace}",
+                        f"tiene un ritmo de {pace}")
+        only = tr(" (seule mesure disponible)", " (only available metric)",
+                  " (única medida disponible)") if duration is None or pace is None else ""
+        return tr(
+            f"Dans l'ordre enregistré par Garmin, le {label} effort (n° {number}) {detail}{only}.",
+            f"In Garmin's recorded order, the {label} effort (no. {number}) {detail}{only}.",
+            f"En el orden registrado por Garmin, el {label} esfuerzo (n.º {number}) {detail}{only}.",
+        )
+    if fact.id == "effort.coverage":
+        metrics = []
+        plural = "" if values["recorded_total"] == 1 else "s"
+        for key, labels in (
+            ("pace_count", ("avec allure", "with pace", "con ritmo")),
+            ("duration_count", ("avec durée", "with duration", "con duración")),
+            ("both_count", ("avec les deux", "with both", "con ambos")),
+        ):
+            if key in values:
+                metrics.append(f"{num(key)} {tr(*labels)}")
+        return tr(
+            f"Sur {num('recorded_total')} effort{plural} enregistré{plural} par Garmin : {', '.join(metrics)}.",
+            f"Of {num('recorded_total')} Garmin-recorded effort{plural}: {', '.join(metrics)}.",
+            f"De {num('recorded_total')} esfuerzo{plural} registrado{plural} por Garmin: {', '.join(metrics)}.",
+        )
     if fact.id == "interval.count":
         e, r = num("efforts"), num("recoveries")
         if form == "count_words":
