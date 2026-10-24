@@ -46,6 +46,8 @@ from workout_intelligence_v3_models import (
     WIV3CoachAssessment,
     WIV3CoachItem,
     WIV3CurrentSession,
+    WIV3EffortPace,
+    WIV3EffortPaceObservations,
     WIV3FcMax,
     WIV3HistoricalComparison,
     WIV3HistoricalSession,
@@ -142,6 +144,42 @@ def _round(value: Optional[float], digits: int = 2) -> Optional[float]:
 
 
 # ── 1. Extraction ────────────────────────────────────────────────────────────
+
+
+def _effort_pace_observations(analysis: WorkoutAnalysisV2Response) -> WIV3EffortPaceObservations:
+    """Echo V2 phase paces without recomputation, rounding or scientific inference."""
+    phases = analysis.phase_analysis
+    if not phases.available:
+        return WIV3EffortPaceObservations()
+    if phases.source != "garmin" or any(phase.source != "garmin" for phase in phases.efforts):
+        return WIV3EffortPaceObservations(unavailable_reason="unverified_phase_source")
+    if not phases.efforts:
+        return WIV3EffortPaceObservations(unavailable_reason="no_recorded_efforts")
+    efforts = []
+    for index, phase in enumerate(phases.efforts):
+        pace = phase.pace_sec_per_km
+        available = _valid_positive_number(pace)
+        efforts.append(WIV3EffortPace(
+            id=f"recorded_effort_pace:{phase.order}",
+            order=phase.order,
+            effort_number=phase.effort_number,
+            pace_sec_per_km=pace if available else None,
+            available=available,
+            unavailable_reason=None if available else "v2_phase_pace_unavailable_or_invalid",
+            source_paths=[
+                f"garmin_activities.activity_details.phases[{phase.order}]",
+                f"workout_analysis_v2.phase_analysis.efforts[{index}].pace_sec_per_km",
+            ],
+        ))
+    count = sum(effort.available for effort in efforts)
+    result = WIV3EffortPaceObservations(
+        status="available" if count == len(efforts) else "partial" if count else "unavailable",
+        recorded_effort_count=len(efforts),
+        available_pace_count=count,
+        efforts=efforts,
+        unavailable_reason=None if count else "no_usable_effort_paces",
+    )
+    return result.model_copy(update={"limitations": result.limitations + list(phases.limitations)})
 
 
 def _structure_of(workout: dict, phases: Optional[List[ActivityPhase]]) -> StructureStatus:
@@ -348,6 +386,7 @@ def extract_workout_intelligence_input(
         history=history,
         v2_reference=v2_reference,
         prescription=prescription or WIV3PrescriptionContext(),
+        effort_pace_observations=_effort_pace_observations(v2_analysis),
     )
 
 
@@ -1263,4 +1302,5 @@ def build_workout_intelligence_v3(data: WorkoutIntelligenceV3Input, language: st
         performance_trend=trend,
         prescription_assessment=prescription,
         coach_assessment=build_coach_assessment(language, intensity, classification, comparison, trend, prescription),
+        effort_pace_observations=data.effort_pace_observations.model_copy(deep=True),
     )

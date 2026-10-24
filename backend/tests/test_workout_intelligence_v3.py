@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+from copy import deepcopy
 from datetime import date
 from types import SimpleNamespace
 
@@ -171,6 +172,220 @@ def test_intervals_identified_from_reliable_garmin_phases():
     assert result.historical_comparison.status == "not_applicable"
     assert result.performance_trend.status == "insufficient_data"
     assert result.coach_assessment.diagnosis.code == "diagnosis.intervals"
+
+
+# C368 fixtures are synthetic; all calls use the actual normalization/cache/V2/V3 path.
+@pytest.fixture
+def c368_no_external_access(monkeypatch):
+    import socket
+    import subprocess
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("C368 synthetic validation forbids external access")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+
+def _c368_db(rows=None):
+    if rows is None:
+        rows = [
+            {"type": "INTERVAL_WARMUP", "duration": 300},
+            {"type": "INTERVAL_ACTIVE", "duration": 180, "distance": 600},
+            {"type": "INTERVAL_REST", "duration": 60},
+            {"type": "INTERVAL_ACTIVE", "duration": 180, "distance": 700,
+             "averageSpeed": 700 / 180},
+            {"type": "INTERVAL_RECOVERY", "duration": 60},
+            {"type": "INTERVAL_ACTIVE", "duration": 180, "distance": 650},
+        ]
+    raw = {"splits": deepcopy(rows)}
+    before = deepcopy(raw)
+    normalized = normalize_typed_splits(raw)
+    assert raw == before
+    db = _db(
+        _w("cur", CURRENT_DAY, continuous=False), [],
+        phases=[ActivityPhase(**phase) for phase in normalized],
+    )
+    return db
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c368_producer_cache_v2_v3_paces_provenance_and_nonmutation(monkeypatch):
+    db = _c368_db()
+    before = [deepcopy(coll.docs) for coll in vars(db).values()]
+    captured = []
+    original = wiv3_service.build_workout_analysis_v2
+
+    def build(**kwargs):
+        v2 = original(**kwargs)
+        captured.append((v2, v2.model_dump()))
+        return v2
+
+    monkeypatch.setattr(wiv3_service, "build_workout_analysis_v2", build)
+    result = _load(db)
+    block = result.effort_pace_observations
+    assert block.status == "available" and block.unavailable_reason is None
+    assert block.recorded_effort_count == block.available_pace_count == 3
+    assert [row.order for row in block.efforts] == [1, 3, 5]
+    assert [row.effort_number for row in block.efforts] == [1, 2, 3]
+    assert [row.id for row in block.efforts] == [
+        "recorded_effort_pace:1", "recorded_effort_pace:3", "recorded_effort_pace:5",
+    ]
+    v2, snapshot = captured[0]
+    assert [row.pace_sec_per_km for row in block.efforts] == [
+        phase.pace_sec_per_km for phase in v2.phase_analysis.efforts
+    ]
+    assert block.efforts[0].pace_sec_per_km == 300
+    assert block.efforts[1].pace_sec_per_km == 1000 / (700 / 180)
+    for index, row in enumerate(block.efforts):
+        assert row.available and row.unavailable_reason is None
+        assert row.unit == "s/km" and row.source == "garmin" and row.endpoint == "typed-splits"
+        assert row.method == "workout_analysis_v2._phase_pace"
+        assert row.source_paths == [
+            f"garmin_activities.activity_details.phases[{row.order}]",
+            f"workout_analysis_v2.phase_analysis.efforts[{index}].pace_sec_per_km",
+        ]
+    assert "sensor_accuracy_not_certified" in block.limitations
+    assert "recorded_order_not_verified_absolute_chronology" in block.limitations
+    assert v2.model_dump() == snapshot
+    assert [coll.docs for coll in vars(db).values()] == before
+    assert WorkoutIntelligenceV3.model_validate_json(result.model_dump_json()) == result
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+@pytest.mark.parametrize("measurement", [
+    {}, {"duration": 0, "distance": 600}, {"duration": 180, "distance": 0},
+    {"duration": True, "distance": False},
+    {"duration": float("nan"), "distance": float("inf")},
+    {"duration": -1, "distance": -1},
+    {"duration": 180, "distance": 600, "averageSpeed": 10},
+])
+def test_c368_missing_or_aberrant_pace_preserves_identity_and_partial_coverage(measurement):
+    rows = [
+        {"type": "INTERVAL_ACTIVE", "duration": 180, "distance": 600},
+        {"type": "INTERVAL_REST", "duration": 60},
+        {"type": "INTERVAL_ACTIVE", **measurement},
+        {"type": "INTERVAL_REST", "duration": 60},
+        {"type": "INTERVAL_ACTIVE", "duration": 180, "distance": 650},
+    ]
+    block = _load(_c368_db(rows)).effort_pace_observations
+    assert block.status == "partial"
+    assert block.recorded_effort_count == 3 and block.available_pace_count == 2
+    assert [row.order for row in block.efforts] == [0, 2, 4]
+    assert [row.effort_number for row in block.efforts] == [1, 2, 3]
+    missing = block.efforts[1]
+    assert missing.pace_sec_per_km is None and not missing.available
+    assert missing.unavailable_reason == "v2_phase_pace_unavailable_or_invalid"
+    if measurement.get("averageSpeed") == 10:
+        assert "incoherent_pace" in block.limitations
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+@pytest.mark.parametrize("mode,reason", [
+    ("absent", "structured_phases_unavailable_or_invalid"),
+    ("incomplete", "structured_phases_unavailable_or_invalid"),
+    ("bad_order", "structured_phases_unavailable_or_invalid"),
+    ("aberrant_cache", "structured_phases_unavailable_or_invalid"),
+    ("unknown", "no_recorded_efforts"),
+    ("no_pace", "no_usable_effort_paces"),
+])
+def test_c368_explicit_unavailability_never_uses_session_average(mode, reason):
+    db = _c368_db()
+    activity = db.garmin_activities.docs[-1]
+    details = activity["activity_details"]
+    if mode == "absent":
+        activity.pop("activity_details")
+    elif mode == "incomplete":
+        details["status"] = "partial"
+    elif mode == "bad_order":
+        details["phases"][1]["order"] = 0
+    elif mode == "aberrant_cache":
+        details["phases"][1]["average_speed_mps"] = float("inf")
+    else:
+        rows = [{"type": "UNKNOWN"}] if mode == "unknown" else [{"type": "INTERVAL_ACTIVE"}]
+        details["phases"] = normalize_typed_splits({"splits": rows})
+    block = _load(db).effort_pace_observations
+    assert block.status == "unavailable" and block.unavailable_reason == reason
+    assert block.available_pace_count == 0
+    assert all(row.pace_sec_per_km is None for row in block.efforts)
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+@pytest.mark.parametrize("cache", [
+    None, {"status": "partial", "laps": []},
+    {"status": "complete", "laps": [{"duration_s": 999}]},
+])
+@pytest.mark.parametrize("samples", [None, [], [{"timestamp": 99}, {"timestamp": 1}]])
+def test_c368_laps_and_irregular_or_absent_series_are_not_authorities(cache, samples):
+    db = _c368_db()
+    expected = _load(db).model_dump()
+    db.garmin_activities.docs[-1].update(activity_laps=cache, time_series=samples)
+    assert _load(db).model_dump() == expected
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c368_user_isolation_including_colliding_activity_ids():
+    db = _c368_db()
+    expected = _load(db).effort_pace_observations
+    foreign = deepcopy(db.garmin_activities.docs[-1])
+    foreign["user_id"] = "user-b"
+    foreign["activity_details"]["phases"][1]["duration_s"] = 9999
+    db.garmin_activities.docs.insert(0, foreign)
+    assert _load(db).effort_pace_observations == expected
+    assert all(query["user_id"] == "user-a" for coll in vars(db).values() for query in coll.queries)
+    db.garmin_activities.docs.pop()
+    assert _load(db).effort_pace_observations.status == "unavailable"
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c368_preserves_normalized_recorded_order_not_payload_arrival_order():
+    rows = [
+        {"type": "INTERVAL_ACTIVE", "messageIndex": 2, "duration": 180, "distance": 720},
+        {"type": "INTERVAL_ACTIVE", "messageIndex": 0, "duration": 180, "distance": 600},
+        {"type": "INTERVAL_REST", "messageIndex": 1, "duration": 60},
+    ]
+    block = _load(_c368_db(rows)).effort_pace_observations
+    assert [(row.order, row.effort_number, row.pace_sec_per_km) for row in block.efforts] == [
+        (0, 1, 300), (2, 2, 250),
+    ]
+    assert "recorded_order_not_verified_absolute_chronology" in block.limitations
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c368_non_garmin_phase_output_cannot_gain_garmin_provenance():
+    current = _w("cur", CURRENT_DAY)
+    phases = [ActivityPhase(
+        order=0, phase_type="effort", duration_s=180, distance_m=600, source="manual",
+    )]
+    v2 = build_workout_analysis_v2(current, [], phases=phases)
+    data = extract_workout_intelligence_input(current, [], v2_analysis=v2)
+    block = build_workout_intelligence_v3(data).effort_pace_observations
+    assert block.status == "unavailable" and block.efforts == []
+    assert block.unavailable_reason == "unverified_phase_source"
+
+
+@pytest.mark.usefixtures("c368_no_external_access")
+def test_c368_additive_contract_preserves_existing_science_and_consumers():
+    from workout_intelligence_v3_models import WIV3EffortPaceObservations
+
+    db = _c368_db()
+    current = db.workouts.docs[0]
+    phases = wiv3_service._cached_activity_phases(db.garmin_activities.docs[-1])
+    v2 = build_workout_analysis_v2(current, [], phases=phases)
+    before = v2.model_dump()
+    data = extract_workout_intelligence_input(current, [], v2_analysis=v2)
+    original = deepcopy(data)
+    result = build_workout_intelligence_v3(data)
+    legacy_input = data.model_copy(update={"effort_pace_observations": WIV3EffortPaceObservations()})
+    legacy = build_workout_intelligence_v3(legacy_input)
+    assert result.model_dump(exclude={"effort_pace_observations"}) == legacy.model_dump(
+        exclude={"effort_pace_observations"},
+    )
+    assert v2.model_dump() == before and data == original
+    old_payload = result.model_dump(exclude={"effort_pace_observations"})
+    assert WorkoutIntelligenceV3(**old_payload).effort_pace_observations.status == "unavailable"
+    result.effort_pace_observations.efforts.clear()
+    assert len(data.effort_pace_observations.efforts) == 3
 
 
 @pytest.mark.parametrize("recovery_type", ["INTERVAL_REST", "INTERVAL_RECOVERY"])
