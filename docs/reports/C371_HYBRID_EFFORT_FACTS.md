@@ -1,5 +1,8 @@
 # C371 — Faits individuels d’effort du Coach hybride
 
+**État courant avant merge : section 11, patch de sécurisation de la PR #367.**
+Les sections précédentes conservent les preuves de la première livraison.
+
 ## Traçabilité de livraison
 
 - Base canonique exacte : `bb9f8914ac030fcd98ca5702f55b0a80a1321bbe`.
@@ -450,8 +453,14 @@ confirment :
 - branche exclusive de travail :
   `copilot/c371-exploitation-allures-durees-individuelles` ;
 - HEAD avant correction : `91577d88a09eefd3e88fd7541adf1a409027b17a` ;
+- HEAD après correction fonctionnelle et tests :
+  `c1981b2d1e77db95c8a0c16f1b3bfa5d6e48a3fa` ;
 - base de PR et HEAD `copilot/dev` :
   `bb9f8914ac030fcd98ca5702f55b0a80a1321bbe`.
+
+Ce complément de résultats et de HEAD est documentaire uniquement ; le SHA
+du dernier commit documentaire est précisé sur la PR existante. Aucun code
+supplémentaire n’est implicitement annoncé testé.
 
 Les deux modules hybrides et la totalité de la suite C371 ont été relus.
 Les contrats ont été revérifiés dans :
@@ -652,6 +661,8 @@ Résultat : **réussis**. Revue indépendante du patch : aucun défaut significa
 signalé. Les outils GitHub Actions ont été consultés ; le run précédent
 `40128395471` ne comporte aucun job échoué et n’est pas présenté comme une
 preuve des nouveaux tests. Les résultats ci-dessus sont les exécutions locales.
+Le scan des quatre fichiers modifiés ne détecte aucun secret. CodeQL Python
+après commit de toutes les corrections fonctionnelles : **0 alerte**.
 
 ### 11.6 Non-régressions, risques résiduels et verdict
 
