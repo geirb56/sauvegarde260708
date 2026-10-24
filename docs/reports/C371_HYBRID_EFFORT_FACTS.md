@@ -1,5 +1,17 @@
 # C371 — Faits individuels d’effort du Coach hybride
 
+## Traçabilité de livraison
+
+- Base canonique exacte : `bb9f8914ac030fcd98ca5702f55b0a80a1321bbe`.
+- HEAD livré de l’implémentation et des tests :
+  `17f233672cd4f408912816fbb1e9c3ffe9ebc0b5`.
+- CodeQL Python exécuté après ce commit : **0 alerte**.
+- Ce complément de traçabilité est ajouté ensuite dans un commit documentaire
+  uniquement. Le HEAD complet final, incluant ce complément, est donné dans la
+  description de PR ; aucun autre changement de code n’est annoncé testé
+  implicitement.
+- Cible : `copilot/dev`. Pas de merge, de déploiement ni d’activation.
+
 ## 1. Audit préalable, avant implémentation
 
 Le 24 octobre 2026, la base locale et le HEAD distant de `copilot/dev`,
@@ -147,7 +159,7 @@ La revue a fait corriger deux cas limites avant livraison :
   numéro d’effort ; les références locales conservent la position réelle dans
   chaque bloc V3, même si les listes sont réordonnées ;
 - une identité malformée ne disparaît pas silencieusement du choix des bornes :
-  son ordre connu est conservé, ou les bornes incertaines sont retenues hors
+  son ordre connu est conservé, ou les bornes incertaines sont écartées
   du catalogue si aucun autre bloc fiable ne permet de les établir.
   Un effort intérieur ne devient donc pas artificiellement « premier » ou
   « dernier ».
@@ -399,6 +411,13 @@ numéros d’effort non contigus ; les tests synthétiques ne reposent donc pas
 uniquement sur une fixture reproduisant une hypothèse d’indice.
 Les références d’évidence pointent vers les positions réelles des observations
 V3 admises, sans transmettre les chemins ni les identifiants privés au provider.
+
+Le scan de secrets des quatre fichiers livrés ne détecte aucun secret.
+CodeQL Python, exécuté après le commit de l’ensemble du code modifié,
+ne trouve **aucune alerte**. Les changements sont classés non triviaux :
+ils modifient effectivement l’admission et la sélection des faits.
+Les environnements, journaux et fichiers temporaires de validation ont été
+retirés du workspace ; ils ne font pas partie de la livraison.
 
 ## 10. Verdict
 
