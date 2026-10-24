@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from access_control import UserAccess
 from hybrid_coach_editorial_c365 import (
     EditorialSelection, allowed_forms, editorial_intent, fact_category, format_evidence_number,
-    realize_clause, validate_editorial_selection,
+    format_recorded_seconds, RECORDED_WHOLE_DIGITS, realize_clause, validate_editorial_selection,
 )
 from narrative_coach_v3 import Transport, format_narrative_number
 from workout_intelligence_v3_models import WorkoutIntelligenceV3
@@ -24,6 +24,8 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
 TIMEOUT_SECONDS = 8.0
 MAX_RESPONSE_CHARS = 2400
+MAX_CONTEXT_CHARS = 24000
+MAX_COACH_TEXT_CHARS = 2400
 VERSION = "c365-editorial-realization-1"
 
 _VALUE_MEANINGS = {
@@ -211,8 +213,8 @@ def _recorded_effort_facts(intelligence: WorkoutIntelligenceV3, language: str) -
         entries = []
         for row_index, row in enumerate(rows):
             order, number = getattr(row, "order", None), getattr(row, "effort_number", None)
-            valid_order = type(order) is int and order >= 0
-            valid_number = type(number) is int and number > 0
+            valid_order = type(order) is int and 0 <= order < 10 ** RECORDED_WHOLE_DIGITS
+            valid_number = type(number) is int and 0 < number < 10 ** RECORDED_WHOLE_DIGITS
             if not (valid_order and valid_number):
                 unresolved.append((kind, order if valid_order else None, number if valid_number else None))
                 entries.append(None)
@@ -250,6 +252,7 @@ def _recorded_effort_facts(intelligence: WorkoutIntelligenceV3, language: str) -
                 and getattr(row, "available", None) is True
                 and getattr(row, "unavailable_reason", None) is None
                 and _finite(value) and value > 0
+                and format_recorded_seconds(value, language, pace=kind == "pace") is not None
             )
             entries.append((key, value if admitted else None, provenance, index))
         index_keys = {}
@@ -644,6 +647,18 @@ def _claim(fact: AdmissibleFact) -> HybridClaim:
     )
 
 
+def _bounded_claims(facts: list[AdmissibleFact]) -> list[HybridClaim]:
+    """Keep whole independent fallback clauses; never cut a value or its unit."""
+    claims = []
+    used = 0
+    for fact in facts:
+        size = len(fact.assertion) + bool(claims)
+        if used + size <= MAX_COACH_TEXT_CHARS:
+            claims.append(_claim(fact))
+            used += size
+    return claims
+
+
 def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[HybridClaim]:
     """Choose a main reading and nonredundant support, not an LLM gain.
 
@@ -663,17 +678,17 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
             selected.append(historical[0])
         if "prescription.review" in index:
             selected.append(index["prescription.review"])
-        for id in ("effort.last", "effort.coverage", "intensity.position"):
+        for id in ("intensity.position", "intensity.hr", "effort.last", "effort.coverage"):
             if len(selected) < 3 and id in index and index[id] not in selected:
                 selected.append(index[id])
-        return [_claim(f) for f in selected]
+        return _bounded_claims(selected)
     trends = sorted((f for f in facts if f.id.startswith("trend.")), key=lambda f: (-f.priority, f.id))
     primary_ids = ["interval.count", "session.long"]
     primary_ids += [f.id for f in trends]
     primary_ids += ["intensity.position", "intensity.hr", "session.unknown", "session.kind"]
     primary = next((index[id] for id in primary_ids if id in index), None)
     if primary is None:
-        return [_claim(index["prescription.review"])] if "prescription.review" in index else []
+        return _bounded_claims([index["prescription.review"]]) if "prescription.review" in index else []
     selected = [primary]
     if (primary.id in {"interval.count", "session.long"} or primary.id.startswith("trend.")):
         support = index.get("intensity.position")
@@ -681,7 +696,7 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
             selected.append(support)
     if "prescription.review" in index:
         selected.append(index["prescription.review"])
-    return [_claim(f) for f in selected]
+    return _bounded_claims(selected)
 
 
 def _render(claims: list[HybridClaim]) -> str:
@@ -694,12 +709,15 @@ def realize_editorial_selection(
     # Revalidate even local callers; never realize an unchecked ID or form.
     selection = validate_editorial_selection(selection.model_dump_json(), facts, _language(language))
     index = {fact.id: fact for fact in facts}
-    return [
+    claims = [
         _claim(index[clause.fact_id]).model_copy(update={
             "text": realize_clause(index[clause.fact_id], clause.form, _language(language)),
         })
         for clause in [selection.primary, *selection.supporting]
     ]
+    if len(_render(claims)) > MAX_COACH_TEXT_CHARS:
+        raise ValueError("realization_size_limit")
+    return claims
 
 
 _NUMBER_RE = re.compile(r"(?<![\w.])[-+−]?\d+(?:[.,]\d+)?")
@@ -1144,6 +1162,10 @@ async def generate_hybrid_coach(
         intelligence, access=access, permissions=permissions, language=language,
     )
     prompt = json.dumps(context, ensure_ascii=False, allow_nan=False)
+    if len(prompt) > MAX_CONTEXT_CHARS:
+        result.reason = "context_size_limit"
+        result.elapsed_ms = (perf_counter() - start) * 1000
+        return result
     system = (
         "You are the editorial selector for a running coach, not a scientific author. "
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "

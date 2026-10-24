@@ -12,6 +12,12 @@ if TYPE_CHECKING:
     from hybrid_coach_c359 import AdmissibleFact
 
 
+# Display slots, not physiological thresholds: at most 34 characters per metric.
+RECORDED_WHOLE_DIGITS = 6
+RECORDED_FRACTION_DIGITS = 18
+MAX_RECORDED_METRIC_CHARS = 34
+
+
 class EditorialClause(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -38,9 +44,19 @@ def format_evidence_number(value: float | int, language: str, *, signed: bool = 
     return sign + magnitude
 
 
-def format_recorded_seconds(value: float | int, language: str, *, pace: bool = False) -> str:
-    """Decompose decimal seconds exactly, including exponent and subsecond inputs."""
-    whole, _, fraction = format(Decimal(str(value)), "f").partition(".")
+def format_recorded_seconds(value: float | int, language: str, *, pace: bool = False) -> str | None:
+    """Return an exact, bounded display or None; never round an unrepresentable value.
+
+    Six whole-second digits and eighteen decimal places reserve fixed display
+    slots. Check them before expanding Decimal exponents or converting integers
+    to strings. This is an editorial budget, not a test of sensor plausibility.
+    """
+    if type(value) not in (int, float) or not 0 < value < 10 ** RECORDED_WHOLE_DIGITS:
+        return None
+    decimal_value = Decimal(str(value))
+    if decimal_value.as_tuple().exponent < -RECORDED_FRACTION_DIGITS:
+        return None
+    whole, _, fraction = format(decimal_value, "f").partition(".")
     minutes, seconds = divmod(int(whole), 60)
     fraction = fraction.rstrip("0")
     decimal = ("," if language in {"fr", "es"} else ".") + fraction if fraction else ""

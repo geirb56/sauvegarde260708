@@ -1,7 +1,9 @@
 """C371 synthetic bounded recorded observations; no external service authority."""
 
 from copy import deepcopy
+from dataclasses import replace
 import json
+import math
 import socket
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from access_control import UserAccess
 import hybrid_coach_c359 as hybrid
 from hybrid_coach_editorial_c365 import (
+    MAX_RECORDED_METRIC_CHARS, RECORDED_FRACTION_DIGITS, RECORDED_WHOLE_DIGITS,
     allowed_forms, format_recorded_seconds, realize_clause, validate_editorial_selection,
 )
 from test_hybrid_coach_c359 import _access, _context, _facts, _provider, _run, synthetic_case
@@ -422,9 +425,7 @@ def test_natural_backend_sentence_preserves_recorded_order_scope(language, expec
 @pytest.mark.parametrize("value,expected", [
     (59.99999999999999, "59.99999999999999 s"),
     (60, "1 min"), (0.125, "0.125 s"),
-    (1e-20, "0.00000000000000000001 s"),
-    (1e20, "1666666666666666666 min 40 s"),
-    (1.23456789012345e25, "205761315020575000000000 min"),
+    (1e-18, "0.000000000000000001 s"),
 ])
 def test_duration_precision_boundaries_and_exponents(value, expected):
     assert format_recorded_seconds(value, "en") == expected
@@ -432,7 +433,7 @@ def test_duration_precision_boundaries_and_exponents(value, expected):
     assert expected in effort_facts(v3, language="en")["effort.first"].assertion
 
 
-@pytest.mark.parametrize("value", [5e-324, 1e-10, 1e308, 1.7976931348623157e308])
+@pytest.mark.parametrize("value", [1e-18, 1e-10, 999999, 999999.9999999999])
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
 def test_extreme_exponents_exact_pace_decomposition(value, language):
     from decimal import Decimal
@@ -446,6 +447,196 @@ def test_extreme_exponents_exact_pace_decomposition(value, language):
     v3 = change_row(recorded_case(1), "pace", pace_sec_per_km=value)
     assert expected in effort_facts(v3, language=language)["effort.first"].assertion
     assert format_recorded_seconds(value, language, pace=True) == expected
+
+
+@pytest.mark.parametrize("value", [
+    1e308, 1.7976931348623157e308, 1e20, 1e6, 5e-324, 1e-19,
+    math.nextafter(1e-18, 0), None, "240", "malformed", True, False,
+    0, -1, float("nan"), float("inf"), -float("inf"),
+    pytest.param(10 ** 5000, id="oversized-integer"),
+])
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_unrepresentable_formatter_never_expands_or_fabricates(value, language):
+    for pace in (False, True):
+        assert format_recorded_seconds(value, language, pace=pace) is None
+
+
+@pytest.mark.parametrize("kind,field", [("pace", "pace_sec_per_km"), ("duration", "duration_s")])
+@pytest.mark.parametrize("value", [
+    1e308, 5e-324, "malformed", pytest.param(10 ** 5000, id="oversized-integer"),
+])
+def test_unrepresentable_measure_excluded_before_assertion_with_independent_fallback(
+    monkeypatch, kind, field, value,
+):
+    v3 = change_row(recorded_case(1), kind, **{field: value})
+    other_kind = "duration" if kind == "pace" else "pace"
+    first = values(v3)
+    assert f"recorded_{kind}" not in first
+    assert f"recorded_{other_kind}" in first
+    coverage = values(v3, "effort.coverage")
+    assert coverage[f"{kind}_count"] == 0
+    assert coverage[f"{other_kind}_count"] == 1
+    assert coverage["both_count"] == 0
+    assert "seule mesure disponible" in effort_facts(v3)["effort.first"].assertion
+    packet = json.dumps(_context(v3), allow_nan=False)
+    assert "malformed" not in packet and "1e+308" not in packet
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+
+    async def failed(*args):
+        raise RuntimeError("private technical details")
+
+    result = _run(v3, transport=failed)
+    assert result.mode == "deterministic_fallback"
+    assert result.text and len(result.text) <= hybrid.MAX_COACH_TEXT_CHARS
+    assert "private" not in result.text and "None" not in result.text
+    assert result.claims[0].id == "effort.first"
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_all_measures_excluded_or_no_efforts_keeps_honest_fallback(monkeypatch, empty):
+    v3 = synthetic_case("intervals_4x4") if empty else recorded_case(1)
+    if not empty:
+        v3 = change_row(v3, "pace", pace_sec_per_km=1e308)
+        v3 = change_row(v3, "duration", duration_s=5e-324)
+    assert not {"effort.first", "effort.last"} & effort_facts(v3).keys()
+    if not empty:
+        assert values(v3, "effort.coverage") == {
+            "recorded_total": 1, "pace_count": 0, "duration_count": 0, "both_count": 0,
+        }
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = _run(v3, transport=_provider(lambda *_: "not a selection"))
+    assert result.mode == "deterministic_fallback"
+    assert result.claims and result.text
+    assert len(result.claims) <= 3
+    assert "1e+308" not in result.text and "None" not in result.text
+    assert all(c.id in {"interval.count", "intensity.position"} for c in result.claims)
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("value", [
+    1e-18, math.nextafter(10 ** RECORDED_WHOLE_DIGITS, 0), 59.99999999999999,
+    60.00000000000001, 0.12345678901234568,
+])
+def test_display_boundaries_preserve_exact_precision_and_bound_new_fact_lengths(language, value):
+    from decimal import Decimal
+
+    assert RECORDED_WHOLE_DIGITS == 6 and RECORDED_FRACTION_DIGITS == 18
+    v3 = recorded_case(2, orders=[999998, 999999])
+    for kind, field in (("pace", "pace_sec_per_km"), ("duration", "duration_s")):
+        for index in (0, 1):
+            v3 = change_row(v3, kind, index, **{field: value, "effort_number": 999998 + index})
+    facts = effort_facts(v3, language=language)
+    assert len(facts) == 3
+    for fact in facts.values():
+        assert len(fact.assertion) <= 256
+        for form in allowed_forms(fact, language):
+            assert len(realize_clause(fact, form, language)) <= 256
+    for pace in (False, True):
+        text = format_recorded_seconds(value, language, pace=pace)
+        assert text is not None and len(text) <= MAX_RECORDED_METRIC_CHARS
+        localized = text.replace(",", ".").replace("'", ":")
+        if pace:
+            minutes, seconds = localized.removesuffix("/km").split(":")
+            restored = Decimal(minutes) * 60 + Decimal(seconds)
+        elif " min " in localized:
+            minutes, seconds = localized.removesuffix(" s").split(" min ")
+            restored = Decimal(minutes) * 60 + Decimal(seconds)
+        elif localized.endswith(" min"):
+            restored = Decimal(localized.removesuffix(" min")) * 60
+        else:
+            restored = Decimal(localized.removesuffix(" s"))
+        assert restored == Decimal(str(value))
+    packet = _context(v3, language=language)
+    assert len(json.dumps(packet, ensure_ascii=False, allow_nan=False)) < hybrid.MAX_CONTEXT_CHARS
+    response = selection(supporting=("effort.last", "effort.coverage"))
+    chosen = validate_editorial_selection(response, tuple(facts.values()), language)
+    claims = hybrid.realize_editorial_selection(chosen, tuple(facts.values()), language)
+    assert len(hybrid._render(claims)) <= 3 * 256 + 2
+
+
+@pytest.mark.parametrize("field", ["order", "effort_number"])
+def test_oversized_identity_never_reaches_integer_string_conversion(field):
+    v3 = change_row(recorded_case(1, duration=False), "pace", **{field: 10 ** 5000})
+    assert not effort_facts(v3)
+    json.dumps(_context(v3), allow_nan=False)
+
+
+def test_effort_does_not_displace_independent_intensity_with_available_support_slot():
+    facts = _facts(recorded_case())
+    assert "intensity.position" in {f.id for f in facts}
+    assert [c.id for c in hybrid.select_deterministic_synthesis(facts)] == [
+        "effort.first", "intensity.position", "effort.last",
+    ]
+    rich = _facts(
+        recorded_case(base=synthetic_case("comparable_history")),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    claims = hybrid.select_deterministic_synthesis(rich)
+    assert claims[0].id == "effort.first"
+    assert claims[1].id.startswith("trend.")
+    assert claims[2].id == "intensity.position"
+
+
+@pytest.mark.parametrize("prescription", [False, True])
+def test_historical_comparison_and_prescription_survive_without_new_ranking(prescription):
+    v3 = recorded_case(base=synthetic_case("comparable_history"))
+    v3.performance_trend.status = "insufficient_data"
+    if prescription:
+        v3.prescription_assessment.status = "consistent"
+    facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True, prescription=prescription))
+    claims = hybrid.select_deterministic_synthesis(facts)
+    assert len(claims) == 3 and claims[0].id == "effort.first"
+    assert claims[1].id.startswith("comparison.")
+    assert claims[2].id == ("prescription.review" if prescription else "intensity.position")
+
+
+def test_above_threshold_observation_kept_instead_of_redundant_effort_coverage():
+    v3 = recorded_case()
+    v3.intensity_assessment.hr_used_bpm = 180
+    v3.intensity_assessment.position = "above_LT2"
+    facts = _facts(v3)
+    intensity = next(f for f in facts if f.id == "intensity.position")
+    assert dict(intensity.values)["position"] == "above_LT2"
+    assert "intensity.position" in {c.id for c in hybrid.select_deterministic_synthesis(facts)}
+
+
+def test_oversized_context_uses_fallback_without_calling_provider(monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    v3 = recorded_case()
+    size = len(json.dumps(_context(v3), ensure_ascii=False, allow_nan=False))
+
+    async def forbidden(*args):
+        pytest.fail("oversized context must not reach provider")
+
+    monkeypatch.setattr(hybrid, "MAX_CONTEXT_CHARS", size - 1)
+    result = _run(v3, transport=forbidden)
+    assert result.mode == "deterministic_fallback" and result.reason == "context_size_limit"
+    assert result.text and not result.provider_attempted
+    monkeypatch.setattr(hybrid, "MAX_CONTEXT_CHARS", size)
+    assert _run(v3, transport=_provider(lambda *_: selection())).mode == "editorial_realization"
+
+
+def test_coach_text_budget_rejects_whole_editorial_output_and_preserves_fallback_clauses(monkeypatch):
+    facts = _facts(recorded_case())
+    first = next(f for f in facts if f.id == "effort.first")
+    oversized = replace(first, assertion="x" * (hybrid.MAX_COACH_TEXT_CHARS + 1))
+    bounded = hybrid.select_deterministic_synthesis(tuple(oversized if f is first else f for f in facts))
+    assert bounded and first.id not in {c.id for c in bounded}
+    assert len(hybrid._render(bounded)) <= hybrid.MAX_COACH_TEXT_CHARS
+    assert all(c.text == next(f.assertion for f in facts if f.id == c.id) for c in bounded)
+    clause = selection()
+    chosen = validate_editorial_selection(clause, facts, "fr")
+    monkeypatch.setattr(hybrid, "MAX_COACH_TEXT_CHARS", len(first.assertion) - 1)
+    with pytest.raises(ValueError, match="realization_size_limit"):
+        hybrid.realize_editorial_selection(chosen, facts, "fr")
+
+
+def test_existing_provider_response_length_guard_still_rejects_without_echo(monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = _run(recorded_case(), transport=_provider(lambda *_: "x" * (hybrid.MAX_RESPONSE_CHARS + 1)))
+    assert result.mode == "deterministic_fallback"
+    assert result.reason == "transport_response_limit"
+    assert result.text and "xxxx" not in result.text
 
 
 def test_no_phases_legacy_unchanged():

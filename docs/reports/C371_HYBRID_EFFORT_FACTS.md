@@ -431,3 +431,248 @@ n’a été évalué.
 
 Une seule PR cible `copilot/dev`. Aucun merge, déploiement ou changement
 d’activation n’est effectué. C372 reste distinct.
+
+---
+
+## 11. Patch de sécurisation avant merge — PR #367
+
+**Cette section actualise la première livraison ci-dessus.** En particulier,
+la conservation de précision n’autorise plus le développement arbitraire des
+exposants extrêmes. Les mesures V3 restent intactes ; seule leur admissibilité
+à l’affichage hybride est limitée.
+
+### 11.1 Audit préalable et HEAD
+
+Le 24 octobre 2026, avant modification, l’API GitHub et les références Git
+confirment :
+
+- PR #367 ouverte, non mergée ;
+- branche exclusive de travail :
+  `copilot/c371-exploitation-allures-durees-individuelles` ;
+- HEAD avant correction : `91577d88a09eefd3e88fd7541adf1a409027b17a` ;
+- base de PR et HEAD `copilot/dev` :
+  `bb9f8914ac030fcd98ca5702f55b0a80a1321bbe`.
+
+Les deux modules hybrides et la totalité de la suite C371 ont été relus.
+Les contrats ont été revérifiés dans :
+
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/workout_intelligence_v3_models.py:163-245` ;
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/workout_intelligence_v3.py:151-225`.
+
+Le transfert V2→V3 accepte les mesures positives finies sans budget de
+représentation éditoriale. Les modèles Pydantic et `model_copy` ne garantissent
+pas ce budget. Les mesures parviennent au catalogue hybride, puis à
+`realize_clause`, **avant** l’appel provider et son bloc de gestion d’erreurs.
+Une protection uniquement autour du provider ne corrigerait donc pas le risque.
+
+Les protections déjà présentes sont conservées, sans duplication :
+
+- admission individuelle, provenance, finitude et stricte positivité ;
+- catalogue C371 borné à deux efforts et une couverture ;
+- sélection d’une clause principale et de deux soutiens ;
+- schéma fermé et refus des phrases/valeurs libres ;
+- timeout provider de 8 s ;
+- réponse provider limitée à 2 400 caractères, refus du marqueur
+  `response_truncated`.
+
+En revanche, cette limite concernait le **JSON reçu du provider**, pas les
+affirmations préconstruites, le contexte JSON sortant ou le texte réalisé
+côté backend. La vérification historique de longueur dans
+`validate_generated_narrative` appartient à l’ancien chemin de prose et ne
+protège pas la réalisation fermée C365.
+
+### 11.2 Problèmes reproduits sur le HEAD intact
+
+L’archive Git de `91577d88a09eefd3e88fd7541adf1a409027b17a`, testée dans
+le même environnement que le patch, reproduit :
+
+| Cas | Comportement avant correction |
+|---|---|
+| Durée `1e308`, EN | Développement en une chaîne de **316 caractères** |
+| Allure `5e-324`, EN | Développement en une chaîne de **332 caractères** |
+| Appel direct avec entier `10**5000` | `ValueError` pendant la conversion en chaîne |
+| Appel direct avec `"oops"` | `decimal.InvalidOperation` |
+| Quatre efforts + observation d’intensité admissible | Sélection `effort.first`, `effort.last`, `effort.coverage` ; l’intensité disparaît malgré une place utilisée pour la couverture |
+
+La protection `_finite` rejetait déjà l’entier immense dans le parcours
+normal d’admission. Le durcissement du formateur ne prétend pas réparer une
+exception de cet entier dans ce parcours : il rend aussi l’appel direct sûr.
+En revanche, `1e308` et `5e-324` passaient réellement l’admission précédente.
+Des identifiants entiers immenses pouvaient également atteindre une conversion
+en chaîne avant tout affichage ; leur contrôle est placé en amont.
+
+### 11.3 Correctifs et justification des limites techniques
+
+**Représentation d’une mesure :**
+
+- types Python exacts `int` ou `float`, sans coercition des chaînes/booléens ;
+- réserve d’affichage de **6 chiffres entiers de secondes** ;
+- réserve de **18 positions décimales** au maximum dans la représentation
+  décimale canonique de la valeur ;
+- contrôle avant `str` d’un entier immense et avant développement de
+  l’exposant de `Decimal` ;
+- retour `None` si la mesure n’est pas représentable, sans exception générique,
+  arrondi, troncature ou valeur de remplacement.
+
+Ces réserves bornent une mesure formatée à **34 caractères** au maximum :
+5 chiffres de minutes, ` min `, 2 chiffres de secondes, un séparateur décimal,
+18 positions décimales et ` s`. Une allure nécessite au plus 30 caractères.
+Les valeurs admissibles conservent exactement la précision de `str(value)` ;
+les zéros finaux non significatifs peuvent être omis comme auparavant.
+
+Il s’agit d’un **budget d’interface**, pas d’un seuil de validité Garmin ou
+physiologique : une mesure rejetée n’est pas déclarée scientifiquement
+impossible, et une mesure affichable n’est pas certifiée plausible. Aucun
+calcul V2/V3 ni contrôle scientifique n’est modifié. La frontière
+`1 000 000 s` exclue découle des six emplacements entiers, et non d’une
+prescription ou d’un seuil d’effort.
+
+Le catalogue utilise ce résultat **avant** de construire son affirmation.
+Seule la mesure concernée est exclue ; l’autre mesure de l’effort, les
+identités cohérentes et les faits historiques indépendants restent disponibles.
+Les compteurs de couverture sont recalculés sur les mesures ainsi admises.
+Les numéros et ordres affichables sont également limités à six chiffres,
+sans renumérotation ni remplacement d’une borne enregistrée.
+
+**Faits et composition :**
+
+- les trois faits C371 restent bornés avant le prompt ; aucun envoi de toutes
+  les répétitions n’est ajouté ;
+- les tests vérifient chaque forme FR/EN/ES à **256 caractères maximum par
+  nouveau fait** et trois clauses C371 à **770 caractères maximum**, espaces
+  compris ;
+- le contexte JSON sortant est limité explicitement à **24 000 caractères**,
+  soit dix fois le budget du commentaire, pour réserver de la place au
+  catalogue, aux contraintes et au schéma ; au-delà, le provider n’est pas
+  appelé et le fallback déjà construit est conservé ;
+- ce budget porte sur le JSON de contexte, pas sur le message système fixe ;
+  il n’est pas une estimation de tokens ;
+- le texte Coach est limité explicitement à **2 400 caractères** : le fallback
+  conserve les clauses indépendantes entières qui tiennent dans le budget ;
+  une composition éditoriale trop longue est refusée en bloc, avec conservation
+  du fallback. Aucun texte n’est coupé au milieu d’une mesure ou d’une unité.
+
+Les essais aux frontières produisent au maximum **26 caractères par mesure**,
+**126 par nouveau fait**, **338 pour trois faits C371** et **6 512 pour le
+contexte JSON**. Ce sont des maxima observés sur la matrice de test, distincts
+des budgets techniques garantis.
+
+### 11.4 Priorisation : correction minimale démontrée
+
+Le cas reproduit montrait une observation d’intensité évincée par les deux
+autres descriptions d’effort. L’ordre de remplissage des places de soutien
+privilégie maintenant `intensity.position`, puis `intensity.hr`, avant
+`effort.last` et `effort.coverage`.
+
+Pour la fixture à quatre efforts, le fallback devient
+`effort.first`, `intensity.position`, `effort.last`.
+Pour la fixture avec historique corroboré et sans prescription, il conserve
+l’effort, la tendance et l’intensité. Les comparaisons historiques, tendances,
+sorties longues et conclusions de prescription déjà prioritaires sont
+conservées ; leurs permissions restent inchangées.
+
+L’effort reste la première description lorsqu’il est admissible. Aucun moteur
+de classement n’est créé. Lorsque effort, historique et prescription occupent
+les trois places, une quatrième observation ne peut pas être ajoutée :
+cette limite reste explicite, et la refonte de hiérarchisation est réservée
+à C373.
+
+### 11.5 Tests réellement exécutés
+
+Environnement isolé `/tmp/c371-patch-venv`, sans modification de manifest :
+Python 3.12.3, pytest 9.1.1, pytest-xdist 3.8.0, Pydantic 2.13.4,
+FastAPI 0.110.1, httpx 0.28.1, flake8 7.3.0, Motor 3.7.1,
+PyMongo 4.18.2, PyJWT 2.14.0 et cryptography 50.0.0.
+Les dépendances de validation restaurées ont été contrôlées par advisories.
+La configuration `-n 2 --dist loadscope` n’est pas modifiée.
+
+Même commande de suites sur l’archive intacte puis dans le dépôt modifié :
+
+```bash
+cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend
+/tmp/c371-patch-venv/bin/python -m pytest \
+  tests/test_hybrid_coach_c359.py \
+  tests/test_hybrid_coach_c362.py \
+  tests/test_hybrid_coach_c364_audit.py \
+  tests/test_hybrid_coach_c365.py \
+  tests/test_hybrid_coach_c371.py \
+  tests/test_historical_max_hr_c367.py \
+  tests/test_workout_intelligence_v3.py \
+  tests/test_workout_analysis_v2*.py \
+  tests/test_narrative_coach_v3.py \
+  tests/test_garmin_laps_analysis_c343.py -q
+```
+
+L’exécution de base utilise comme répertoire
+`/tmp/c371-patch-base/backend`, extrait du HEAD avant correction.
+
+| Exécution | Réussites | Échecs | Avertissements |
+|---|---:|---:|---:|
+| Base scientifique antérieure, documentée | 1 306 | 3 V2 | 14 |
+| Première livraison C371, documentée | 1 431 | 3 V2 | 14 |
+| HEAD C371 avant patch, reproduit ici | 1 431 | 3 V2 | 12 |
+| Patch, suite C371 seule | **211** | **0** | 0 |
+| Patch, ensemble complet | **1 517** | **3 V2** | **12** |
+
+Les avertissements diffèrent de la livraison historique, pas les échecs.
+La comparaison reproduite utilise le même environnement de validation.
+Les trois échecs restent exactement
+`test_comparable_history_stays_separate_and_metrics_are_unchanged[en/fr/es]`
+dans Workout Analysis V2 : attendu `meaning.consistent_pacing`, obtenu
+`meaning.hr_without_intensity_with_pacing`.
+**La suite élargie n’est pas verte. Aucun nouvel échec ne subsiste.**
+
+Les anciennes attentes C371 qui autorisaient l’affichage des exposants extrêmes
+sont adaptées à la nouvelle politique demandée ; aucun test V2 ni autre test
+historique n’est modifié. Le gain net est de 86 cas exécutés.
+
+Nouveaux contrôles : extrêmes grands/petits, limites incluses/exclues,
+malformations, booléens et non-finis, entiers immenses, mesure partielle,
+toutes mesures exclues, absence d’efforts, exactitude décimale FR/EN/ES,
+longueur maximale de chaque forme et composition, contexte à sa limite et
+au-delà, réponse provider trop longue, maintien des clauses indépendantes,
+fallback après échec provider et conservation de l’intensité.
+
+Un premier essai a échoué en collecte parce que pytest cherchait à convertir
+`10**5000` en identifiant de test. Des identifiants explicites de fixture
+corrigent ce problème sans relever la limite Python de conversion et sans
+modifier la protection applicative.
+
+Contrôles complémentaires :
+
+```bash
+cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend
+/tmp/c371-patch-venv/bin/python -m flake8 \
+  hybrid_coach_c359.py hybrid_coach_editorial_c365.py \
+  tests/test_hybrid_coach_c371.py --select=E9,F63,F7,F82
+git diff --check
+```
+
+Résultat : **réussis**. Revue indépendante du patch : aucun défaut significatif
+signalé. Les outils GitHub Actions ont été consultés ; le run précédent
+`40128395471` ne comporte aucun job échoué et n’est pas présenté comme une
+preuve des nouveaux tests. Les résultats ci-dessus sont les exécutions locales.
+
+### 11.6 Non-régressions, risques résiduels et verdict
+
+Fichiers concernés uniquement :
+
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/hybrid_coach_c359.py` ;
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/hybrid_coach_editorial_c365.py` ;
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_hybrid_coach_c371.py` ;
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/docs/reports/C371_HYBRID_EFFORT_FACTS.md`.
+
+Aucun changement V2, V3 scientifique, modèle C368/C369, contrat Garmin,
+seuil, prescription, prédiction, Coach narratif, API, frontend ou abonnement.
+Aucun appel Garmin/GCCLI, MongoDB production ou LLM externe. Aucune dépendance
+applicative ajoutée. `C359_HYBRID_COACH_ENABLED` reste désactivé par défaut.
+
+Risques résiduels : un budget de représentation n’est pas une validation
+physiologique ; des données affichables mais erronées restent du ressort de
+l’ingestion. Certaines mesures exactes seront volontairement omises si elles
+dépassent le budget, sans récupération ni arrondi. En situation de contexte
+trop volumineux, la sélection éditoriale est abandonnée au profit du fallback.
+La hiérarchisation globale et l’évaluation avec LLM réel restent hors périmètre.
+
+**GO pour revue du patch de sécurisation sur la PR #367 existante. HOLD pour
+activation produit.** Aucun merge ni déploiement, aucune nouvelle PR.
