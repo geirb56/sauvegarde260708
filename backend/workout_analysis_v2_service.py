@@ -286,12 +286,14 @@ def _reliable_activity_type(activity_doc: Any) -> Optional[str]:
 
 async def _historical_garmin_sources(
     db: Any, user_id: str, references: list[dict[str, Any]],
+    *, max_heart_rates: Optional[dict[str, int]] = None,
 ) -> tuple[dict[str, list[ActivityPhase]], dict[str, str]]:
     """Read-only: validated cached phases and precise activity types of Garmin
     references, keyed by workout id.
 
     Ambiguous (several activity documents) or unreadable data yields nothing,
     so the reference keeps an unknown structure and an unknown activity type.
+    V3 may opt into observed maxima via max_heart_rates; V2 keeps its projection.
     """
     wanted: dict[str, str] = {}
     for reference in references:
@@ -303,11 +305,19 @@ async def _historical_garmin_sources(
         return {}, {}
     keys: list[Any] = list(wanted)
     keys += [int(key) for key in wanted if key.isdigit()]
+    projection = {
+        "_id": 0, "external_id": 1, "activity_details": 1,
+        "activity_type": 1, "garmin_activity.activity_type": 1,
+    }
+    if max_heart_rates is not None:
+        projection.update({
+            "source": 1, "max_heart_rate": 1, "max_heartrate": 1,
+            "max_hr": 1, "maxHR": 1, "garmin_activity.max_hr": 1,
+        })
     try:
         docs = await db.garmin_activities.find(
             {"user_id": user_id, "external_id": {"$in": keys}},
-            {"_id": 0, "external_id": 1, "activity_details": 1,
-             "activity_type": 1, "garmin_activity.activity_type": 1},
+            projection,
         ).to_list(length=None)
     except Exception:
         logger.warning("Historical Garmin sources unavailable for user_id=%s", user_id)
@@ -327,6 +337,14 @@ async def _historical_garmin_sources(
         activity_type = _reliable_activity_type(candidates[0])
         if activity_type:
             types[wanted[external_id]] = activity_type
+        if max_heart_rates is not None and candidates[0].get("source") == "garmin":
+            sub = candidates[0].get("garmin_activity")
+            values = {**(sub if isinstance(sub, dict) else {}), **candidates[0]}
+            for key in ("max_heart_rate", "max_heartrate", "max_hr", "maxHR"):
+                maximum = _safe_hr(values.get(key))
+                if maximum is not None:
+                    max_heart_rates[wanted[external_id]] = maximum
+                    break
     return phases, types
 
 
