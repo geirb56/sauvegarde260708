@@ -1,8 +1,9 @@
 """C352 — read-only loader for Workout Intelligence V3.
 
 Reads only: ``workouts``, ``garmin_activities`` (cached phases / precise type /
-local start time) and ``training_prescription_snapshots``. No write, no Garmin
-or GCCLI call, no clock. Workout Analysis V2 is reused unchanged as the
+local start time / historical observed maxima) and
+``training_prescription_snapshots``. No write, no Garmin or GCCLI call, no clock.
+Workout Analysis V2 is reused unchanged as the
 source of session structure, phases and the existing similar comparison.
 
 Physiological wiring (C352 correction): the profile is resolved by
@@ -137,7 +138,10 @@ async def _load_scoped_workout_intelligence_v3(
             .to_list(length=HISTORY_FETCH_LIMIT)
         )
         # Superset of the V2 similar selection: V2 only reads its own ids.
-        historical_phases, activity_types = await _historical_garmin_sources(db, user_id, historical_workouts)
+        historical_maxima: dict[str, int] = {}
+        historical_phases, activity_types = await _historical_garmin_sources(
+            db, user_id, historical_workouts, max_heart_rates=historical_maxima,
+        )
         if current_type:
             activity_types[str(workout.get("id") or "")] = current_type
         v2_analysis = build_workout_analysis_v2(
@@ -158,9 +162,16 @@ async def _load_scoped_workout_intelligence_v3(
             snapshots=await _historical_snapshots(db, user_id, local_date),
             same_day_session_count=1 + same_day,
         )
+        # V3-only copies: preserve both existing aliases and the V2 input unchanged.
+        v3_history = [
+            {**item, "max_heart_rate": historical_maxima[str(item.get("id"))]}
+            if item.get("max_heart_rate") is None and item.get("max_hr") is None
+            and str(item.get("id")) in historical_maxima else item
+            for item in historical_workouts
+        ]
         data = extract_workout_intelligence_input(
             workout,
-            historical_workouts,
+            v3_history,
             v2_analysis=v2_analysis,
             activity_types=activity_types,
             historical_phases=historical_phases,
