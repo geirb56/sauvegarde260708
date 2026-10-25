@@ -1,6 +1,6 @@
 # C371 — Faits individuels d’effort du Coach hybride
 
-**État courant avant merge : section 11, patch de sécurisation de la PR #367.**
+**État courant avant merge : section 12, contre-vérification de la PR #367.**
 Les sections précédentes conservent les preuves de la première livraison.
 
 ## Traçabilité de livraison
@@ -687,3 +687,161 @@ La hiérarchisation globale et l’évaluation avec LLM réel restent hors péri
 
 **GO pour revue du patch de sécurisation sur la PR #367 existante. HOLD pour
 activation produit.** Aucun merge ni déploiement, aucune nouvelle PR.
+
+---
+
+## 12. Contre-vérification et complément minimal — 25 octobre 2026
+
+### 12.1 Base et HEAD exacts
+
+L’API GitHub et Git local confirment avant modification :
+
+- PR existante **#367**, ouverte, draft, non mergée ;
+- branche exclusive : `copilot/c371-exploitation-allures-durees-individuelles` ;
+- base exacte `copilot/dev` : `bb9f8914ac030fcd98ca5702f55b0a80a1321bbe` ;
+- HEAD reçu avant cette intervention : `0b9c0c90acc34b06c94822bbb614028884a8155e` ;
+- HEAD après correction fonctionnelle et tests :
+  `340ec4ce75e375133cb5bd259aae52fe95c8a867`.
+
+Le présent complément est un commit documentaire ultérieur ; le SHA ci-dessus
+désigne précisément le code validé, pas le commit qui contient ce rapport.
+Le durcissement de la section 11 était **déjà présent** au HEAD reçu :
+il n’est ni réimplémenté ni attribué à cette nouvelle intervention.
+
+### 12.2 Audit et problèmes effectivement reproduits
+
+Les deux modules hybrides, l’ensemble de la suite C371 et les contrats
+C368/C369 ont été relus dans les fichiers indiqués en sections 11.1 et 11.6.
+Le parcours reste V2 → observations V3 → admission individuelle hybride →
+affirmation backend → sélection → réalisation fermée. Les copies Pydantic
+peuvent contourner la validation du modèle, mais pas les contrôles d’admission.
+
+Les tests existants reproduisent le rejet de `1e308`, `5e-324`, des chaînes
+malformées, non-finis et entiers immenses, **avant l’affirmation**. Ils vérifient
+aussi les frontières admissibles, la précision décimale, une mesure rejetée
+avec l’autre conservée, toutes les mesures rejetées et l’absence d’efforts.
+Les faits indépendants et le fallback restent disponibles. Aucune protection
+numérique supplémentaire n’est nécessaire sur ce HEAD.
+
+Une régression éditoriale résiduelle a en revanche été reproduite :
+
+| Même autorité V3, historique et prescription autorisés | Fallback avant complément |
+|---|---|
+| Sans observations C371, tendance corroborée et moyenne au-dessus de LT2 | `trend.probable_improvement`, `intensity.position`, `prescription.review` |
+| Avec les observations C371 | `effort.first`, `trend.probable_improvement`, `prescription.review` |
+
+L’observation d’intensité admise disparaissait donc au seul ajout des mesures
+d’effort. Le même problème existe avec `effort.last` seul et une comparaison
+historique sans tendance corroborée. **Les 12 nouveaux cas FR/EN/ES échouent
+avant le correctif**, puis réussissent après.
+
+### 12.3 Correctif exact et limites techniques conservées
+
+Dans
+`/home/runner/work/sauvegarde260708/sauvegarde260708/backend/hybrid_coach_c359.py`,
+cinq lignes ajoutent une exception locale au choix du fallback : si historique,
+prescription et `intensity.position` déjà admise avec `position=above_LT2`
+occupent les trois places utiles, conserver ces trois faits plutôt que
+d’évincer l’intensité pour une borne d’effort.
+
+La comparaison/tendance principale utilise l’ordre historique existant.
+Aucun seuil n’est recalculé : `above_LT2` est la position V3 déjà contrôlée.
+Il n’y a ni nouveau moteur de classement, ni changement de la réalisation
+provider, des permissions ou du maximum de trois clauses. Dans les autres
+situations, les choix existants restent inchangés.
+
+Les budgets de représentation de la section 11 sont revérifiés, sans doublon :
+
+- six positions entières de secondes, dix-huit positions décimales ;
+- exclusion sans arrondi ni remplacement au-delà du budget, indépendamment
+  pour l’allure et la durée ;
+- au plus **34 caractères par mesure**, budget de représentation et non
+  seuil physiologique ;
+- chaque nouveau fait C371 testé à **256 caractères maximum**, chaque forme
+  FR/EN/ES comprise, trois faits à **770 caractères maximum** ;
+- au plus deux bornes et une couverture dans le catalogue ;
+- contexte JSON limité à **24 000 caractères** avant tout appel provider ;
+- réponse provider limitée à **2 400 caractères** et texte Coach à
+  **2 400 caractères**, clauses entières seulement, jamais de valeur tronquée.
+
+Les limites de contexte, réponse et composition existantes suffisent ; elles
+ne sont pas ajoutées une seconde fois. Les formes éditoriales restent fermées.
+L’intention est celle du fait principal ; les soutiens indépendants peuvent
+conserver leur propre catégorie sans autoriser de transition causale.
+
+### 12.4 Tests réellement exécutés et comparaison
+
+Même environnement isolé de validation pour le HEAD reçu et le complément :
+Python 3.12.3, pytest 9.1.1, pytest-xdist 3.8.0, pytest-asyncio 1.4.0,
+Pydantic 2.13.4, FastAPI 0.110.1, httpx 0.28.1, flake8 7.3.0.
+Les dépendances de test/import sont restaurées sans changer les manifests,
+après vérification des advisories. `backend/pytest.ini` est inchangé.
+
+Commande de l’ensemble demandé, identique avant/après pour les suites :
+
+```bash
+cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend
+/tmp/c371-verification-venv/bin/python -m pytest \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_hybrid_coach_c359.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_hybrid_coach_c362.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_hybrid_coach_c364_audit.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_hybrid_coach_c365.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_hybrid_coach_c371.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_historical_max_hr_c367.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_workout_intelligence_v3.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_workout_analysis_v2*.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_narrative_coach_v3.py \
+  /home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_garmin_laps_analysis_c343.py -q
+```
+
+| État | Réussites | Échecs | Avertissements |
+|---|---:|---:|---:|
+| Base antérieure documentée, non réexécutée ici | 1 306 | 3 V2 | 14 |
+| Première livraison C371 documentée, non réexécutée ici | 1 431 | 3 V2 | 14 |
+| HEAD reçu `0b9c0c90…`, réexécuté ici | **1 517** | **3 V2** | **14** |
+| Complément : C371 seule | **223** | **0** | 0 |
+| Complément : ensemble demandé | **1 529** | **3 V2** | **14** |
+
+Les seuls échecs finaux sont toujours
+`test_comparable_history_stays_separate_and_metrics_are_unchanged[en/fr/es]`
+dans
+`/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_workout_analysis_v2.py:1838` :
+attendu `meaning.consistent_pacing`, obtenu
+`meaning.hr_without_intensity_with_pacing`. **Suite élargie non verte** ;
+aucun nouvel échec fonctionnel, aucun test V2 modifié.
+
+Les essais préparatoires ont signalé des imports de validation absents :
+premier essai **1 306 réussites, 2 échecs et 2 erreurs de collecte** ; deuxième
+essai **1 344 réussites, 2 échecs et 1 erreur de collecte**. Ils ont été analysés
+(`redis`, `pytest_asyncio`, `email_validator`, puis `passlib` manquants) et
+résolus uniquement dans l’environnement de test, avant les résultats complets.
+Ils ne sont pas présentés comme des régressions applicatives ou une suite verte.
+
+Lint ciblé flake8 `E9,F63,F7,F82` sur les trois fichiers Python C371 et
+`git diff --check` : réussis. Revue indépendante du diff : aucun problème
+significatif. Scan de secrets : aucun secret détecté. CodeQL Python après
+commit `340ec4ce75e375133cb5bd259aae52fe95c8a867` : **0 alerte**.
+GitHub Actions consulté : le run précédent `40134411729` ne contient aucun job
+échoué ; son succès n’est pas présenté comme une validation de ces nouveaux tests.
+
+### 12.5 Non-régressions, risques résiduels et verdict
+
+Seuls le sélecteur hybride, les tests C371 et ce rapport sont modifiés dans
+cette intervention. Aucun changement au formatage déjà sécurisé n’a été requis.
+Contrats Garmin/C368/C369, moteurs V2/V3, seuils, Coach narratif, API, frontend,
+prescriptions, prédictions et abonnements restent intacts.
+
+Les tests utilisent des données synthétiques et des transports injectés :
+aucun appel Garmin/GCCLI, MongoDB production ou LLM externe.
+`C359_HYBRID_COACH_ENABLED` reste désactivé par défaut.
+
+Risques résiduels : le budget d’affichage ne certifie pas la plausibilité
+physiologique d’une donnée ; les mesures non représentables restent omises.
+L’exception éditoriale ne concerne que le fallback saturé avec position
+`above_LT2` déjà admissible. Le classement général, les autres arbitrages
+entre quatre faits admissibles et la qualité du choix par LLM restent réservés
+à C373 et à une évaluation distincte. Les trois échecs V2 connus subsistent.
+
+**GO pour revue du complément offline sur #367 ; HOLD pour activation produit.**
+Aucune nouvelle PR, aucun merge, aucun déploiement ni activation. STOP après
+ce rapport.
