@@ -573,6 +573,10 @@ def test_homogeneous_repetitions_allow_a_bounded_lt2_alternative(language, monke
     assert fallback.mode == "deterministic_fallback"
     assert fallback.claims[0].id == "interval.regularity"
     assert fallback.claims[0].text == HOMOGENEOUS[language]
+    assert [claim.id for claim in fallback.claims] == [
+        "interval.regularity", "intensity.position",
+    ]
+    assert all(claim.evidence_refs and claim.conclusion_ids for claim in fallback.claims)
     assert "physiological stability" not in fallback.text.lower()
     assert "estabilidad fisiológica" not in fallback.text.lower()
     monkeypatch.setattr(UserAccess, "can", original)
@@ -585,6 +589,12 @@ def test_homogeneous_repetitions_allow_a_bounded_lt2_alternative(language, monke
     intensity = next(fact for fact in admitted if fact.id == "intensity.position")
     assert chosen.text == realize_clause(intensity, "direct", language)
     assert all(claim.evidence_refs for claim in chosen.claims)
+    refused = run(
+        v3, evidence, language=language,
+        transport=provider(selection("interval.count")),
+    )
+    assert refused.mode == "deterministic_fallback"
+    assert refused.claims[0].id == "interval.regularity"
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
@@ -677,6 +687,12 @@ def test_documented_type_only_prescription_deviation_can_lead_v2_direction(
     assert result.mode == "editorial_realization"
     assert result.claims[0].id == "prescription.review"
     assert result.claims[0].text == hybrid.realize_clause(review, "direct", language)
+    refused = run(
+        v3, evidence, language=language, permissions=permissions,
+        transport=provider(selection("interval.regularity")),
+    )
+    assert refused.mode == "deterministic_fallback"
+    assert refused.claims[0].id == "interval.pace_direction"
 
 
 @pytest.mark.parametrize("metadata", [

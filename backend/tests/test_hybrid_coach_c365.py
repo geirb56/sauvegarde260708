@@ -169,6 +169,13 @@ def test_distinctive_long_run_can_lead_a_supported_high_average_hr(language):
     ]
     assert [claim.text for claim in result.claims] == expected_claims
     assert all(claim.evidence_refs and claim.conclusion_ids for claim in result.claims)
+    refused = json.dumps(_selection("session.kind"))
+    fallback = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: refused),
+    )
+    assert fallback.mode == "deterministic_fallback"
+    assert fallback.claims[0].id == "session.long"
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
@@ -183,6 +190,17 @@ def test_corroborated_history_leads_for_a_reliably_classified_continuous_session
     assert hybrid.select_deterministic_synthesis(facts)[0].id == candidates[0]
     packet = _context(v3, permissions=permissions, language=language)
     assert packet["primary_fact_candidates"] == list(candidates)
+    primary = next(fact for fact in facts if fact.id == candidates[0])
+    valid = json.dumps(_selection(
+        candidates[0], form="explain", intent="compare_history",
+    ))
+    selected = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert selected.mode == "editorial_realization"
+    assert selected.claims[0].id == candidates[0]
+    assert selected.claims[0].text == hybrid.realize_clause(primary, "explain", language)
     intensity = next((fact for fact in facts if fact.id == "intensity.position"), None)
     if intensity is not None:
         invalid = json.dumps(_selection("intensity.position", intent="describe_session"))
@@ -215,6 +233,13 @@ def test_unknown_session_type_does_not_admit_a_direction_or_free_llm_choice(lang
     assert result.claims[0].id == "session.unknown"
     assert result.claims[0].text == next(f.assertion for f in facts if f.id == "session.unknown")
     assert result.claims[0].evidence_refs
+    valid = json.dumps(_selection("session.unknown", intent="qualify_data"))
+    chosen = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert chosen.mode == "editorial_realization"
+    assert chosen.claims[0].id == "session.unknown"
 
 
 def test_long_run_and_historical_trend_are_not_double_reported():

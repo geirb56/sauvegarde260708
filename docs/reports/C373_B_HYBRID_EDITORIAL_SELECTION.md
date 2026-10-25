@@ -194,3 +194,123 @@ valide/invalide, FR/EN/ES et flag OFF. Aucun test ne fait d’appel LLM réel.
 
 **Verdict : GO pour revue de la PR ; HOLD pour activation, intégration ou
 production.** Aucun merge, déploiement ou activation n’est demandé.
+
+## 9. Correction après audit indépendant — PR #370
+
+### Références et diagnostic
+
+- Branche cible : `copilot/dev` ; base de la PR : `7c3bb1d1c1eb943bb65bed350608ad33a59fb76f`.
+- HEAD audité avant correction : `8a661be36950c9db2861be6bab534f8ce75e561b`.
+- HEAD du code et des tests corrigés : `399528c6113fb85d9a8ffb41478a9c398f77e5f4`.
+- Le catalogue de faits admissibles et les seuils n’ont pas changé.
+
+L’audit a confirmé deux défauts dans `primary_fact_candidates()` : `above_LT2`
+était vérifié avant la direction V2, et toute tendance/comparaison historique
+précédait les faits descriptifs de répétitions. `validate_editorial_selection()`
+imposait exactement cette priorité au LLM en n’acceptant que le tuple de
+candidats retourné par cette fonction. Le fallback suivait la même hiérarchie.
+Les faits de séance utilisés sont ceux déjà produits par V3 : `session.kind`
+(classification probable avec son niveau de confiance), `session.long`,
+l’historique corroboré et `prescription.review` lorsque son statut est réellement
+admis. Aucune nouvelle classification n’est créée.
+
+### Règles corrigées
+
+- La FC moyenne au-dessus de LT2 ne peut plus évincer une direction V2 admise.
+  Elle peut être restituée comme complément indépendant; elle reste explicitement
+  une moyenne de séance et non la FC des répétitions.
+- Pour une séance répétée avec direction V2, la direction est le premier candidat
+  et le premier choix du fallback. Une déviation de type réellement autorisée,
+  une comparaison distinctive de sortie longue ou un seul fait historique
+  corroboré peuvent être candidats distincts; la FC LT2 n’est pas candidate
+  principale dans ce cas.
+- Sans direction mais avec régularité V2, le fallback choisit la régularité;
+  l’observation de seuil admise peut être une alternative LLM. Les observations
+  d’effort enregistrées passent avant le simple comptage lorsque disponibles.
+- Pour une séance continue classée avec une confiance suffisante, une comparaison
+  historique admissible peut mener. `session.long` demeure candidat principal
+  lorsque la durée distinctive est étayée.
+- `prescription.review` n’est candidat que si l’accès à la prescription est
+  autorisé et si V3 fournit `status = deviation`. Cela décrit un écart de type,
+  non le respect d’une allure ou d’une cible.
+- Une séance ambiguë reste non classifiée. Les données insuffisantes ne créent ni
+  direction, ni régularité, ni conclusion physiologique.
+- Le paquet fournisseur expose la liste `primary_fact_candidates`; le validateur
+  refuse tout principal hors liste. Aucun texte final du LLM n’est affiché :
+  le fallback et la réalisation du texte restent déterministes.
+
+Ces règles ordonnent les faits par contexte, sans score d’importance. Les
+compléments et gardes anti-redondance existants sont conservés.
+
+### Matrice avant / après
+
+| Scénario | Avant correction | Après correction |
+| --- | --- | --- |
+| A. Fractionné ralentissant + FC moyenne au-dessus de LT2 | `intensity.position` pouvait être le principal avant la direction V2. | Candidats principaux : direction V2 uniquement; fallback : direction V2, FC en complément indépendant. Le LLM qui choisit la FC comme principal est refusé. |
+| B. Fractionné homogène + FC moyenne au-dessus de LT2 | L’intensité pouvait supplanter le fait de répétition. | Candidats : régularité V2 et seuil admissible; fallback : régularité. Aucun texte ne transforme l’homogénéité des allures en stabilité physiologique. |
+| C. Direction V2 + historique corroboré | L’historique précédait automatiquement la direction. | La direction est le choix du fallback; le LLM peut choisir le fait historique distinct explicitement présent dans la liste, mais pas un fait hors liste. |
+| D. Sortie longue distinctive + FC élevée | `session.long` précédait déjà globalement LT2. | `session.long` reste le choix du fallback; le seuil peut être une alternative ou un complément. La moyenne ne décrit pas toute la séance. |
+| E. Footing continu + historique corroboré | Le fait historique menait avant les autres faits, sans vérifier le contexte continu fiable. | L’historique peut mener lorsque le type continu admis et sa confiance le justifient; l’intensité ne devient pas automatiquement prioritaire. |
+| F. Prescription documentée + direction V2 | Une déviation autorisée menait automatiquement dès sa présence. | La direction reste le fallback; `prescription.review` est un candidat alternatif seulement avec `deviation` admis. Le texte reste limité à l’écart de type. |
+| G. Type ambigu / données insuffisantes | Des priorités globales pouvaient faire passer un fait disponible avant l’incertitude ou suggérer un contexte. | Seuls les faits réellement admis sont candidats; le type inconnu reste inconnu et aucune direction n’est fabriquée. Le fallback est stable. |
+
+### Scénarios contradictoires et réalisations
+
+Les tests vérifient, pour A–G, les candidats, le choix déterministe, l’acceptation
+et le rejet de choix LLM, les compléments, la provenance et les sorties
+FR/EN/ES. Exemples issus des assertions et réalisations déterministes :
+
+- **A — FR :** « Les 2 dernières répétitions comparables sont 15 s/km plus lentes
+  que les 2 premières (répétition centrale exclue). Ta FC moyenne est de 180 bpm,
+  au-dessus de LT2 ; elle ne décrit pas tout l’effort. »
+- **A — EN :** “The final 2 comparable repetitions are 15 s/km slower than the
+  opening 2 (middle repetition excluded). Your average HR is 180 bpm, above LT2;
+  it does not describe the entire effort.”
+- **A — ES :** « Las 2 últimas repeticiones comparables son 15 s/km más lentas que
+  las 2 primeras (se excluye la repetición central). Tu FC media es de 180 lpm,
+  por encima de LT2; no describe todo el esfuerzo. »
+- **B — FR / EN / ES :** la première phrase est respectivement « Les allures des
+  répétitions comparables sont homogènes. », “The comparable repetitions have
+  homogeneous paces.” et “Los ritmos de las repeticiones comparables son
+  homogéneos.” Le complément de FC reste une observation de moyenne et aucun
+  verdict de stabilité physiologique n’est émis.
+- **D — FR / EN / ES :** les tests confirment que `session.long` reste premier
+  malgré la FC élevée; les deux affirmations ont des preuves V3 traçables.
+- **F — FR / EN / ES :** la sélection prescription reste possible seulement avec
+  l’autorisation et le statut `deviation`; son texte précise qu’il s’agit du type
+  observé et ne change pas la prescription.
+- **G — FR / EN / ES :** le choix LLM qui demande une direction non admise est
+  rejeté; la réalisation de `session.unknown` conserve la classification
+  incertaine.
+
+Les faits affichés conservent leurs `evidence_refs` et `conclusion_ids`. Les
+tests ne font aucun appel à un LLM réel.
+
+### Tests exécutés et limites résiduelles
+
+Commande depuis `backend/` :
+
+```sh
+python -m pytest -q \
+  tests/test_hybrid_coach_c359.py \
+  tests/test_hybrid_coach_c362.py \
+  tests/test_hybrid_coach_c364_audit.py \
+  tests/test_hybrid_coach_c365.py \
+  tests/test_hybrid_coach_c371.py \
+  tests/test_hybrid_coach_c372.py
+```
+
+Résultat : **613 tests réussis**. Le paquet complet de dépendances n’a pas pu être
+restauré car la roue interne `litellm` du fichier requirements n’était pas
+accessible dans l’environnement; les dépendances de test existantes manquantes
+ont été installées individuellement, puis la commande ci-dessus a réussi.
+
+Limites : le choix LLM réel et sa qualité éditoriale n’ont pas été évalués; les
+tests vérifient le contrat, les listes de candidats et la réalisation backend.
+Lorsque plusieurs candidats historiques existent, un seul est exposé avec la
+direction comme alternative contextuelle; l’ordre du fallback ne prétend pas
+mesurer une importance scientifique. `C359_HYBRID_COACH_ENABLED` reste OFF par
+défaut.
+
+**Verdict de cette correction : GO pour revue de la PR #370; HOLD pour merge,
+intégration, activation ou production.**
