@@ -9,8 +9,11 @@
   La base est précisément ce merge ; aucune fusion effectuée par C372.
 - L’audit et le choix B ont été commités **avant l’implémentation**, dans
   `01e541df4f5d514ccbe447776c20ab4285dec595`.
-- Le HEAD testé et la vérification de sécurité seront consignés après commit ;
-  le HEAD documentaire final sera fourni dans la PR, sans autoréférence.
+- HEAD exact de l’implémentation et des tests :
+  `af5972707f05de9308ae03be9bc3fa82f923e664`.
+  CodeQL Python exécuté après ce commit : **0 alerte**.
+  Le complément suivant est documentaire uniquement ; son HEAD complet sera
+  fourni dans la PR, sans autoréférence.
 - Racine des références ci-dessous :
   `/home/runner/work/sauvegarde260708/sauvegarde260708/`.
 
@@ -125,7 +128,7 @@ mais ne participent jamais à un calcul de régularité.
 
 Absence, indisponibilité, source/identité incohérente, verdict inconnu,
 conclusion ambiguë ou preuve incohérente : omission du fait, sans verdict négatif.
-Les faits C371 restent inchangés. Le fallback privilégiera le verdict lorsqu’il
+Les faits C371 restent inchangés. Le fallback privilégie le verdict lorsqu’il
 existe, sans réciter comptage, première borne, dernière borne et couverture.
 Le contrat reste une principale et au maximum deux soutiens.
 
@@ -208,6 +211,11 @@ Contrôle fatal du linter existant :
 `/tmp/c372-venv/bin/python -m flake8` sur les cinq fichiers Python modifiés,
 avec `--select=E9,F63,F7,F82` : réussi. `git diff --check` : réussi.
 Pas de lint stylistique global ni de build frontend, hors périmètre.
+Après commit et CodeQL, le passage ciblé C372 + C365 + C371 donne
+**372 réussites**, sur le HEAD d’implémentation ci-dessus.
+Scan des six fichiers modifiés/créés : aucun secret.
+Revue indépendante en lecture seule : aucun problème significatif identifié.
+Ces contrôles ne constituent pas une validation produit d’un LLM réel.
 
 Itérations non finales conservées explicitement :
 - premier passage C372 : 59 réussites / 3 erreurs d’import d’un helper de test
@@ -249,7 +257,10 @@ Les seuls runs retournés pour cette dernière branche sont historiques
 `get_job_logs(failed_only=True)` pour ce run et le run C371 `40176341382`
 ne retourne aucun job échoué. Le run agent C372 `40178227563` est en cours,
 pas une preuve d’exécution de ces suites par une CI de tests.
-Le statut du HEAD livré sera revérifié avant ouverture de la PR.
+La nouvelle consultation de la branche C372 après le commit d’implémentation
+ne retourne toujours que ce run agent en cours, lancé au SHA de base
+`8368f7e9f720c52db439848bc4ee8e1c5b15d77a` ; aucune CI de tests du HEAD
+`af5972707f05de9308ae03be9bc3fa82f923e664` n’est attestée.
 Les contrôles GitHub non exécutés ne sont pas remplacés par un statut vert
 historique.
 
