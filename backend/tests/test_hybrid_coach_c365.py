@@ -242,6 +242,52 @@ def test_unknown_session_type_does_not_admit_a_direction_or_free_llm_choice(lang
     assert chosen.claims[0].id == "session.unknown"
 
 
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_unknown_session_with_corroborated_history_keeps_cautious_primary(language):
+    v3 = synthetic_case("sparse")
+    history = synthetic_case("comparable_history")
+    v3 = v3.model_copy(update={
+        "historical_comparison": history.historical_comparison,
+        "performance_trend": history.performance_trend,
+    })
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    historical = next(
+        fact for fact in facts if fact.id.startswith(("trend.", "comparison."))
+    )
+    unknown = next(fact for fact in facts if fact.id == "session.unknown")
+
+    assert hybrid.primary_fact_candidates(facts) == ("session.unknown",)
+    assert _context(v3, permissions=permissions, language=language)[
+        "primary_fact_candidates"
+    ] == ["session.unknown"]
+    fallback = hybrid.select_deterministic_synthesis(facts)
+    assert [claim.id for claim in fallback] == ["session.unknown"]
+    assert fallback[0].text == unknown.assertion
+    assert fallback[0].evidence_refs == list(unknown.source_paths)
+    assert historical.source_paths
+
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    valid = json.dumps(_selection("session.unknown", intent="qualify_data"))
+    selected = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert selected.mode == "editorial_realization"
+    assert [claim.id for claim in selected.claims] == ["session.unknown"]
+    assert selected.text == unknown.assertion
+    assert selected.claims[0].evidence_refs == list(unknown.source_paths)
+
+    refused = json.dumps(_selection(historical.id, intent="compare_history"))
+    rejected = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: refused),
+    )
+    assert rejected.mode == "deterministic_fallback"
+    assert [claim.id for claim in rejected.claims] == ["session.unknown"]
+    assert rejected.text == unknown.assertion
+
+
 def test_long_run_and_historical_trend_are_not_double_reported():
     long_facts = _facts(
         synthetic_case("long"),
