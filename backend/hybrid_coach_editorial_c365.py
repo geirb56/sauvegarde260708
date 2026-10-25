@@ -73,7 +73,7 @@ def fact_category(fact: AdmissibleFact) -> str:
         return "comparison"
     if fact.id == "session.kind":
         return "classification"
-    if fact.id.startswith("trend.") or fact.id == "prescription.review":
+    if fact.id.startswith("trend.") or fact.id in {"prescription.review", "interval.regularity"}:
         return "conclusion"
     return "observation"
 
@@ -135,6 +135,9 @@ def validate_editorial_selection(
     if ("session.unknown" in selected and selected & {"intensity.hr", "intensity.position"}
             or {"session.kind", "intensity.position"} <= selected
             or {"interval.count", "effort.coverage"} <= selected
+            or {"interval.count", "interval.regularity"} <= selected
+            or ("interval.regularity" in selected
+               and len(selected & {"interval.count", "effort.first", "effort.last", "effort.coverage"}) > 1)
             or sum(id.startswith(("comparison.", "trend.")) for id in ids) > 1):
         raise ValueError("redundant_selection")
     return selection
@@ -145,6 +148,12 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
     if form not in allowed_forms(fact, language):
         raise ValueError("unsupported_form")
     if form == "explain":
+        if fact.id == "interval.regularity":
+            return fact.assertion + {
+                "fr": " Ce verdict V2 décrit uniquement les allures, pas une stabilité physiologique.",
+                "en": " This V2 verdict describes paces only, not physiological stability.",
+                "es": " Este veredicto V2 describe solo los ritmos, no una estabilidad fisiológica.",
+            }[language]
         return fact.assertion
     values = dict(fact.values)
 
@@ -154,6 +163,8 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
     def num(key):
         return format_evidence_number(values[key], language)
 
+    if fact.id == "interval.regularity":
+        return fact.assertion
     if fact.id in {"effort.first", "effort.last"}:
         label = tr("premier", "first", "primer") if fact.id == "effort.first" else tr(
             "dernier", "last", "último",

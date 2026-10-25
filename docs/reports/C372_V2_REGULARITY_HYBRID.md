@@ -7,8 +7,10 @@
   `8368f7e9f720c52db439848bc4ee8e1c5b15d77a`.
 - GitHub confirme #367 / C371 mergée le 25 octobre 2026 à 08:44:33 UTC.
   La base est précisément ce merge ; aucune fusion effectuée par C372.
-- Ce document est commencé **avant l’implémentation**. Les résultats de
-  validation et le HEAD testé seront complétés après exécution.
+- L’audit et le choix B ont été commités **avant l’implémentation**, dans
+  `01e541df4f5d514ccbe447776c20ab4285dec595`.
+- Le HEAD testé et la vérification de sécurité seront consignés après commit ;
+  le HEAD documentaire final sera fourni dans la PR, sans autoréférence.
 - Racine des références ci-dessous :
   `/home/runner/work/sauvegarde260708/sauvegarde260708/`.
 
@@ -69,8 +71,12 @@ présentation de pacing global ; il n’est ni `regularity_band`, ni une conclus
 
 Ces échecs portent sur la sélection narrative legacy, pas sur le verdict de
 répétitions réutilisé. Aucun seuil, algorithme ou test V2 ne sera modifié pour
-les masquer. Les résultats effectivement exécutés seront consignés ci-dessous ;
-la suite élargie ne sera pas annoncée verte si ces échecs persistent.
+les masquer. Plus précisément, `_advice_primary_code` ne retourne pas
+`advice.maintain_consistency` : la correspondance legacy vers
+`meaning.consistent_pacing` ne s’applique donc pas à cette fixture. C372 ne
+réintroduit aucun seuil à partir du `consistency_score`.
+La comparaison exécutée sur une archive de la base exacte confirme les trois
+mêmes échecs. **La suite élargie n’est pas verte.**
 
 ## 4. Architectures comparées et décision préalable
 
@@ -97,23 +103,170 @@ Les références pointent vers la conclusion V2 réelle, ses métadonnées et sa
 preuve ; les conditions et limites bornent le constat aux allures des efforts
 comparables. Aucun texte arbitraire V2 n’est recopié.
 
+Le transfert utilise `ScopedV2Evidence(user_id, analysis, source)` exclusivement
+côté backend. La source doit être `workout_analysis_v2`, la version `v2`,
+l’utilisateur celui de `UserAccess`, et l’identité V2 celle de V3.
+L’admission réutilise `_approved_repetition_judgment` du Narrative, puis exige
+la cohérence des déclarations V2 : phases Garmin disponibles, liste d’efforts
+concordante, effectifs identiques à la classification V3, disponibilité de
+régularité, comparaison complète, base identique aux métadonnées.
+Ces contrôles ne relisent pas les allures pour établir une catégorie.
+La confiance vaut `none` : V2 ne fournit pas de confiance scientifique chiffrée.
+
+Le fait contient uniquement les valeurs `regularity_band`, `source`,
+`status=available`, `efforts`, `comparability_basis`. Les chemins de preuve
+pointent vers l’identité V2, les phases, le code, la disponibilité, le type de
+conclusion, la version du jugement, la portée, la métrique, la catégorie,
+la base et la preuve numérique déjà présente (effectifs, médiane, écart absolu).
+Le LLM reçoit les valeurs/conditions/limites contrôlées, pas l’identité privée,
+les chemins, le texte source ou les allures individuelles V2 de cette preuve.
+Les deux bornes C371 peuvent rester dans leur propre catalogue descriptif,
+mais ne participent jamais à un calcul de régularité.
+
 Absence, indisponibilité, source/identité incohérente, verdict inconnu,
 conclusion ambiguë ou preuve incohérente : omission du fait, sans verdict négatif.
 Les faits C371 restent inchangés. Le fallback privilégiera le verdict lorsqu’il
 existe, sans réciter comptage, première borne, dernière borne et couverture.
 Le contrat reste une principale et au maximum deux soutiens.
 
+Le fait legacy `interval.count` impose la limite « verdict indisponible ».
+Il est donc omis **seulement quand le verdict V2 est admis**, pour ne pas envoyer
+deux autorités contradictoires dans le même catalogue. Sa définition et le
+catalogue sans V2 restent inchangés. La sélection interdit également cette
+paire et limite à un seul soutien descriptif d’effort aux côtés du verdict.
+Le fallback choisit le verdict, puis éventuellement prescription, première
+borne ou observation FC/seuil, dans la limite de trois clauses indépendantes.
+Il n’ajoute ni comparaison de bornes, ni causalité entre phrases.
+
 ## 6. Fichiers modifiés
 
-À compléter après implémentation.
+- `backend/hybrid_coach_v2_c372.py` : liaison locale scopée et admission par
+  réutilisation du lecteur catégoriel Narrative existant.
+- `backend/workout_intelligence_v3_service.py` : wrapper interne additif
+  `load_scoped_workout_intelligence_v3_with_v2` ; V2 et V3 du même passage.
+  Les deux loaders publics préexistants conservent exactement leurs tuples
+  à deux et trois éléments. Aucun accès supplémentaire au stockage.
+- `backend/hybrid_coach_c359.py` : paramètre optionnel `v2_evidence`, fait
+  fermé, références locales, préférence éditoriale et fallback.
+- `backend/hybrid_coach_editorial_c365.py` : catégorie conclusion,
+  non-redondance et réalisation fermée directe/explicative FR/EN/ES.
+- `backend/tests/test_hybrid_coach_c372.py` : tests synthétiques et intégration.
+- `docs/reports/C372_V2_REGULARITY_HYBRID.md` : présent rapport.
+
+Ni V2, ni `coach_language`, ni Narrative, ni les modèles publics V3, ni les
+algorithmes C368/C369, ni les tests existants ne sont modifiés. Aucune dépendance
+du dépôt ajoutée/mise à jour. Routes, frontend, Training, abonnements et flag
+par défaut inchangés.
 
 ## 7. Tests exécutés et CI
 
-À compléter après exécution ; aucun résultat n’est présumé.
+### Environnement et commande
+
+Python 3.12.3, environnement isolé `/tmp/c372-venv` : pytest 9.1.1,
+pytest-xdist 3.8.0, pytest-asyncio 1.4.0, Pydantic 2.13.4, FastAPI 0.110.1.
+Les dépendances existantes ont été installées pour la validation ; les paquets
+`emergentintegrations` et la wheel privée `litellm` sont inaccessibles et non
+installés. Les suites offline demandées n’en ont pas eu besoin.
+
+Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/backend`,
+commande exécutée avec les options parallèles inchangées de `pytest.ini` :
+
+```sh
+PYTHONPATH=.:tests /tmp/c372-venv/bin/python -m pytest \
+  tests/test_workout_analysis_v2.py \
+  tests/test_workout_analysis_v2_facts.py \
+  tests/test_workout_analysis_v2_phases.py \
+  tests/test_workout_analysis_v2_unified.py \
+  tests/test_coach_language.py \
+  tests/test_coach_repetition_judgment.py \
+  tests/test_narrative_coach_v3.py \
+  tests/test_workout_intelligence_v3.py \
+  tests/test_hybrid_coach_c359.py \
+  tests/test_hybrid_coach_c362.py \
+  tests/test_hybrid_coach_c364_audit.py \
+  tests/test_hybrid_coach_c365.py \
+  tests/test_hybrid_coach_c371.py \
+  tests/test_hybrid_coach_c372.py -q --tb=short
+```
+
+Résultat : **1 831 réussites, 3 échecs, 14 avertissements**.
+Les **71 nouveaux cas C372 réussissent**. Les trois seuls échecs sont les
+variantes `[en]`, `[fr]`, `[es]` de
+`test_comparable_history_stays_separate_and_metrics_are_unchanged`, à
+l’assertion `meaning.code` décrite en section 3.
+
+Même commande sans le nouveau fichier C372, depuis une archive indépendante
+`git archive 8368f7e9f720c52db439848bc4ee8e1c5b15d77a backend` :
+**1 760 réussites, les mêmes 3 échecs, 14 avertissements**.
+Pas de régression supplémentaire constatée. Les tests C359–C365 comprennent
+les anciennes fixtures C360/C361 ; pas de suite autonome C363 dans le périmètre.
+
+Les 14 avertissements préexistants concernent `python_multipart`, `crypt`,
+la configuration Pydantic class-based et les événements startup/shutdown
+FastAPI ; ils sont dupliqués par les deux workers.
+Contrôle fatal du linter existant :
+`/tmp/c372-venv/bin/python -m flake8` sur les cinq fichiers Python modifiés,
+avec `--select=E9,F63,F7,F82` : réussi. `git diff --check` : réussi.
+Pas de lint stylistique global ni de build frontend, hors périmètre.
+
+Itérations non finales conservées explicitement :
+- premier passage C372 : 59 réussites / 3 erreurs d’import d’un helper de test
+  inexistant ; le test utilise désormais le mock `UserAccess.can` existant
+  dans le style C365 ;
+- passage suivant élargi : 1 830 réussites / 4 échecs, dont les trois legacy
+  et une fixture de comparabilité distance choisissant en réalité une cohorte
+  par durée ; fixture corrigée, aucun algorithme V2 modifié.
+
+### Couverture C372
+
+Les cas passent par le **vrai builder V2**, pas seulement par un verdict forgé :
+homogène, variations perceptibles et importantes, égalité des bornes avec
+variations intérieures, minimum trois efforts, deux efforts descriptifs,
+comparabilité par durée et distance, non-comparabilité et catégorie incertaine.
+Les autres tests altèrent ensuite ces résultats réels pour vérifier l’abstention :
+absence/indisponibilité, phases absentes, couverture partielle, métadonnées ou
+preuves invalides, doublons, source/version/utilisateur/séance incohérents.
+
+La disponibilité des allures C371 ne conditionne pas le verdict V2 ; les faits
+C371 restent identiques avec et sans cette entrée supplémentaire.
+Les tests couvrent sélection d’un ID absent, injection de valeurs ou
+d’interprétations physiologiques, limites de sélection, FR/EN/ES, fallback sur
+échec fournisseur ou absence de permission LLM, flag désactivé et refus d’accès.
+Le snapshot admis reste immuable pendant l’attente du transport simulé.
+
+L’intégration cache synthétique → loader scopé → **builder V2 espionné et
+réellement exécuté une fois** → V3 → hybride vérifie le verdict `variable`,
+l’absence de lectures supplémentaires, les mêmes résultats V3 et les filtres
+utilisateur sur chaque requête. Un autre utilisateur reçoit `None`.
+Les tests C372 bloquent les sockets et le transport par défaut ; aucun appel
+Garmin/GCCLI, MongoDB production ou LLM réel.
+
+### CI GitHub
+
+`actions_list(list_workflow_runs)` a été consulté pour le dépôt et `copilot/dev`.
+Les seuls runs retournés pour cette dernière branche sont historiques
+(dernier `32418652111`, autre SHA) : ils ne certifient pas C372.
+`get_job_logs(failed_only=True)` pour ce run et le run C371 `40176341382`
+ne retourne aucun job échoué. Le run agent C372 `40178227563` est en cours,
+pas une preuve d’exécution de ces suites par une CI de tests.
+Le statut du HEAD livré sera revérifié avant ouverture de la PR.
+Les contrôles GitHub non exécutés ne sont pas remplacés par un statut vert
+historique.
 
 ## 8. Exemples FR / EN / ES
 
-À compléter à partir des réalisations effectivement testées.
+Réalisations backend testées, à partir de séances synthétiques analysées par V2 :
+
+| Verdict V2 | FR | EN | ES |
+| --- | --- | --- | --- |
+| `homogeneous` | Les allures des répétitions comparables sont homogènes. | The comparable repetitions have homogeneous paces. | Los ritmos de las repeticiones comparables son homogéneos. |
+| `noticeable` | Les répétitions comparables présentent des variations d’allure perceptibles. | The comparable repetitions show noticeable pace variations. | Las repeticiones comparables presentan variaciones de ritmo perceptibles. |
+| `variable` | Les répétitions comparables présentent des variations d’allure importantes. | The comparable repetitions show large pace variations. | Las repeticiones comparables presentan variaciones de ritmo importantes. |
+
+La forme explicative ajoute une limite fermée, par exemple :
+« Ce verdict V2 décrit uniquement les allures, pas une stabilité physiologique. »
+Les formes EN/ES portent la même limite. Le provider ne produit aucune prose.
+En l’absence de verdict admissible, aucun de ces commentaires n’est autorisé.
 
 ## 9. Limites scientifiques
 
@@ -127,4 +280,12 @@ production ou LLM réel n’est autorisé pour cette validation.
 
 ## 10. Décision de livraison
 
-En cours. Aucun merge, déploiement, changement de frontend ou activation.
+**HOLD pour activation / production.** Objectif scientifique et intégration
+offline C372 vérifiés ; aucun nouveau calcul ni échec supplémentaire.
+La suite élargie reste rouge à cause des trois échecs legacy connus.
+La qualité éditoriale d’un vrai LLM et une CI de tests du HEAD livré ne sont pas
+certifiées par ces tests synthétiques. Les réserves produit C365 restent valides.
+
+Une seule PR vers `copilot/dev`, pour revue. Aucun merge, déploiement,
+changement de frontend, remplacement du Narrative ou activation du flag.
+Arrêt après livraison du rapport.
