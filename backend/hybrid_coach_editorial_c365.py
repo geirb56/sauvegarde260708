@@ -142,17 +142,22 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
         return tuple(candidates)
     if "interval.regularity" in index:
         candidates = ["interval.regularity"]
-        if above_lt2:
+        if "intensity.position" in index:
             candidates.append("intensity.position")
         if deviation:
             candidates.append("prescription.review")
         return tuple(candidates)
     if repeated:
-        candidates = [repeated[0]]
-        if above_lt2:
-            candidates.append("intensity.position")
+        repeated_observation = next(
+            (fact_id for fact_id in ("effort.first", "effort.last", "interval.count")
+             if fact_id in index),
+            repeated[0],
+        )
         if deviation:
-            candidates.append("prescription.review")
+            return ("prescription.review",)
+        candidates = [repeated_observation]
+        if "intensity.position" in index:
+            candidates.append("intensity.position")
         return tuple(candidates)
 
     session_kind = index.get("session.kind")
@@ -168,8 +173,6 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
     )
     if continuous_type and trusted_type and history:
         return history
-    if "session.unknown" in index:
-        return ("session.unknown",)
     if history:
         return history
     if "effort.first" in index:
@@ -185,6 +188,8 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
     for fact_id in ("intensity.hr", "session.kind", "prescription.review"):
         if fact_id in index:
             return (fact_id,)
+    if "session.unknown" in index:
+        return ("session.unknown",)
     return ()
 
 

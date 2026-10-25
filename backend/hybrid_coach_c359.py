@@ -807,9 +807,12 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
             if fact.id == "session.long" or fact.id.startswith(("trend.", "comparison."))
         )
         historical_candidate = primary_fact_candidates(history_facts)[:1]
-        repetition_candidate = (
-            "interval.pace_direction"
-            if "interval.pace_direction" in index else "interval.regularity"
+        repetition_candidate = next(
+            (fact_id for fact_id in (
+                "interval.pace_direction", "interval.regularity",
+                "effort.first", "effort.last", "interval.count",
+            ) if fact_id in index),
+            None,
         )
         support_ids = (*historical_candidate, repetition_candidate)
         if high_intensity:
@@ -835,7 +838,9 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     elif primary_id == "interval.count":
         support_ids = ("intensity.position", "intensity.hr")
     elif primary_id in {"effort.first", "effort.last"}:
-        support_ids = ("prescription.review",) if prescription_deviation else ()
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
     else:
         support_ids = ()
 
@@ -1325,8 +1330,9 @@ async def generate_hybrid_coach(
         "You are the editorial selector for a running coach, not a scientific author. "
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
         "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
-        "transitions or extra fields. Choose the primary only from primary_fact_candidates in the "
-        "contract; that list is a contextual shortlist, not permission to select any admitted fact. "
+        "transitions or extra fields. Select the distinctive observation first, but only from the "
+        "primary_fact_candidates contextual shortlist in the contract. It is not permission to select "
+        "any admitted fact. "
         "For repeated sessions, V2 pace direction remains the lead fact when admitted; a documented, "
         "authorized type-level prescription deviation may also be a candidate, never an inferred pace "
         "target. Do not promote session-average HR above LT2 over an admitted V2 direction. With V2 "
