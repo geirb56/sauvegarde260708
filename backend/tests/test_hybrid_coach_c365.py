@@ -131,6 +131,70 @@ def test_documented_type_level_prescription_deviation_is_primary():
     assert hybrid.select_deterministic_synthesis(facts)[0].id == "prescription.review"
 
 
+def test_distinctive_long_run_can_lead_a_supported_high_average_hr():
+    v3 = synthetic_case("long")
+    v3.intensity_assessment = v3.intensity_assessment.model_copy(update={
+        "hr_used_bpm": 180, "position": "above_LT2", "confidence": "high",
+    })
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions)
+    assert hybrid.primary_fact_candidates(facts) == (
+        "session.long", "intensity.position",
+    )
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == "session.long"
+    packet = _context(v3, permissions=permissions)
+    assert packet["primary_fact_candidates"] == ["session.long", "intensity.position"]
+    valid = json.dumps({
+        "primary": {"fact_id": "session.long", "form": "direct"},
+        "supporting": [{"fact_id": "intensity.position", "form": "direct"}],
+        "editorial_intent": "describe_session",
+    })
+    result = _run(v3, permissions=permissions, transport=_provider(lambda *_: valid))
+    assert result.mode == "editorial_realization"
+    assert result.claims[0].id == "session.long"
+    assert all(claim.evidence_refs for claim in result.claims)
+
+
+def test_corroborated_history_leads_for_a_reliably_classified_continuous_session():
+    v3 = synthetic_case("comparable_history")
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions)
+    candidates = hybrid.primary_fact_candidates(facts)
+    assert candidates and all(
+        fact_id.startswith(("trend.", "comparison.")) for fact_id in candidates
+    )
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == candidates[0]
+    packet = _context(v3, permissions=permissions)
+    assert packet["primary_fact_candidates"] == list(candidates)
+    intensity = next((fact for fact in facts if fact.id == "intensity.position"), None)
+    if intensity is not None:
+        invalid = json.dumps(_selection(
+            "intensity.position", intent="describe_session",
+        ))
+        result = _run(v3, permissions=permissions, transport=_provider(lambda *_: invalid))
+        assert result.mode == "deterministic_fallback"
+        assert result.claims[0].id == candidates[0]
+    assert all(fact.source_paths for fact in facts if fact.id in candidates)
+
+
+def test_unknown_session_type_does_not_admit_a_direction_or_free_llm_choice():
+    v3 = synthetic_case("sparse")
+    facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True))
+    assert hybrid.primary_fact_candidates(facts) == ("session.unknown",)
+    assert "interval.pace_direction" not in {fact.id for fact in facts}
+    packet = _context(v3, permissions=hybrid.HybridPermissions(history=True))
+    assert packet["primary_fact_candidates"] == ["session.unknown"]
+    result = _run(
+        v3, permissions=hybrid.HybridPermissions(history=True),
+        transport=_provider(lambda *_: json.dumps(_selection(
+            "interval.pace_direction",
+        ))),
+    )
+    assert result.mode == "deterministic_fallback"
+    assert result.claims[0].id == "session.unknown"
+    assert result.claims[0].evidence_refs
+
+
 def test_long_run_and_historical_trend_are_not_double_reported():
     long_facts = _facts(
         synthetic_case("long"),

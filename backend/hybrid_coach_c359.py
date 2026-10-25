@@ -752,6 +752,7 @@ def build_hybrid_context(
              "editorial_intent": editorial_intent(f)}
             for f in facts
         ],
+        "primary_fact_candidates": list(primary_fact_candidates(facts)),
         "selection_schema": EditorialSelection.model_json_schema(),
         "composition": "Independent sentences only; no causal or interpretive transitions.",
         "threshold_conventions": {
@@ -796,24 +797,45 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     high_intensity = (
         intensity is not None and dict(intensity.values).get("position") == "above_LT2"
     )
+    prescription_deviation = (
+        "prescription.review" in index
+        and dict(index["prescription.review"].values).get("status") == "deviation"
+    )
     if primary_id == "prescription.review":
         history_facts = tuple(
             fact for fact in displayable
             if fact.id == "session.long" or fact.id.startswith(("trend.", "comparison."))
         )
-        support_ids = (*primary_fact_candidates(history_facts), "interval.pace_direction")
+        historical_candidate = primary_fact_candidates(history_facts)[:1]
+        repetition_candidate = (
+            "interval.pace_direction"
+            if "interval.pace_direction" in index else "interval.regularity"
+        )
+        support_ids = (*historical_candidate, repetition_candidate)
         if high_intensity:
             support_ids += ("intensity.position",)
     elif primary_id == "session.long":
         support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
     elif primary_id.startswith(("trend.", "comparison.")):
-        support_ids = ("interval.pace_direction",)
-        if high_intensity:
-            support_ids += ("intensity.position",)
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    elif primary_id == "interval.pace_direction":
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    elif primary_id == "interval.regularity":
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
     elif primary_id == "intensity.position":
-        support_ids = ("interval.pace_direction",)
+        support_ids = ("prescription.review",) if prescription_deviation else ()
     elif primary_id == "interval.count":
         support_ids = ("intensity.position", "intensity.hr")
+    elif primary_id in {"effort.first", "effort.last"}:
+        support_ids = ("prescription.review",) if prescription_deviation else ()
     else:
         support_ids = ()
 
@@ -1303,15 +1325,18 @@ async def generate_hybrid_coach(
         "You are the editorial selector for a running coach, not a scientific author. "
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
         "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
-        "transitions or extra fields. Select the distinctive observation first; choose the most "
-        "useful supported observation, not a list. "
-        "Use this contextual order: a documented prescription type deviation; a distinctive long-run "
-        "duration comparison; a corroborated historical trend or admissible comparison; an average "
-        "above LT2 from reliable personal thresholds; then, among repetition observations, V2 pace "
-        "direction, V2 regularity, and recorded structure. Without those, prefer a direct intensity "
-        "observation over a probable session label. A direction outranks other repetition facts, but "
-        "not a stronger fact of a different kind admitted by these rules. Do not repeat direction with "
-        "regularity or endpoints, or combine a repetition count with its coverage. "
+        "transitions or extra fields. Choose the primary only from primary_fact_candidates in the "
+        "contract; that list is a contextual shortlist, not permission to select any admitted fact. "
+        "For repeated sessions, V2 pace direction remains the lead fact when admitted; a documented, "
+        "authorized type-level prescription deviation may also be a candidate, never an inferred pace "
+        "target. Do not promote session-average HR above LT2 over an admitted V2 direction. With V2 "
+        "regularity but no direction, choose the more useful of that verdict and an independently "
+        "admitted threshold observation. For continuous sessions, a supported long-duration comparison "
+        "or corroborated history can lead; historical evidence is not automatically more important "
+        "than a distinctive fact about today's session. Use session.kind only as its admitted probable "
+        "classification; do not classify an ambiguous session. "
+        "Do not repeat direction with regularity or endpoints, or combine a repetition count with its "
+        "coverage. "
         "Select zero to two useful, genuinely distinct supports; fewer is better than padding. "
         "Omit banal or redundant facts; length follows evidence, not a word quota. "
         "Do not pair session.kind with intensity.position, session.unknown with intensity facts, "

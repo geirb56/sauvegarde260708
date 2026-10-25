@@ -20,6 +20,7 @@ from workout_analysis_v2 import build_workout_analysis_v2
 from workout_intelligence_v3 import build_workout_intelligence_v3, extract_workout_intelligence_input
 from workout_intelligence_v3_models import WIV3EffortPaceObservations, WIV3ThresholdUsed
 import workout_intelligence_v3_service as service
+from test_hybrid_coach_c359 import synthetic_case
 
 
 OWNER = "user-a"
@@ -71,9 +72,27 @@ def calculated_case(paces=(300, 300, 300, 300), *, phases=None, language="fr"):
     return intelligence, ScopedV2Evidence(OWNER, analysis)
 
 
-def facts(v3, evidence, *, language="fr", access=ACCESS):
+def set_above_lt2(intelligence):
+    lt1 = WIV3ThresholdUsed(
+        value_bpm=150, source="lab_test", estimated_on="2026-01-01", confidence="high",
+    )
+    lt2 = WIV3ThresholdUsed(
+        value_bpm=170, source="lab_test", estimated_on="2026-01-01", confidence="high",
+    )
+    intelligence.intensity_assessment = intelligence.intensity_assessment.model_copy(update={
+        "hr_used_bpm": 180, "position": "above_LT2", "lt1": lt1, "lt2": lt2,
+        "confidence": "high",
+    })
+    return intelligence
+
+
+def facts(
+    v3, evidence, *, language="fr", access=ACCESS,
+    permissions=hybrid.HybridPermissions(),
+):
     return hybrid.build_admissible_facts(
         v3, access=access, language=language, v2_evidence=evidence,
+        permissions=permissions,
     )
 
 
@@ -481,50 +500,122 @@ def test_deterministic_directional_fallback_uses_v2_realization(language, direct
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
-def test_high_intensity_is_a_distinct_primary_over_repetition_direction(language):
+def test_repetition_direction_precedes_session_average_above_lt2(language, monkeypatch):
     v3, evidence = calculated_case([295, 300, 306, 310, 315], language=language)
-    lt1 = WIV3ThresholdUsed(
-        value_bpm=150, source="lab_test", estimated_on="2026-01-01", confidence="high",
-    )
-    lt2 = WIV3ThresholdUsed(
-        value_bpm=170, source="lab_test", estimated_on="2026-01-01", confidence="high",
-    )
-    v3.intensity_assessment = v3.intensity_assessment.model_copy(update={
-        "hr_used_bpm": 180, "position": "above_LT2", "lt1": lt1, "lt2": lt2,
-        "confidence": "high",
-    })
+    set_above_lt2(v3)
     admitted = facts(v3, evidence, language=language)
     assert {"interval.pace_direction", "interval.regularity", "intensity.position"} <= {
         fact.id for fact in admitted
     }
+    assert hybrid.primary_fact_candidates(admitted) == ("interval.pace_direction",)
     claims = hybrid.select_deterministic_synthesis(admitted)
     assert [claim.id for claim in claims[:2]] == [
-        "intensity.position", "interval.pace_direction",
+        "interval.pace_direction", "intensity.position",
     ]
     expected = {
         "fr": (
-            "Ta FC moyenne est de 180 bpm, au-dessus de LT2 ; elle ne décrit pas tout l'effort.",
             "Les 2 dernières répétitions comparables sont 15 s/km plus lentes que les 2 premières "
             "(répétition centrale exclue).",
+            "Ta FC moyenne est de 180 bpm, au-dessus de LT2 ; elle ne décrit pas tout l'effort.",
         ),
         "en": (
-            "Your average HR is 180 bpm, above LT2; it does not describe the entire effort.",
             "The final 2 comparable repetitions are 15 s/km slower than the opening 2 "
             "(middle repetition excluded).",
+            "Your average HR is 180 bpm, above LT2; it does not describe the entire effort.",
         ),
         "es": (
-            "Tu FC media es de 180 lpm, por encima de LT2; no describe todo el esfuerzo.",
             "Las 2 últimas repeticiones comparables son 15 s/km más lentas que las 2 primeras "
             "(se excluye la repetición central).",
+            "Tu FC media es de 180 lpm, por encima de LT2; no describe todo el esfuerzo.",
         ),
     }[language]
     assert tuple(claim.text for claim in claims) == expected
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    valid = run(
+        v3, evidence, language=language,
+        transport=provider(selection(
+            "interval.pace_direction", supporting=("intensity.position",),
+        )),
+    )
+    assert valid.mode == "editorial_realization"
+    assert tuple(claim.id for claim in valid.claims) == (
+        "interval.pace_direction", "intensity.position",
+    )
+    invalid = run(
+        v3, evidence, language=language,
+        transport=provider(selection("intensity.position")),
+    )
+    assert invalid.mode == "deterministic_fallback"
+    assert invalid.claims[0].id == "interval.pace_direction"
+    assert all(claim.evidence_refs for claim in claims)
     with pytest.raises(ValueError, match="contextual_primary_priority"):
         validate_editorial_selection(json.dumps({
-            "primary": {"fact_id": "interval.pace_direction", "form": "direct"},
+            "primary": {"fact_id": "intensity.position", "form": "direct"},
             "supporting": [],
-            "editorial_intent": "compare_history",
+            "editorial_intent": "describe_session",
         }), admitted, "fr")
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_homogeneous_repetitions_allow_a_bounded_lt2_alternative(language, monkeypatch):
+    v3, evidence = calculated_case([300] * 5, language=language)
+    set_above_lt2(v3)
+    admitted = facts(v3, evidence, language=language)
+    assert hybrid.primary_fact_candidates(admitted) == (
+        "interval.regularity", "intensity.position",
+    )
+    fallback = run(v3, evidence, language=language)
+    assert fallback.mode == "deterministic_fallback"
+    assert fallback.claims[0].id == "interval.regularity"
+    assert "physiological stability" not in fallback.text.lower()
+    assert "estabilidad fisiológica" not in fallback.text.lower()
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    chosen = run(
+        v3, evidence, language=language,
+        transport=provider(selection("intensity.position")),
+    )
+    assert chosen.mode == "editorial_realization"
+    assert chosen.claims[0].id == "intensity.position"
+    assert "180" in chosen.text
+    assert all(claim.evidence_refs for claim in chosen.claims)
+
+
+def test_repetition_direction_and_corroborated_history_are_bounded_alternatives(monkeypatch):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315])
+    history = synthetic_case("comparable_history")
+    v3 = v3.model_copy(update={
+        "history": history.history,
+        "historical_comparison": history.historical_comparison,
+        "performance_trend": history.performance_trend,
+    })
+    admitted = facts(
+        v3, evidence, permissions=hybrid.HybridPermissions(history=True),
+    )
+    assert "trend.probable_improvement" in {fact.id for fact in admitted}
+    candidates = hybrid.primary_fact_candidates(admitted)
+    assert candidates[0] == "interval.pace_direction"
+    assert "trend.probable_improvement" in candidates
+    assert hybrid.select_deterministic_synthesis(admitted)[0].id == "interval.pace_direction"
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    valid = run(
+        v3, evidence,
+        transport=provider(selection("interval.pace_direction")),
+    )
+    assert valid.mode == "editorial_realization"
+    historical = json.dumps({
+        "primary": {"fact_id": "trend.probable_improvement", "form": "explain"},
+        "supporting": [],
+        "editorial_intent": "compare_history",
+    })
+    alternate = run(v3, evidence, transport=provider(historical))
+    assert alternate.mode == "editorial_realization"
+    assert alternate.claims[0].id == "trend.probable_improvement"
+    refused = run(
+        v3, evidence,
+        transport=provider(selection("interval.regularity")),
+    )
+    assert refused.mode == "deterministic_fallback"
+    assert refused.claims[0].id == "interval.pace_direction"
 
 
 def test_documented_type_only_prescription_deviation_can_lead_v2_direction():
@@ -536,10 +627,15 @@ def test_documented_type_only_prescription_deviation_can_lead_v2_direction():
     admitted = hybrid.build_admissible_facts(
         v3, access=ACCESS, permissions=permissions, v2_evidence=evidence,
     )
-    assert hybrid.primary_fact_candidates(admitted) == ("prescription.review",)
+    assert hybrid.primary_fact_candidates(admitted) == (
+        "interval.pace_direction", "prescription.review",
+    )
     fallback = hybrid.select_deterministic_synthesis(admitted)
-    assert fallback[0].id == "prescription.review"
-    assert "interval.pace_direction" in {claim.id for claim in fallback}
+    assert fallback[0].id == "interval.pace_direction"
+    assert "prescription.review" in {claim.id for claim in fallback}
+    assert "type" in next(
+        claim.text.lower() for claim in fallback if claim.id == "prescription.review"
+    )
     response = json.dumps({
         "primary": {"fact_id": "prescription.review", "form": "direct"},
         "supporting": [{"fact_id": "interval.pace_direction", "form": "direct"}],
