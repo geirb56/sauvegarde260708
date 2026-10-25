@@ -200,8 +200,9 @@ production.** Aucun merge, déploiement ou activation n’est demandé.
 ### Références et diagnostic
 
 - Branche cible : `copilot/dev` ; base de la PR : `7c3bb1d1c1eb943bb65bed350608ad33a59fb76f`.
-- HEAD audité avant correction : `8a661be36950c9db2861be6bab534f8ce75e561b`.
-- HEAD de la correction source testée : `399528c6113fb85d9a8ffb41478a9c398f77e5f4`.
+- HEAD cité comme audité dans la demande : `8a661be36950c9db2861be6bab534f8ce75e561b`.
+- HEAD réel de la PR #370 vérifié avant cette correction : `3c5e1862e37e93b2501f9f62227d6a327ebd93c7` (différent du HEAD cité).
+- HEAD source testé après correction : `520fc4ed89797b040f081ae1b7f602c28c0373d2`.
 - Le catalogue de faits admissibles et les seuils n’ont pas changé.
 
 L’audit a confirmé deux défauts dans `primary_fact_candidates()` : `above_LT2`
@@ -209,6 +210,10 @@ L’audit a confirmé deux défauts dans `primary_fact_candidates()` : `above_LT
 précédait les faits descriptifs de répétitions. `validate_editorial_selection()`
 imposait exactement cette priorité au LLM en n’acceptant que le tuple de
 candidats retourné par cette fonction. Le fallback suivait la même hiérarchie.
+La vérification du HEAD réel a aussi révélé un cas restant : le retour général
+des faits historiques les faisait encore passer avant les observations du jour
+pour un type inconnu ou insuffisamment fiable. La validation des candidats
+transmettait cette priorité excessive au LLM comme au fallback.
 Les faits de séance utilisés sont ceux déjà produits par V3 : `session.kind`
 (classification probable avec son niveau de confiance), `session.long`,
 l’historique corroboré et `prescription.review` lorsque son statut est réellement
@@ -230,6 +235,10 @@ admis. Aucune nouvelle classification n’est créée.
 - Pour une séance continue classée avec une confiance suffisante, une comparaison
   historique admissible peut mener. `session.long` demeure candidat principal
   lorsque la durée distinctive est étayée.
+- L’historique n’est plus candidat principal par défaut quand le type du jour est
+  ambigu : les faits courants admissibles gardent la priorité, notamment
+  `session.unknown` lorsque c’est l’observation disponible. Un fait historique
+  isolé reste sélectionnable si aucun autre fait n’est fourni.
 - `prescription.review` n’est candidat que si l’accès à la prescription est
   autorisé et si V3 fournit `status = deviation`. Cela décrit un écart de type,
   non le respect d’une allure ou d’une cible.
@@ -252,7 +261,7 @@ compléments et gardes anti-redondance existants sont conservés.
 | D. Sortie longue distinctive + FC élevée | `session.long` précédait déjà globalement LT2. | `session.long` reste le choix du fallback; le seuil peut être une alternative ou un complément. La moyenne ne décrit pas toute la séance. |
 | E. Footing continu + historique corroboré | Le fait historique menait avant les autres faits, sans vérifier le contexte continu fiable. | L’historique peut mener lorsque le type continu admis et sa confiance le justifient; l’intensité ne devient pas automatiquement prioritaire. |
 | F. Prescription documentée + direction V2 | Une déviation autorisée menait automatiquement dès sa présence. | La direction reste le fallback; `prescription.review` est un candidat alternatif seulement avec `deviation` admis. Le texte reste limité à l’écart de type. |
-| G. Type ambigu / données insuffisantes | Des priorités globales pouvaient faire passer un fait disponible avant l’incertitude ou suggérer un contexte. | Seuls les faits réellement admis sont candidats; le type inconnu reste inconnu et aucune direction n’est fabriquée. Le fallback est stable. |
+| G. Type ambigu / données insuffisantes, avec historique corroboré | L’historique pouvait mener par sa priorité globale, même sans type du jour fiable. | L’historique ne masque plus l’observation courante : `session.unknown` ou un autre fait courant admissible reste le choix prudent; aucun type ni direction n’est inventé. Un historique hors liste est refusé comme principal par le LLM. |
 
 ### Scénarios contradictoires et réalisations
 
@@ -279,9 +288,9 @@ FR/EN/ES. Exemples issus des assertions et réalisations déterministes :
 - **F — FR / EN / ES :** la sélection prescription reste possible seulement avec
   l’autorisation et le statut `deviation`; son texte précise qu’il s’agit du type
   observé et ne change pas la prescription.
-- **G — FR / EN / ES :** le choix LLM qui demande une direction non admise est
-  rejeté; la réalisation de `session.unknown` conserve la classification
-  incertaine.
+- **G — FR / EN / ES :** avec historique corroboré mais type du jour inconnu,
+  `session.unknown` est le seul principal autorisé; le LLM qui demande une
+  comparaison historique est refusé et le fallback conserve l’incertitude.
 
 Les faits affichés conservent leurs `evidence_refs` et `conclusion_ids`. Les
 tests ne font aucun appel à un LLM réel.
@@ -300,17 +309,17 @@ python -m pytest -q \
   tests/test_hybrid_coach_c372.py
 ```
 
-Résultat : **613 tests réussis**. Le paquet complet de dépendances n’a pas pu être
-restauré car la roue interne `litellm` du fichier requirements n’était pas
-accessible dans l’environnement; les dépendances de test existantes manquantes
-ont été installées individuellement, puis la commande ci-dessus a réussi.
+Résultat : **616 tests réussis**. L’environnement ne contenait pas les dépendances
+Python de test; les dépendances nécessaires déjà déclarées par le projet ont été
+installées individuellement. Le paquet complet `backend/requirements.txt` n’a pas
+été restauré et aucun appel fournisseur réel n’a été effectué.
 
 Limites : le choix LLM réel et sa qualité éditoriale n’ont pas été évalués; les
 tests vérifient le contrat, les listes de candidats et la réalisation backend.
-Lorsque plusieurs candidats historiques existent, un seul est exposé avec la
-direction comme alternative contextuelle; l’ordre du fallback ne prétend pas
-mesurer une importance scientifique. `C359_HYBRID_COACH_ENABLED` reste OFF par
-défaut.
+Lorsque plusieurs candidats historiques existent, un seul peut être exposé avec
+la direction comme alternative contextuelle; l’ordre du fallback ne prétend pas
+mesurer une importance scientifique. Aucun type nouveau ni score éditorial n’est
+calculé. `C359_HYBRID_COACH_ENABLED` reste OFF par défaut.
 
 **Verdict de cette correction : GO pour revue de la PR #370; HOLD pour merge,
 intégration, activation ou production.**
