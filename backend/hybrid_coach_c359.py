@@ -19,7 +19,9 @@ from hybrid_coach_editorial_c365 import (
     format_recorded_seconds, RECORDED_WHOLE_DIGITS, realize_clause, validate_editorial_selection,
 )
 from narrative_coach_v3 import Transport, format_narrative_number
-from hybrid_coach_v2_c372 import ScopedV2Evidence, approved_v2_regularity
+from hybrid_coach_v2_c372 import (
+    ScopedV2Evidence, approved_v2_pace_direction, approved_v2_regularity,
+)
 from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
@@ -55,12 +57,19 @@ _VALUE_MEANINGS = {
     "duration_count": "Number of individually admitted recorded effort durations.",
     "both_count": "Number of coherent recorded identities with both admitted metrics.",
     "regularity_band": "Exact V2 descriptive pacing band for all comparable recorded efforts, not physiology.",
+    "direction": "V2's explicit faster/slower pace-direction conclusion.",
+    "scope": "V2's exact repetition comparison scope: equal endpoint groups or first-to-last.",
+    "pace_change_sec_per_km": "V2's already-established pace difference in its declared scope; later minus earlier.",
+    "group_size": "Number of comparable repetitions in each V2 endpoint group.",
     "comparability_basis": "V2's declared basis for comparing the recorded efforts, not a new comparison.",
     "source": "Authority that produced the admitted conclusion.",
 }
 
 _REQUIRED_LIMITS = {
     "interval.count": ("no_repetition_durations", "regularity_verdict_unavailable"),
+    "interval.pace_direction": (
+        "recorded_comparable_efforts_only", "no_physiological_progression", "no_causal_inference",
+    ),
     "session.long": ("probable_not_certain", "duration_not_effort"),
     "session.kind": ("probable_not_certain",),
     "intensity.position": ("average_not_whole_effort", "no_time_in_zones", "no_physiological_cause"),
@@ -661,6 +670,67 @@ def build_admissible_facts(
              f"{path}.evidence.median_pace_sec_per_km"],
             assertion,
         )
+        direction = approved_v2_pace_direction(
+            v2_evidence, user_id=access.user_id, workout_id=intelligence.workout_id,
+            effort_count=cls.evidence.get("effort_count"),
+        )
+        if direction is not None:
+            values = {
+                "direction": direction["direction"], "scope": direction["scope"],
+                "pace_change_sec_per_km": direction["pace_change_sec_per_km"],
+                "comparability_basis": direction["basis"], "source": "workout_analysis_v2",
+                "efforts": direction["count"],
+            }
+            units = {"pace_change_sec_per_km": "s/km", "efforts": "count"}
+            if "group_size" in direction:
+                values["group_size"] = direction["group_size"]
+                units["group_size"] = "count"
+            direction_path = f"{path}.metadata"
+            proof_path = f"{path}.evidence"
+            refs = [
+                "workout_analysis_v2.workout.id", "workout_analysis_v2.phase_analysis",
+                f"{direction_path}.judgment_version", f"{direction_path}.direction",
+                f"{direction_path}.trend_scope", f"{direction_path}.comparability_basis",
+                f"{proof_path}.total_effort_count", f"{proof_path}.comparable_effort_count",
+                f"{proof_path}.pace_uncertainty_sec_per_km",
+                f"{proof_path}.atypical_candidate_count",
+            ]
+            if direction["scope"] == "equal_count_endpoint_groups_middle_excluded":
+                refs.extend((
+                    f"{direction_path}.group_direction",
+                    f"{proof_path}.group_pace_change_sec_per_km",
+                    f"{proof_path}.group_size",
+                    f"{proof_path}.start_group_pace_sec_per_km",
+                    f"{proof_path}.end_group_pace_sec_per_km",
+                    f"{proof_path}.trend_limit_sec_per_km",
+                ))
+            else:
+                refs.extend((
+                    f"{proof_path}.first_to_last_pace_change_sec_per_km",
+                    f"{proof_path}.first_pace_sec_per_km",
+                    f"{proof_path}.last_pace_sec_per_km",
+                    f"{proof_path}.trend_limit_sec_per_km",
+                ))
+            conditions = [
+                "scoped_same_user_and_workout", "v2_versioned_unique_conclusion",
+                "explicit_v2_faster_or_slower", direction["scope"],
+                "v2_comparable_recorded_efforts",
+            ]
+            limits = [
+                "recorded_comparable_efforts_only", "no_physiological_progression",
+                "no_causal_inference",
+            ]
+            assertion_source = AdmissibleFact(
+                "interval.pace_direction", tuple(values.items()), tuple(units.items()),
+                "v2_repetition_pace_direction", "none", tuple(conditions), tuple(limits),
+                120, tuple(refs), "",
+            )
+            add(
+                "interval.pace_direction", values, units,
+                "v2_repetition_pace_direction", "none",
+                conditions, limits, 120, refs,
+                realize_clause(assertion_source, "direct", lang),
+            )
     return tuple(facts)
 
 
@@ -719,6 +789,12 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     Unknown-type assertions already contain any available HR observation.
     """
     index = {fact.id: fact for fact in facts}
+    if "interval.pace_direction" in index:
+        selected = [index["interval.pace_direction"]]
+        for id in ("prescription.review", "intensity.position"):
+            if id in index and len(selected) < 3:
+                selected.append(index[id])
+        return _bounded_claims(selected)
     if "interval.regularity" in index:
         selected = [index["interval.regularity"]]
         for id in ("prescription.review", "effort.first", "intensity.position"):
@@ -1238,9 +1314,11 @@ async def generate_hybrid_coach(
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
         "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
         "transitions or extra fields. Select the distinctive observation first; priority is guidance, "
-        "not a checklist. Prefer interval.regularity when admitted: it carries V2's pacing "
-        "conclusion, not a physiological interpretation. Do not enumerate count, both endpoints "
-        "and coverage alongside it. Otherwise prefer bounded recorded effort endpoints; never pair "
+        "not a checklist. Prefer interval.pace_direction when admitted: it carries V2's explicit "
+        "scoped pace comparison. Do not repeat it with interval.regularity or endpoints. Otherwise "
+        "prefer interval.regularity when admitted: it carries V2's pacing conclusion, not a "
+        "physiological interpretation. Do not enumerate count, both endpoints and coverage alongside "
+        "it. Otherwise prefer bounded recorded effort endpoints; never pair "
         "effort.coverage with interval.count (duplicate total). Otherwise prefer recorded structure "
         "for intervals, duration comparison for long runs, "
         "a corroborated trend or a strong comparison for rich history, a direct average/threshold "

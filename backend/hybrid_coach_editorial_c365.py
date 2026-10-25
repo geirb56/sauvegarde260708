@@ -73,7 +73,9 @@ def fact_category(fact: AdmissibleFact) -> str:
         return "comparison"
     if fact.id == "session.kind":
         return "classification"
-    if fact.id.startswith("trend.") or fact.id in {"prescription.review", "interval.regularity"}:
+    if fact.id.startswith("trend.") or fact.id in {
+        "prescription.review", "interval.regularity", "interval.pace_direction",
+    }:
         return "conclusion"
     return "observation"
 
@@ -129,6 +131,8 @@ def validate_editorial_selection(
             raise ValueError("unknown_or_unauthorized_fact")
         if clause.form not in allowed_forms(index[clause.fact_id], language):
             raise ValueError("unsupported_form")
+    if "interval.pace_direction" in index and ids[0] != "interval.pace_direction":
+        raise ValueError("directional_observation_priority")
     if selection.editorial_intent != editorial_intent(index[ids[0]]):
         raise ValueError("contradictory_intent")
     selected = set(ids)
@@ -136,8 +140,12 @@ def validate_editorial_selection(
             or {"session.kind", "intensity.position"} <= selected
             or {"interval.count", "effort.coverage"} <= selected
             or {"interval.count", "interval.regularity"} <= selected
+            or {"interval.regularity", "interval.pace_direction"} <= selected
             or ("interval.regularity" in selected
                and len(selected & {"interval.count", "effort.first", "effort.last", "effort.coverage"}) > 1)
+            or ("interval.pace_direction" in selected
+               and selected & {"interval.count", "effort.first", "effort.last",
+                               "effort.coverage"})
             or sum(id.startswith(("comparison.", "trend.")) for id in ids) > 1):
         raise ValueError("redundant_selection")
     return selection
@@ -154,6 +162,12 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
                 "en": " This V2 verdict describes paces only, not physiological stability.",
                 "es": " Este veredicto V2 describe solo los ritmos, no una estabilidad fisiológica.",
             }[language]
+        if fact.id == "interval.pace_direction":
+            return fact.assertion + {
+                "fr": " Cette comparaison porte uniquement sur les allures enregistrées.",
+                "en": " This comparison concerns recorded paces only.",
+                "es": " Esta comparación se refiere únicamente a los ritmos registrados.",
+            }[language]
         return fact.assertion
     values = dict(fact.values)
 
@@ -165,6 +179,47 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
 
     if fact.id == "interval.regularity":
         return fact.assertion
+    if fact.id == "interval.pace_direction":
+        change = format_evidence_number(abs(values["pace_change_sec_per_km"]), language)
+        direction = values["direction"]
+        if values["scope"] == "equal_count_endpoint_groups_middle_excluded":
+            count = format_evidence_number(values["group_size"], language)
+            middle = {
+                "fr": " (répétition centrale exclue)",
+                "en": " (middle repetition excluded)",
+                "es": " (se excluye la repetición central)",
+            }[language] if values["efforts"] % 2 else ""
+            if language == "fr":
+                return (
+                    f"Les {count} dernières répétitions comparables sont {change} s/km "
+                    f"plus {'rapides' if direction == 'faster' else 'lentes'} que les "
+                    f"{count} premières{middle}."
+                )
+            if language == "es":
+                return (
+                    f"Las {count} últimas repeticiones comparables son {change} s/km "
+                    f"más {'rápidas' if direction == 'faster' else 'lentas'} que las "
+                    f"{count} primeras{middle}."
+                )
+            return (
+                f"The final {count} comparable repetitions are {change} s/km "
+                f"{'faster' if direction == 'faster' else 'slower'} than the opening "
+                f"{count}{middle}."
+            )
+        if language == "fr":
+            return (
+                f"La dernière répétition comparable est {change} s/km plus "
+                f"{'rapide' if direction == 'faster' else 'lente'} que la première."
+            )
+        if language == "es":
+            return (
+                f"La última repetición comparable es {change} s/km más "
+                f"{'rápida' if direction == 'faster' else 'lenta'} que la primera."
+            )
+        return (
+            f"The final comparable repetition is {change} s/km "
+            f"{'faster' if direction == 'faster' else 'slower'} than the first."
+        )
     if fact.id in {"effort.first", "effort.last"}:
         label = tr("premier", "first", "primer") if fact.id == "effort.first" else tr(
             "dernier", "last", "último",

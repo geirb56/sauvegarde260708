@@ -264,6 +264,7 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
         if monotonic:
             evidence["direction"] = "faster" if delta < 0 else "slower"
             evidence["trend_scope"] = "first_last_of_three_efforts"
+            evidence["trend_limit_sec_per_km"] = trend_limit
             text += " " + _localized(
                 language, f"La dernière répétition est {_n(abs(delta))} s/km plus {'rapide' if delta < 0 else 'lente'} que la première.",
                 f"The last repetition is {_n(abs(delta))} s/km {'faster' if delta < 0 else 'slower'} than the first.",
