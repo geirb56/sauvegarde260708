@@ -18,8 +18,9 @@ from hybrid_coach_v2_c372 import ScopedV2Evidence
 from test_workout_intelligence_v3 import _db, _w
 from workout_analysis_v2 import build_workout_analysis_v2
 from workout_intelligence_v3 import build_workout_intelligence_v3, extract_workout_intelligence_input
-from workout_intelligence_v3_models import WIV3EffortPaceObservations
+from workout_intelligence_v3_models import WIV3EffortPaceObservations, WIV3ThresholdUsed
 import workout_intelligence_v3_service as service
+from test_hybrid_coach_c359 import synthetic_case
 
 
 OWNER = "user-a"
@@ -71,9 +72,27 @@ def calculated_case(paces=(300, 300, 300, 300), *, phases=None, language="fr"):
     return intelligence, ScopedV2Evidence(OWNER, analysis)
 
 
-def facts(v3, evidence, *, language="fr", access=ACCESS):
+def set_above_lt2(intelligence):
+    lt1 = WIV3ThresholdUsed(
+        value_bpm=150, source="lab_test", estimated_on="2026-01-01", confidence="high",
+    )
+    lt2 = WIV3ThresholdUsed(
+        value_bpm=170, source="lab_test", estimated_on="2026-01-01", confidence="high",
+    )
+    intelligence.intensity_assessment = intelligence.intensity_assessment.model_copy(update={
+        "hr_used_bpm": 180, "position": "above_LT2", "lt1": lt1, "lt2": lt2,
+        "confidence": "high",
+    })
+    return intelligence
+
+
+def facts(
+    v3, evidence, *, language="fr", access=ACCESS,
+    permissions=hybrid.HybridPermissions(),
+):
     return hybrid.build_admissible_facts(
         v3, access=access, language=language, v2_evidence=evidence,
+        permissions=permissions,
     )
 
 
@@ -241,6 +260,20 @@ def test_category_uncertain_in_actual_v2_is_not_reclassified():
     assert regularity(v3, evidence) is None
 
 
+@pytest.mark.parametrize("language,expected", [
+    ("fr", "Les répétitions comparables présentent des variations d'allure importantes."),
+    ("en", "The comparable repetitions show large pace variations."),
+    ("es", "Las repeticiones comparables presentan variaciones de ritmo importantes."),
+])
+def test_variable_repetitions_without_direction_stay_descriptive(language, expected):
+    v3, evidence = calculated_case([300, 330, 300, 330], language=language)
+    assert regularity(v3, evidence) is not None
+    assert pace_direction(v3, evidence) is None
+    claims = hybrid.select_deterministic_synthesis(facts(v3, evidence, language=language))
+    assert [claim.id for claim in claims] == ["interval.regularity"]
+    assert claims[0].text == expected
+
+
 @pytest.mark.parametrize("paces,expected_direction,expected_delta", [
     ([298, 300, 299, 301, 300], None, None),
     ([295, 300, 306, 310, 315], "slower", 15),
@@ -267,18 +300,9 @@ def test_real_v2_direction_and_hybrid_output_for_five_repetitions(
         )
         result = run(v3, evidence, language=language)
         expected = {
-            "fr": (
-                "Les allures des répétitions comparables sont homogènes. Dans l'ordre enregistré "
-                "par Garmin, le premier effort (n° 1) a duré 4 min, à 4'58/km."
-            ),
-            "en": (
-                "The comparable repetitions have homogeneous paces. In Garmin's recorded order, "
-                "the first effort (no. 1) lasted 4 min at 4:58/km."
-            ),
-            "es": (
-                "Los ritmos de las repeticiones comparables son homogéneos. En el orden registrado "
-                "por Garmin, el primer esfuerzo (n.º 1) duró 4 min, a 4:58/km."
-            ),
+            "fr": "Les allures des répétitions comparables sont homogènes.",
+            "en": "The comparable repetitions have homogeneous paces.",
+            "es": "Los ritmos de las repeticiones comparables son homogéneos.",
         }[language]
         assert result.claims[0].id == "interval.regularity"
         assert result.text == expected
@@ -473,6 +497,202 @@ def test_deterministic_directional_fallback_uses_v2_realization(language, direct
     assert result.claims[0].id == "interval.pace_direction"
     expected_words = {"fr": "plus lentes", "en": "faster", "es": "más lentas"}
     assert expected_words[language] in result.text
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_repetition_direction_precedes_session_average_above_lt2(language, monkeypatch):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315], language=language)
+    set_above_lt2(v3)
+    admitted = facts(v3, evidence, language=language)
+    assert {"interval.pace_direction", "interval.regularity", "intensity.position"} <= {
+        fact.id for fact in admitted
+    }
+    assert hybrid.primary_fact_candidates(admitted) == ("interval.pace_direction",)
+    claims = hybrid.select_deterministic_synthesis(admitted)
+    assert [claim.id for claim in claims[:2]] == [
+        "interval.pace_direction", "intensity.position",
+    ]
+    expected = {
+        "fr": (
+            "Les 2 dernières répétitions comparables sont 15 s/km plus lentes que les 2 premières "
+            "(répétition centrale exclue).",
+            "Ta FC moyenne est de 180 bpm, au-dessus de LT2 ; elle ne décrit pas tout l'effort.",
+        ),
+        "en": (
+            "The final 2 comparable repetitions are 15 s/km slower than the opening 2 "
+            "(middle repetition excluded).",
+            "Your average HR is 180 bpm, above LT2; it does not describe the entire effort.",
+        ),
+        "es": (
+            "Las 2 últimas repeticiones comparables son 15 s/km más lentas que las 2 primeras "
+            "(se excluye la repetición central).",
+            "Tu FC media es de 180 lpm, por encima de LT2; no describe todo el esfuerzo.",
+        ),
+    }[language]
+    assert tuple(claim.text for claim in claims) == expected
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    valid = run(
+        v3, evidence, language=language,
+        transport=provider(selection(
+            "interval.pace_direction", supporting=("intensity.position",),
+        )),
+    )
+    assert valid.mode == "editorial_realization"
+    assert tuple(claim.id for claim in valid.claims) == (
+        "interval.pace_direction", "intensity.position",
+    )
+    invalid = run(
+        v3, evidence, language=language,
+        transport=provider(selection("intensity.position")),
+    )
+    assert invalid.mode == "deterministic_fallback"
+    assert invalid.claims[0].id == "interval.pace_direction"
+    assert all(claim.evidence_refs for claim in claims)
+    with pytest.raises(ValueError, match="contextual_primary_priority"):
+        validate_editorial_selection(json.dumps({
+            "primary": {"fact_id": "intensity.position", "form": "direct"},
+            "supporting": [],
+            "editorial_intent": "describe_session",
+        }), admitted, "fr")
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_homogeneous_repetitions_allow_a_bounded_lt2_alternative(language, monkeypatch):
+    v3, evidence = calculated_case([300] * 5, language=language)
+    set_above_lt2(v3)
+    admitted = facts(v3, evidence, language=language)
+    assert hybrid.primary_fact_candidates(admitted) == (
+        "interval.regularity", "intensity.position",
+    )
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    original = UserAccess.can
+    monkeypatch.setattr(
+        UserAccess, "can", lambda self, feature: feature != "llm_access" and original(self, feature),
+    )
+    fallback = run(v3, evidence, language=language)
+    assert fallback.mode == "deterministic_fallback"
+    assert fallback.claims[0].id == "interval.regularity"
+    assert fallback.claims[0].text == HOMOGENEOUS[language]
+    assert [claim.id for claim in fallback.claims] == [
+        "interval.regularity", "intensity.position",
+    ]
+    assert all(claim.evidence_refs and claim.conclusion_ids for claim in fallback.claims)
+    assert "physiological stability" not in fallback.text.lower()
+    assert "estabilidad fisiológica" not in fallback.text.lower()
+    monkeypatch.setattr(UserAccess, "can", original)
+    chosen = run(
+        v3, evidence, language=language,
+        transport=provider(selection("intensity.position")),
+    )
+    assert chosen.mode == "editorial_realization"
+    assert chosen.claims[0].id == "intensity.position"
+    intensity = next(fact for fact in admitted if fact.id == "intensity.position")
+    assert chosen.text == realize_clause(intensity, "direct", language)
+    assert all(claim.evidence_refs for claim in chosen.claims)
+    refused = run(
+        v3, evidence, language=language,
+        transport=provider(selection("interval.count")),
+    )
+    assert refused.mode == "deterministic_fallback"
+    assert refused.claims[0].id == "interval.regularity"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_repetition_direction_and_corroborated_history_are_bounded_alternatives(
+    language, monkeypatch,
+):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315], language=language)
+    history = synthetic_case("comparable_history")
+    v3 = v3.model_copy(update={
+        "historical_comparison": history.historical_comparison,
+        "performance_trend": history.performance_trend,
+    })
+    admitted = facts(
+        v3, evidence, language=language,
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    assert "trend.probable_improvement" in {fact.id for fact in admitted}
+    candidates = hybrid.primary_fact_candidates(admitted)
+    assert candidates[0] == "interval.pace_direction"
+    assert "trend.probable_improvement" in candidates
+    assert hybrid.select_deterministic_synthesis(admitted)[0].id == "interval.pace_direction"
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    valid = run(
+        v3, evidence, language=language,
+        permissions=hybrid.HybridPermissions(history=True),
+        transport=provider(selection("interval.pace_direction")),
+    )
+    assert valid.mode == "editorial_realization"
+    assert valid.claims[0].text == next(
+        fact.assertion for fact in admitted if fact.id == "interval.pace_direction"
+    )
+    historical = json.dumps({
+        "primary": {"fact_id": "trend.probable_improvement", "form": "explain"},
+        "supporting": [],
+        "editorial_intent": "compare_history",
+    })
+    alternate = run(
+        v3, evidence, language=language,
+        permissions=hybrid.HybridPermissions(history=True),
+        transport=provider(historical),
+    )
+    assert alternate.mode == "editorial_realization"
+    assert alternate.claims[0].id == "trend.probable_improvement"
+    assert alternate.claims[0].text == next(
+        fact.assertion for fact in admitted if fact.id == "trend.probable_improvement"
+    )
+    refused = run(
+        v3, evidence, language=language,
+        permissions=hybrid.HybridPermissions(history=True),
+        transport=provider(selection("interval.regularity")),
+    )
+    assert refused.mode == "deterministic_fallback"
+    assert refused.claims[0].id == "interval.pace_direction"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_documented_type_only_prescription_deviation_can_lead_v2_direction(
+    language, monkeypatch,
+):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315], language=language)
+    v3.prescription_assessment.status = "deviation"
+    permissions = hybrid.HybridPermissions(prescription=True)
+    admitted = facts(v3, evidence, language=language)
+    assert "prescription.review" not in {fact.id for fact in admitted}
+    admitted = hybrid.build_admissible_facts(
+        v3, access=ACCESS, permissions=permissions, v2_evidence=evidence,
+        language=language,
+    )
+    assert hybrid.primary_fact_candidates(admitted) == (
+        "interval.pace_direction", "prescription.review",
+    )
+    fallback = hybrid.select_deterministic_synthesis(admitted)
+    assert fallback[0].id == "interval.pace_direction"
+    assert "prescription.review" in {claim.id for claim in fallback}
+    review = next(fact for fact in admitted if fact.id == "prescription.review")
+    assert "type_only_not_full_compliance" in review.important_limits
+    assert fallback[1].text == review.assertion
+    response = json.dumps({
+        "primary": {"fact_id": "prescription.review", "form": "direct"},
+        "supporting": [{"fact_id": "interval.pace_direction", "form": "direct"}],
+        "editorial_intent": "review_prescription",
+    })
+    chosen = validate_editorial_selection(response, admitted, language)
+    assert chosen.primary.fact_id == "prescription.review"
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = run(
+        v3, evidence, language=language, permissions=permissions,
+        transport=provider(response),
+    )
+    assert result.mode == "editorial_realization"
+    assert result.claims[0].id == "prescription.review"
+    assert result.claims[0].text == hybrid.realize_clause(review, "direct", language)
+    refused = run(
+        v3, evidence, language=language, permissions=permissions,
+        transport=provider(selection("interval.regularity")),
+    )
+    assert refused.mode == "deterministic_fallback"
+    assert refused.claims[0].id == "interval.pace_direction"
 
 
 @pytest.mark.parametrize("metadata", [

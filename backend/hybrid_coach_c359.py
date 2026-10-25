@@ -15,7 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from access_control import UserAccess
 from hybrid_coach_editorial_c365 import (
-    EditorialSelection, allowed_forms, editorial_intent, fact_category, format_evidence_number,
+    EditorialSelection, allowed_forms, editorial_intent, fact_category,
+    primary_fact_candidates, format_evidence_number,
     format_recorded_seconds, RECORDED_WHOLE_DIGITS, realize_clause, validate_editorial_selection,
 )
 from narrative_coach_v3 import Transport, format_narrative_number
@@ -751,6 +752,7 @@ def build_hybrid_context(
              "editorial_intent": editorial_intent(f)}
             for f in facts
         ],
+        "primary_fact_candidates": list(primary_fact_candidates(facts)),
         "selection_schema": EditorialSelection.model_json_schema(),
         "composition": "Independent sentences only; no causal or interpretive transitions.",
         "threshold_conventions": {
@@ -782,59 +784,74 @@ def _bounded_claims(facts: list[AdmissibleFact]) -> list[HybridClaim]:
 
 
 def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[HybridClaim]:
-    """Choose a main reading and nonredundant support, not an LLM gain.
-
-    Session-average HR does not explain repetitions. A trend already carries
-    the useful historical reading; a derived type adds little alongside it.
-    Unknown-type assertions already contain any available HR observation.
-    """
-    index = {fact.id: fact for fact in facts}
-    if "interval.pace_direction" in index:
-        selected = [index["interval.pace_direction"]]
-        for id in ("prescription.review", "intensity.position"):
-            if id in index and len(selected) < 3:
-                selected.append(index[id])
-        return _bounded_claims(selected)
-    if "interval.regularity" in index:
-        selected = [index["interval.regularity"]]
-        for id in ("prescription.review", "effort.first", "intensity.position"):
-            if id in index and len(selected) < 3:
-                selected.append(index[id])
-        return _bounded_claims(selected)
-    effort = next((index[id] for id in ("effort.first", "effort.last") if id in index), None)
-    if effort is not None:
-        selected = [effort]
-        historical = sorted(
-            (f for f in facts if f.id.startswith(("trend.", "comparison.")) or f.id == "session.long"),
-            key=lambda f: (-f.priority, f.id),
+    """Apply contextual editorial rules and keep only distinct useful support."""
+    displayable = tuple(
+        fact for fact in facts if len(fact.assertion) <= MAX_COACH_TEXT_CHARS
+    )
+    index = {fact.id: fact for fact in displayable}
+    primary_candidates = primary_fact_candidates(displayable)
+    if not primary_candidates:
+        return []
+    primary_id = primary_candidates[0]
+    intensity = index.get("intensity.position")
+    high_intensity = (
+        intensity is not None and dict(intensity.values).get("position") == "above_LT2"
+    )
+    prescription_deviation = (
+        "prescription.review" in index
+        and dict(index["prescription.review"].values).get("status") == "deviation"
+    )
+    if primary_id == "prescription.review":
+        history_facts = tuple(
+            fact for fact in displayable
+            if fact.id == "session.long" or fact.id.startswith(("trend.", "comparison."))
         )
-        intensity = index.get("intensity.position")
-        if (historical and "prescription.review" in index and intensity is not None
-                and dict(intensity.values)["position"] == "above_LT2"):
-            # A recorded endpoint must not evict this admitted threshold observation.
-            return _bounded_claims([historical[0], intensity, index["prescription.review"]])
-        if historical:
-            selected.append(historical[0])
-        if "prescription.review" in index:
-            selected.append(index["prescription.review"])
-        for id in ("intensity.position", "intensity.hr", "effort.last", "effort.coverage"):
-            if len(selected) < 3 and id in index and index[id] not in selected:
-                selected.append(index[id])
-        return _bounded_claims(selected)
-    trends = sorted((f for f in facts if f.id.startswith("trend.")), key=lambda f: (-f.priority, f.id))
-    primary_ids = ["interval.count", "session.long"]
-    primary_ids += [f.id for f in trends]
-    primary_ids += ["intensity.position", "intensity.hr", "session.unknown", "session.kind"]
-    primary = next((index[id] for id in primary_ids if id in index), None)
-    if primary is None:
-        return _bounded_claims([index["prescription.review"]]) if "prescription.review" in index else []
-    selected = [primary]
-    if (primary.id in {"interval.count", "session.long"} or primary.id.startswith("trend.")):
-        support = index.get("intensity.position")
-        if support is not None:
-            selected.append(support)
-    if "prescription.review" in index:
-        selected.append(index["prescription.review"])
+        historical_candidate = primary_fact_candidates(history_facts)[:1]
+        repetition_candidate = next(
+            (fact_id for fact_id in (
+                "interval.pace_direction", "interval.regularity",
+                "effort.first", "effort.last", "interval.count",
+            ) if fact_id in index),
+            None,
+        )
+        support_ids = (*historical_candidate, repetition_candidate)
+        if high_intensity:
+            support_ids += ("intensity.position",)
+    elif primary_id == "session.long":
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    elif primary_id.startswith(("trend.", "comparison.")):
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    elif primary_id == "interval.pace_direction":
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    elif primary_id == "interval.regularity":
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    elif primary_id == "intensity.position":
+        support_ids = ("prescription.review",) if prescription_deviation else ()
+    elif primary_id == "interval.count":
+        support_ids = ("intensity.position", "intensity.hr")
+    elif primary_id in {"effort.first", "effort.last"}:
+        support_ids = ("intensity.position",) if high_intensity else ()
+        if prescription_deviation:
+            support_ids += ("prescription.review",)
+    else:
+        support_ids = ()
+
+    selected = [index[primary_id]]
+    selected_ids = {primary_id}
+    for fact_id in support_ids:
+        if fact_id in index and fact_id not in selected_ids:
+            selected.append(index[fact_id])
+            selected_ids.add(fact_id)
+        if len(selected) == 3:
+            break
     return _bounded_claims(selected)
 
 
@@ -1313,20 +1330,25 @@ async def generate_hybrid_coach(
         "You are the editorial selector for a running coach, not a scientific author. "
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
         "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
-        "transitions or extra fields. Select the distinctive observation first; priority is guidance, "
-        "not a checklist. Prefer interval.pace_direction when admitted: it carries V2's explicit "
-        "scoped pace comparison. Do not repeat it with interval.regularity or endpoints. Otherwise "
-        "prefer interval.regularity when admitted: it carries V2's pacing conclusion, not a "
-        "physiological interpretation. Do not enumerate count, both endpoints and coverage alongside "
-        "it. Otherwise prefer bounded recorded effort endpoints; never pair "
-        "effort.coverage with interval.count (duplicate total). Otherwise prefer recorded structure "
-        "for intervals, duration comparison for long runs, "
-        "a corroborated trend or a strong comparison for rich history, a direct average/threshold "
-        "observation over its derived probable type. Select zero to two useful, nonredundant supports. "
+        "transitions or extra fields. Select the distinctive observation first, but only from the "
+        "primary_fact_candidates contextual shortlist in the contract. It is not permission to select "
+        "any admitted fact. "
+        "For repeated sessions, V2 pace direction remains the lead fact when admitted; a documented, "
+        "authorized type-level prescription deviation may also be a candidate, never an inferred pace "
+        "target. Do not promote session-average HR above LT2 over an admitted V2 direction. With V2 "
+        "regularity but no direction, choose the more useful of that verdict and an independently "
+        "admitted threshold observation. For continuous sessions, a supported long-duration comparison "
+        "or corroborated history can lead; historical evidence is not automatically more important "
+        "than a distinctive fact about today's session. Use session.kind only as its admitted probable "
+        "classification; do not classify an ambiguous session. "
+        "Do not repeat direction with regularity or endpoints, or combine a repetition count with its "
+        "coverage. "
+        "Select zero to two useful, genuinely distinct supports; fewer is better than padding. "
         "Omit banal or redundant facts; length follows evidence, not a word quota. "
         "Do not pair session.kind with intensity.position, session.unknown with intensity facts, "
-        "or multiple comparison/trend facts. Use each fact once. Intent must match the primary fact's "
-        "editorial_intent. direct is concise; explain retains interpretation limits; rounded marks "
+        "or multiple historical comparison facts, including session.long. Use each fact once. "
+        "Intent must match the primary fact's editorial_intent. direct is concise; explain retains "
+        "interpretation limits; rounded marks "
         "an approximate comparison; threshold_label spells out lactate thresholds; count_words "
         "spells phase counts; scope explains why an average alone cannot establish progress. "
         "There are no causal relationships between clauses. Scientific relations are internal to "

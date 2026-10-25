@@ -105,17 +105,221 @@ def test_mock_editorial_relevance_and_no_redundant_support(name, expected):
     assert v3.model_dump() == before
 
 
+@pytest.mark.parametrize("name,expected", [
+    ("easy", "intensity.position"),
+    ("long", "session.long"),
+    ("intervals_4x4", "interval.count"),
+    ("sparse", "session.unknown"),
+    ("no_physiology", "intensity.hr"),
+])
+def test_contextual_primary_policy_for_session_types(name, expected):
+    facts = _facts(
+        synthetic_case(name),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    assert hybrid.primary_fact_candidates(facts)[0] == expected
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == expected
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_documented_type_level_prescription_deviation_is_primary(language):
+    v3 = synthetic_case("intervals_4x4")
+    v3.prescription_assessment.status = "deviation"
+    facts = _facts(
+        v3, permissions=hybrid.HybridPermissions(prescription=True), language=language,
+    )
+    review = next(fact for fact in facts if fact.id == "prescription.review")
+    assert dict(review.values) == {"status": "deviation"}
+    assert hybrid.primary_fact_candidates(facts) == ("prescription.review",)
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == "prescription.review"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_distinctive_long_run_can_lead_a_supported_high_average_hr(language):
+    v3 = synthetic_case("long")
+    v3.intensity_assessment = v3.intensity_assessment.model_copy(update={
+        "hr_used_bpm": 180, "position": "above_LT2", "confidence": "high",
+    })
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    assert hybrid.primary_fact_candidates(facts) == (
+        "session.long", "intensity.position",
+    )
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == "session.long"
+    packet = _context(v3, permissions=permissions, language=language)
+    assert packet["primary_fact_candidates"] == ["session.long", "intensity.position"]
+    valid = json.dumps({
+        "primary": {"fact_id": "session.long", "form": "direct"},
+        "supporting": [{"fact_id": "intensity.position", "form": "direct"}],
+        "editorial_intent": "describe_session",
+    })
+    result = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert result.mode == "editorial_realization"
+    assert result.claims[0].id == "session.long"
+    assert [claim.id for claim in result.claims] == [
+        "session.long", "intensity.position",
+    ]
+    expected_claims = [
+        hybrid.realize_clause(fact, "direct", language)
+        for fact in (next(f for f in facts if f.id == "session.long"),
+                     next(f for f in facts if f.id == "intensity.position"))
+    ]
+    assert [claim.text for claim in result.claims] == expected_claims
+    assert all(claim.evidence_refs and claim.conclusion_ids for claim in result.claims)
+    refused = json.dumps(_selection("session.kind"))
+    fallback = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: refused),
+    )
+    assert fallback.mode == "deterministic_fallback"
+    assert fallback.claims[0].id == "session.long"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_corroborated_history_leads_for_a_reliably_classified_continuous_session(language):
+    v3 = synthetic_case("comparable_history")
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    candidates = hybrid.primary_fact_candidates(facts)
+    assert candidates and all(
+        fact_id.startswith(("trend.", "comparison.")) for fact_id in candidates
+    )
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == candidates[0]
+    packet = _context(v3, permissions=permissions, language=language)
+    assert packet["primary_fact_candidates"] == list(candidates)
+    primary = next(fact for fact in facts if fact.id == candidates[0])
+    valid = json.dumps(_selection(
+        candidates[0], form="explain", intent="compare_history",
+    ))
+    selected = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert selected.mode == "editorial_realization"
+    assert selected.claims[0].id == candidates[0]
+    assert selected.claims[0].text == hybrid.realize_clause(primary, "explain", language)
+    intensity = next((fact for fact in facts if fact.id == "intensity.position"), None)
+    if intensity is not None:
+        invalid = json.dumps(_selection("intensity.position", intent="describe_session"))
+        result = _run(
+            v3, permissions=permissions, language=language,
+            transport=_provider(lambda *_: invalid),
+        )
+        assert result.mode == "deterministic_fallback"
+        assert result.claims[0].id == candidates[0]
+        assert result.claims[0].text == next(f.assertion for f in facts if f.id == candidates[0])
+    assert all(fact.source_paths for fact in facts if fact.id in candidates)
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_unknown_session_type_does_not_admit_a_direction_or_free_llm_choice(language):
+    v3 = synthetic_case("sparse")
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    assert hybrid.primary_fact_candidates(facts) == ("session.unknown",)
+    assert "interval.pace_direction" not in {fact.id for fact in facts}
+    packet = _context(v3, permissions=permissions, language=language)
+    assert packet["primary_fact_candidates"] == ["session.unknown"]
+    result = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: json.dumps(_selection(
+            "interval.pace_direction",
+        ))),
+    )
+    assert result.mode == "deterministic_fallback"
+    assert result.claims[0].id == "session.unknown"
+    assert result.claims[0].text == next(f.assertion for f in facts if f.id == "session.unknown")
+    assert result.claims[0].evidence_refs
+    valid = json.dumps(_selection("session.unknown", intent="qualify_data"))
+    chosen = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert chosen.mode == "editorial_realization"
+    assert chosen.claims[0].id == "session.unknown"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_unknown_session_with_corroborated_history_keeps_cautious_primary(language, monkeypatch):
+    v3 = synthetic_case("sparse")
+    history = synthetic_case("comparable_history")
+    v3 = v3.model_copy(update={
+        "historical_comparison": history.historical_comparison,
+        "performance_trend": history.performance_trend,
+    })
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = _facts(v3, permissions=permissions, language=language)
+    historical = next(
+        fact for fact in facts if fact.id.startswith(("trend.", "comparison."))
+    )
+    unknown = next(fact for fact in facts if fact.id == "session.unknown")
+
+    assert hybrid.primary_fact_candidates(facts) == ("session.unknown",)
+    assert _context(v3, permissions=permissions, language=language)[
+        "primary_fact_candidates"
+    ] == ["session.unknown"]
+    fallback = hybrid.select_deterministic_synthesis(facts)
+    assert [claim.id for claim in fallback] == ["session.unknown"]
+    assert fallback[0].text == unknown.assertion
+    assert fallback[0].evidence_refs == list(unknown.source_paths)
+    assert historical.source_paths
+
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    valid = json.dumps(_selection("session.unknown", intent="qualify_data"))
+    selected = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: valid),
+    )
+    assert selected.mode == "editorial_realization"
+    assert [claim.id for claim in selected.claims] == ["session.unknown"]
+    assert selected.text == unknown.assertion
+    assert selected.claims[0].evidence_refs == list(unknown.source_paths)
+
+    refused = json.dumps(_selection(historical.id, intent="compare_history"))
+    rejected = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: refused),
+    )
+    assert rejected.mode == "deterministic_fallback"
+    assert [claim.id for claim in rejected.claims] == ["session.unknown"]
+    assert rejected.text == unknown.assertion
+
+
+def test_long_run_and_historical_trend_are_not_double_reported():
+    long_facts = _facts(
+        synthetic_case("long"),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    trend_facts = _facts(
+        synthetic_case("comparable_history"),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    trend = next(fact for fact in trend_facts if fact.id.startswith("trend."))
+    combined = long_facts + (trend,)
+    response = json.dumps({
+        "primary": {"fact_id": "session.long", "form": "direct"},
+        "supporting": [{"fact_id": trend.id, "form": "direct"}],
+        "editorial_intent": "describe_session",
+    })
+    with pytest.raises(ValueError, match="redundant_selection"):
+        hybrid.validate_editorial_selection(response, combined, "fr")
+
+
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
 @pytest.mark.parametrize("name", CASES)
 def test_all_admitted_forms_are_locally_realizable_and_traceable(name, language):
     permissions = hybrid.HybridPermissions(history=True, prescription=True)
     facts = _facts(synthetic_case(name), permissions=permissions, language=language)
     for fact in facts:
+        isolated_fact = (fact,)
         for form in allowed_forms(fact, language):
             selection = hybrid.validate_editorial_selection(json.dumps(_selection(
                 fact.id, form, intent=editorial_intent(fact),
-            )), facts, language)
-            claims = hybrid.realize_editorial_selection(selection, facts, language)
+            )), isolated_fact, language)
+            claims = hybrid.realize_editorial_selection(selection, isolated_fact, language)
             assert len(claims) == 1
             claim = claims[0]
             assert claim.id == fact.id and claim.text

@@ -561,33 +561,29 @@ def test_oversized_identity_never_reaches_integer_string_conversion(field):
     json.dumps(_context(v3), allow_nan=False)
 
 
-def test_effort_does_not_displace_independent_intensity_with_available_support_slot():
+def test_recorded_endpoint_stands_alone_without_a_distinctive_complement():
     facts = _facts(recorded_case())
     assert "intensity.position" in {f.id for f in facts}
-    assert [c.id for c in hybrid.select_deterministic_synthesis(facts)] == [
-        "effort.first", "intensity.position", "effort.last",
-    ]
+    assert [c.id for c in hybrid.select_deterministic_synthesis(facts)] == ["effort.first"]
     rich = _facts(
         recorded_case(base=synthetic_case("comparable_history")),
         permissions=hybrid.HybridPermissions(history=True),
     )
     claims = hybrid.select_deterministic_synthesis(rich)
-    assert claims[0].id == "effort.first"
-    assert claims[1].id.startswith("trend.")
-    assert claims[2].id == "intensity.position"
+    assert claims[0].id.startswith("trend.")
+    assert len(claims) == 1
 
 
 @pytest.mark.parametrize("prescription", [False, True])
-def test_historical_comparison_and_prescription_survive_without_new_ranking(prescription):
+def test_historical_comparison_precedes_generic_effort_observation(prescription):
     v3 = recorded_case(base=synthetic_case("comparable_history"))
     v3.performance_trend.status = "insufficient_data"
     if prescription:
         v3.prescription_assessment.status = "consistent"
     facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True, prescription=prescription))
     claims = hybrid.select_deterministic_synthesis(facts)
-    assert len(claims) == 3 and claims[0].id == "effort.first"
-    assert claims[1].id.startswith("comparison.")
-    assert claims[2].id == ("prescription.review" if prescription else "intensity.position")
+    assert claims[0].id.startswith("comparison.")
+    assert len(claims) == 1
 
 
 def test_above_threshold_observation_kept_instead_of_redundant_effort_coverage():
@@ -621,7 +617,7 @@ def test_above_lt2_not_displaced_when_history_and_prescription_fill_support_slot
     assert f"effort.{endpoint}" in {f.id for f in facts}
     claims = hybrid.select_deterministic_synthesis(facts)
     assert claims[0].id.startswith("trend." if trend else "comparison.")
-    assert [c.id for c in claims[1:]] == ["intensity.position", "prescription.review"]
+    assert [c.id for c in claims[1:]] == ["intensity.position"]
     assert "180" in claims[1].text
     assert len(hybrid._render(claims)) <= hybrid.MAX_COACH_TEXT_CHARS
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
@@ -717,10 +713,11 @@ def test_historical_and_prescription_admissions_preserved_in_fallback(monkeypatc
     v3 = v3.model_copy(update={"prescription_assessment": WIV3PrescriptionAssessment(status="consistent")})
     facts = _facts(v3, permissions=permissions)
     claims = hybrid.select_deterministic_synthesis(facts)
-    assert len(claims) == 3
-    assert claims[0].id == "effort.first"
-    assert claims[1].id.startswith(("trend.", "comparison.")) or claims[1].id == "session.long"
-    assert claims[2].id == "prescription.review"
+    assert claims[0].id == "session.long" if base == "long" else claims[0].id.startswith(
+        ("trend.", "comparison."),
+    )
+    assert len(claims) == 1
+    assert "prescription.review" in {fact.id for fact in facts}
     unauthorized = {f.id for f in _facts(v3)}
     assert "prescription.review" not in unauthorized
     assert not any(id.startswith(("trend.", "comparison.")) for id in unauthorized)
