@@ -25,9 +25,11 @@ from typing import Any, Optional
 
 from garmin.domain_adapter import garmin_local_start_time
 from narrative_coach_v3_models import NarrativeCoachV3
+from hybrid_coach_v2_c372 import ScopedV2Evidence
 from training_v2.prescription_snapshot import PrescriptionSnapshot
 from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
+    WorkoutAnalysisV2Response,
     build_workout_analysis_v2,
     workout_analysis_candidate_date_bounds,
 )
@@ -90,10 +92,25 @@ async def load_scoped_workout_intelligence_v3_with_narrative(
     *, db: Any, user_id: str, workout_id: str, language: str,
 ) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3]]:
     """Reuse the same scoped evidence load; narrative failures cannot hide facts."""
-    return await _load_scoped_workout_intelligence_v3(
+    result = await _load_scoped_workout_intelligence_v3(
         db=db, user_id=user_id, workout_id=workout_id, language=language,
         include_narrative=True,
     )
+    return result[:3] if result is not None else None
+
+
+async def load_scoped_workout_intelligence_v3_with_v2(
+    *, db: Any, user_id: str, workout_id: str, language: str,
+) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], Optional[ScopedV2Evidence]]]:
+    """Internal hybrid context from the same scoped pass; no route or extra read."""
+    result = await _load_scoped_workout_intelligence_v3(
+        db=db, user_id=user_id, workout_id=workout_id, language=language,
+    )
+    if result is None:
+        return None
+    workout, intelligence, _, analysis = result
+    evidence = ScopedV2Evidence(user_id, analysis) if analysis is not None else None
+    return workout, intelligence, evidence
 
 
 async def _load_scoped_workout_intelligence_v3(
@@ -101,7 +118,10 @@ async def _load_scoped_workout_intelligence_v3(
     physiological_metrics: Optional[dict] = None,
     user_profile: Optional[dict] = None,
     include_narrative: bool = False,
-) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3]]:
+) -> Optional[tuple[
+    dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3,
+    Optional[WorkoutAnalysisV2Response],
+]]:
     workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if workout is None:
         return None
@@ -206,4 +226,4 @@ async def _load_scoped_workout_intelligence_v3(
                 )
             except Exception:
                 logger.exception("Narrative fallback unavailable; factual V3 preserved")
-    return workout, intelligence, narrative
+    return workout, intelligence, narrative, v2_analysis

@@ -19,6 +19,7 @@ from hybrid_coach_editorial_c365 import (
     format_recorded_seconds, RECORDED_WHOLE_DIGITS, realize_clause, validate_editorial_selection,
 )
 from narrative_coach_v3 import Transport, format_narrative_number
+from hybrid_coach_v2_c372 import ScopedV2Evidence, approved_v2_regularity
 from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
 FEATURE_FLAG = "C359_HYBRID_COACH_ENABLED"
@@ -39,7 +40,7 @@ _VALUE_MEANINGS = {
     "lt1": "Personal LT1 heart-rate threshold used by V3.",
     "lt2": "Personal LT2 heart-rate threshold used by V3.",
     "position": "V3 position of session-average HR relative to personal thresholds.",
-    "status": "V3 assessment status, not an independently inferred conclusion.",
+    "status": "Supplied authority's assessment or availability status, not an independently inferred conclusion.",
     "observations": "Number of observations used by V3.",
     "median_change": "V3 median pace change: later minus earlier; negative is faster.",
     "span": "Time span covered by the V3 trend.",
@@ -53,6 +54,9 @@ _VALUE_MEANINGS = {
     "pace_count": "Number of individually admitted recorded effort paces.",
     "duration_count": "Number of individually admitted recorded effort durations.",
     "both_count": "Number of coherent recorded identities with both admitted metrics.",
+    "regularity_band": "Exact V2 descriptive pacing band for all comparable recorded efforts, not physiology.",
+    "comparability_basis": "V2's declared basis for comparing the recorded efforts, not a new comparison.",
+    "source": "Authority that produced the admitted conclusion.",
 }
 
 _REQUIRED_LIMITS = {
@@ -356,12 +360,13 @@ def _recorded_effort_facts(intelligence: WorkoutIntelligenceV3, language: str) -
 def build_admissible_facts(
     intelligence: WorkoutIntelligenceV3, *, access: UserAccess,
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
+    v2_evidence: Optional[ScopedV2Evidence] = None,
 ) -> tuple[AdmissibleFact, ...]:
     """Finite structured authority, independent of Narrative V3 selected prose.
 
     Never copy V3 prose, source-path strings, IDs, dates or arbitrary evidence.
     Counts/availability do NOT authorize a regularity verdict, even at high
-    classification confidence. This V3-only experiment has no V2 authority.
+    classification confidence. Only separately scoped V2 evidence can supply it.
     """
     if not _authorized(access):
         return ()
@@ -611,16 +616,63 @@ def build_admissible_facts(
                "The observed type differs from the prescribed type under the V3 classification; this reading does not change the prescription.",
                "El tipo observado difiere del tipo prescrito según la clasificación V3; esta lectura no modifica la prescripción."))
     facts.extend(_recorded_effort_facts(intelligence, lang))
+    judgment = approved_v2_regularity(
+        v2_evidence, user_id=access.user_id, workout_id=intelligence.workout_id,
+        effort_count=cls.evidence.get("effort_count"),
+    ) if cls.type == "intervals" else None
+    if judgment is not None:
+        # The legacy count fact explicitly requires an unavailable regularity verdict.
+        facts = [fact for fact in facts if fact.id != "interval.count"]
+        band = judgment["band"]
+        assertion = {
+            "homogeneous": tr(
+                "Les allures des répétitions comparables sont homogènes.",
+                "The comparable repetitions have homogeneous paces.",
+                "Los ritmos de las repeticiones comparables son homogéneos.",
+            ),
+            "noticeable": tr(
+                "Les répétitions comparables présentent des variations d'allure perceptibles.",
+                "The comparable repetitions show noticeable pace variations.",
+                "Las repeticiones comparables presentan variaciones de ritmo perceptibles.",
+            ),
+            "variable": tr(
+                "Les répétitions comparables présentent des variations d'allure importantes.",
+                "The comparable repetitions show large pace variations.",
+                "Las repeticiones comparables presentan variaciones de ritmo importantes.",
+            ),
+        }[band]
+        path = f"workout_analysis_v2.coach_language.conclusions[{judgment['index']}]"
+        add(
+            "interval.regularity",
+            {"regularity_band": band, "source": "workout_analysis_v2", "status": "available",
+             "efforts": judgment["count"], "comparability_basis": judgment["basis"]},
+            {"efforts": "count"}, "v2_repetition_pacing_band", "none",
+            ["scoped_same_user_and_workout", "v2_versioned_unique_conclusion",
+             "all_comparable_recorded_efforts", "v2_numeric_evidence_available"],
+            ["recorded_comparable_efforts_only", "not_physiological_stability",
+             "no_fatigue_progression_or_cause", "descriptive_not_good_or_bad"], 110,
+            ["workout_analysis_v2.workout.id", "workout_analysis_v2.phase_analysis",
+             f"{path}.code", f"{path}.available", f"{path}.kind",
+             f"{path}.metadata.judgment_version", f"{path}.metadata.comparison_scope",
+             f"{path}.metadata.metric", f"{path}.metadata.regularity_band",
+             f"{path}.metadata.comparability_basis", f"{path}.evidence.total_effort_count",
+             f"{path}.evidence.comparable_effort_count",
+             f"{path}.evidence.absolute_deviation_sec_per_km",
+             f"{path}.evidence.median_pace_sec_per_km"],
+            assertion,
+        )
     return tuple(facts)
 
 
 def build_hybrid_context(
     intelligence: WorkoutIntelligenceV3, *, access: UserAccess,
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
+    v2_evidence: Optional[ScopedV2Evidence] = None,
 ) -> dict:
     """Provider-safe numeric/enum packet; local assertion/source refs excluded."""
     facts = build_admissible_facts(
         intelligence, access=access, permissions=permissions, language=language,
+        v2_evidence=v2_evidence,
     )
     return {
         "language": _language(language),
@@ -667,6 +719,12 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     Unknown-type assertions already contain any available HR observation.
     """
     index = {fact.id: fact for fact in facts}
+    if "interval.regularity" in index:
+        selected = [index["interval.regularity"]]
+        for id in ("prescription.review", "effort.first", "intensity.position"):
+            if id in index and len(selected) < 3:
+                selected.append(index[id])
+        return _bounded_claims(selected)
     effort = next((index[id] for id in ("effort.first", "effort.last") if id in index), None)
     if effort is not None:
         selected = [effort]
@@ -1142,6 +1200,7 @@ async def generate_hybrid_coach(
     intelligence: WorkoutIntelligenceV3, *, access: UserAccess,
     permissions: HybridPermissions = HybridPermissions(), language: str = "fr",
     transport: Optional[Transport] = None,
+    v2_evidence: Optional[ScopedV2Evidence] = None,
 ) -> HybridResult:
     """Ask for editorial decisions only; no provider prose reaches the result."""
     start = perf_counter()
@@ -1151,13 +1210,15 @@ async def generate_hybrid_coach(
         return HybridResult(mode="disabled", reason="flag_off")
     facts = build_admissible_facts(
         intelligence, access=access, permissions=permissions, language=language,
+        v2_evidence=v2_evidence,
     )
     claims = select_deterministic_synthesis(facts)
     result = HybridResult(
         mode="deterministic_fallback", reason="provider_unavailable",
         text=_render(claims), claims=claims, verification_scope="closed_realization",
     )
-    if intelligence.session_classification.type == "intervals":
+    if (intelligence.session_classification.type == "intervals"
+            and not any(f.id == "interval.regularity" for f in facts)):
         result.blockers.append("regularity_verdict_authority_unavailable")
     if not facts or not access.can("llm_access"):
         result.reason = "no_authorized_facts" if not facts else "llm_access_not_authorized"
@@ -1165,6 +1226,7 @@ async def generate_hybrid_coach(
         return result
     context = build_hybrid_context(
         intelligence, access=access, permissions=permissions, language=language,
+        v2_evidence=v2_evidence,
     )
     prompt = json.dumps(context, ensure_ascii=False, allow_nan=False)
     if len(prompt) > MAX_CONTEXT_CHARS:
@@ -1176,7 +1238,9 @@ async def generate_hybrid_coach(
         "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
         "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
         "transitions or extra fields. Select the distinctive observation first; priority is guidance, "
-        "not a checklist. Prefer bounded recorded effort endpoints when admitted; never pair "
+        "not a checklist. Prefer interval.regularity when admitted: it carries V2's pacing "
+        "conclusion, not a physiological interpretation. Do not enumerate count, both endpoints "
+        "and coverage alongside it. Otherwise prefer bounded recorded effort endpoints; never pair "
         "effort.coverage with interval.count (duplicate total). Otherwise prefer recorded structure "
         "for intervals, duration comparison for long runs, "
         "a corroborated trend or a strong comparison for rich history, a direct average/threshold "
