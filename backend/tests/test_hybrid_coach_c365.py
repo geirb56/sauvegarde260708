@@ -243,7 +243,7 @@ def test_unknown_session_type_does_not_admit_a_direction_or_free_llm_choice(lang
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
-def test_unknown_session_with_corroborated_history_keeps_cautious_primary(language):
+def test_unknown_session_with_corroborated_history_keeps_cautious_primary(language, monkeypatch):
     v3 = synthetic_case("sparse")
     history = synthetic_case("comparable_history")
     v3 = v3.model_copy(update={

@@ -173,8 +173,11 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
     )
     if continuous_type and trusted_type and history:
         return history
-    if "session.unknown" in index:
-        return ("session.unknown",)
+    if history and all(
+        fact_id == "session.long" or fact_id.startswith(("trend.", "comparison."))
+        for fact_id in index
+    ):
+        return history
     if "effort.first" in index:
         return ("effort.first",)
     if "effort.last" in index:
