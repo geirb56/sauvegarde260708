@@ -600,6 +600,40 @@ def test_above_threshold_observation_kept_instead_of_redundant_effort_coverage()
     assert "intensity.position" in {c.id for c in hybrid.select_deterministic_synthesis(facts)}
 
 
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("trend", [False, True])
+@pytest.mark.parametrize("endpoint", ["first", "last"])
+def test_above_lt2_not_displaced_when_history_and_prescription_fill_support_slots(
+    monkeypatch, language, trend, endpoint,
+):
+    base = synthetic_case("comparable_history")
+    base.intensity_assessment.hr_used_bpm = 180
+    base.intensity_assessment.position = "above_LT2"
+    base.prescription_assessment.status = "consistent"
+    if not trend:
+        base.performance_trend.status = "insufficient_data"
+    v3 = recorded_case(base=base)
+    if endpoint == "last":
+        v3 = change_row(v3, "pace", pace_sec_per_km=1e308)
+        v3 = change_row(v3, "duration", duration_s=5e-324)
+    permissions = hybrid.HybridPermissions(history=True, prescription=True)
+    facts = _facts(v3, language=language, permissions=permissions)
+    assert f"effort.{endpoint}" in {f.id for f in facts}
+    claims = hybrid.select_deterministic_synthesis(facts)
+    assert claims[0].id.startswith("trend." if trend else "comparison.")
+    assert [c.id for c in claims[1:]] == ["intensity.position", "prescription.review"]
+    assert "180" in claims[1].text
+    assert len(hybrid._render(claims)) <= hybrid.MAX_COACH_TEXT_CHARS
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = _run(
+        v3, language=language, permissions=permissions,
+        transport=_provider(lambda *_: "invalid selection"),
+    )
+    assert result.mode == "deterministic_fallback"
+    assert result.claims == claims
+    assert "invalid selection" not in result.text
+
+
 def test_oversized_context_uses_fallback_without_calling_provider(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     v3 = recorded_case()

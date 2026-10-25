@@ -674,6 +674,11 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
             (f for f in facts if f.id.startswith(("trend.", "comparison.")) or f.id == "session.long"),
             key=lambda f: (-f.priority, f.id),
         )
+        intensity = index.get("intensity.position")
+        if (historical and "prescription.review" in index and intensity is not None
+                and dict(intensity.values)["position"] == "above_LT2"):
+            # A recorded endpoint must not evict this admitted threshold observation.
+            return _bounded_claims([historical[0], intensity, index["prescription.review"]])
         if historical:
             selected.append(historical[0])
         if "prescription.review" in index:
