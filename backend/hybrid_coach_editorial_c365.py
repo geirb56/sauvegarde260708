@@ -105,6 +105,41 @@ def allowed_forms(fact: AdmissibleFact, language: str) -> list[str]:
     return forms
 
 
+def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...]:
+    """Apply contextual editorial rules; priorities are not scientific scores."""
+    index = {fact.id: fact for fact in facts}
+    review = index.get("prescription.review")
+    if review is not None and dict(review.values).get("status") == "deviation":
+        return ("prescription.review",)
+    if "session.long" in index:
+        return ("session.long",)
+
+    history = tuple(fact.id for fact in facts if fact.id.startswith("trend."))
+    history += tuple(fact.id for fact in facts if fact.id.startswith("comparison."))
+    if history:
+        return history
+
+    intensity = index.get("intensity.position")
+    if intensity is not None and dict(intensity.values).get("position") == "above_LT2":
+        return ("intensity.position",)
+    if "interval.pace_direction" in index:
+        return ("interval.pace_direction",)
+    if "interval.regularity" in index:
+        return ("interval.regularity",)
+    for fact_id in ("effort.first", "effort.last"):
+        if fact_id in index:
+            return (fact_id,)
+    if "interval.count" in index:
+        return (("interval.count", "intensity.position")
+                if intensity is not None else ("interval.count",))
+    if intensity is not None:
+        return ("intensity.position",)
+    for fact_id in ("intensity.hr", "session.unknown", "session.kind", "prescription.review"):
+        if fact_id in index:
+            return (fact_id,)
+    return ()
+
+
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -131,22 +166,27 @@ def validate_editorial_selection(
             raise ValueError("unknown_or_unauthorized_fact")
         if clause.form not in allowed_forms(index[clause.fact_id], language):
             raise ValueError("unsupported_form")
-    if "interval.pace_direction" in index and ids[0] != "interval.pace_direction":
-        raise ValueError("directional_observation_priority")
+    if ids[0] not in primary_fact_candidates(facts):
+        raise ValueError("contextual_primary_priority")
     if selection.editorial_intent != editorial_intent(index[ids[0]]):
         raise ValueError("contradictory_intent")
     selected = set(ids)
+    historical = selected & {
+        fact_id for fact_id in index
+        if fact_id == "session.long" or fact_id.startswith(("comparison.", "trend."))
+    }
     if ("session.unknown" in selected and selected & {"intensity.hr", "intensity.position"}
             or {"session.kind", "intensity.position"} <= selected
             or {"interval.count", "effort.coverage"} <= selected
             or {"interval.count", "interval.regularity"} <= selected
+            or {"interval.count", "interval.pace_direction"} <= selected
             or {"interval.regularity", "interval.pace_direction"} <= selected
             or ("interval.regularity" in selected
-               and len(selected & {"interval.count", "effort.first", "effort.last", "effort.coverage"}) > 1)
+               and selected & {"interval.count", "effort.first", "effort.last", "effort.coverage"})
             or ("interval.pace_direction" in selected
                and selected & {"interval.count", "effort.first", "effort.last",
                                "effort.coverage"})
-            or sum(id.startswith(("comparison.", "trend.")) for id in ids) > 1):
+            or len(historical) > 1):
         raise ValueError("redundant_selection")
     return selection
 

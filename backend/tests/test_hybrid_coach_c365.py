@@ -105,17 +105,64 @@ def test_mock_editorial_relevance_and_no_redundant_support(name, expected):
     assert v3.model_dump() == before
 
 
+@pytest.mark.parametrize("name,expected", [
+    ("easy", "intensity.position"),
+    ("long", "session.long"),
+    ("intervals_4x4", "interval.count"),
+    ("sparse", "session.unknown"),
+    ("no_physiology", "intensity.hr"),
+])
+def test_contextual_primary_policy_for_session_types(name, expected):
+    facts = _facts(
+        synthetic_case(name),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    assert hybrid.primary_fact_candidates(facts)[0] == expected
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == expected
+
+
+def test_documented_type_level_prescription_deviation_is_primary():
+    v3 = synthetic_case("intervals_4x4")
+    v3.prescription_assessment.status = "deviation"
+    facts = _facts(v3, permissions=hybrid.HybridPermissions(prescription=True))
+    review = next(fact for fact in facts if fact.id == "prescription.review")
+    assert dict(review.values) == {"status": "deviation"}
+    assert hybrid.primary_fact_candidates(facts) == ("prescription.review",)
+    assert hybrid.select_deterministic_synthesis(facts)[0].id == "prescription.review"
+
+
+def test_long_run_and_historical_trend_are_not_double_reported():
+    long_facts = _facts(
+        synthetic_case("long"),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    trend_facts = _facts(
+        synthetic_case("comparable_history"),
+        permissions=hybrid.HybridPermissions(history=True),
+    )
+    trend = next(fact for fact in trend_facts if fact.id.startswith("trend."))
+    combined = long_facts + (trend,)
+    response = json.dumps({
+        "primary": {"fact_id": "session.long", "form": "direct"},
+        "supporting": [{"fact_id": trend.id, "form": "direct"}],
+        "editorial_intent": "describe_session",
+    })
+    with pytest.raises(ValueError, match="redundant_selection"):
+        hybrid.validate_editorial_selection(response, combined, "fr")
+
+
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
 @pytest.mark.parametrize("name", CASES)
 def test_all_admitted_forms_are_locally_realizable_and_traceable(name, language):
     permissions = hybrid.HybridPermissions(history=True, prescription=True)
     facts = _facts(synthetic_case(name), permissions=permissions, language=language)
     for fact in facts:
+        isolated_fact = (fact,)
         for form in allowed_forms(fact, language):
             selection = hybrid.validate_editorial_selection(json.dumps(_selection(
                 fact.id, form, intent=editorial_intent(fact),
-            )), facts, language)
-            claims = hybrid.realize_editorial_selection(selection, facts, language)
+            )), isolated_fact, language)
+            claims = hybrid.realize_editorial_selection(selection, isolated_fact, language)
             assert len(claims) == 1
             claim = claims[0]
             assert claim.id == fact.id and claim.text
