@@ -160,9 +160,15 @@ def _realize(fact, form, language):
         )
     if fact.id in {"interval.regularity", "interval.pace_direction"}:
         text += tr(
-            " Cette observation des allures des répétitions comparables ne démontre ni fatigue, ni récupération, ni progression physiologique, ni causalité.",
-            " This observation of comparable repetition paces establishes neither fatigue, recovery, physiological progress nor causality.",
-            " Esta observación de los ritmos de repeticiones comparables no demuestra fatiga, recuperación, progreso fisiológico ni causalidad.",
+            " Cette observation des allures des répétitions comparables enregistrées ne démontre ni fatigue, ni récupération, ni progression physiologique, ni causalité.",
+            " This observation of recorded comparable repetition paces establishes neither fatigue, recovery, physiological progress nor causality.",
+            " Esta observación de los ritmos de repeticiones comparables registradas no demuestra fatiga, recuperación, progreso fisiológico ni causalidad.",
+        )
+    if fact.id == "interval.regularity":
+        text += tr(
+            " Ce constat décrit les allures, pas une stabilité physiologique ni une évaluation bonne ou mauvaise.",
+            " This describes paces, not physiological stability or a good-or-bad assessment.",
+            " Esto describe ritmos, no estabilidad fisiológica ni una valoración buena o mala.",
         )
     if fact.id == "interval.count":
         text += tr(

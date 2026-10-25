@@ -132,6 +132,13 @@ def test_real_v2_regularity_direction_and_recorded_endpoints(paces, language):
     ids = {f.id for f in facts}
     assert "interval.regularity" in ids
     assert "effort.first" in ids and "effort.last" in ids
+    regularity_claims = [
+        claim for option in choices for claim in option.claims
+        if claim.id == "interval.regularity"
+    ]
+    assert regularity_claims
+    assert all({"fr": "stabilité physiologique", "en": "physiological stability",
+                "es": "estabilidad fisiológica"}[language] in c.text for c in regularity_claims)
     if len(set(paces)) > 1:
         assert "interval.pace_direction" in ids
         combined = choices[0]
