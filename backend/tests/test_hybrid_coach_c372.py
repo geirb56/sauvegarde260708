@@ -81,6 +81,10 @@ def regularity(v3, evidence, **kwargs):
     return next((f for f in facts(v3, evidence, **kwargs) if f.id == "interval.regularity"), None)
 
 
+def pace_direction(v3, evidence, **kwargs):
+    return next((f for f in facts(v3, evidence, **kwargs) if f.id == "interval.pace_direction"), None)
+
+
 def change_conclusion(evidence, *, metadata=None, numeric=None, **changes):
     analysis = evidence.analysis.model_copy(deep=True)
     item, = analysis.coach_language.conclusions
@@ -235,6 +239,240 @@ def test_category_uncertain_in_actual_v2_is_not_reclassified():
     v3, evidence = calculated_case([297, 303, 297, 303])
     assert "repetitions.category_uncertain" in evidence.analysis.coach_language.limitations
     assert regularity(v3, evidence) is None
+
+
+@pytest.mark.parametrize("paces,expected_direction,expected_delta", [
+    ([298, 300, 299, 301, 300], None, None),
+    ([295, 300, 306, 310, 315], "slower", 15),
+    ([310, 305, 300, 295, 290], "faster", -15),
+])
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_real_v2_direction_and_hybrid_output_for_five_repetitions(
+    paces, expected_direction, expected_delta, language, monkeypatch,
+):
+    v3, evidence = calculated_case(paces, language=language)
+    item, = evidence.analysis.coach_language.conclusions
+    if expected_direction is None:
+        assert item.metadata["direction"] in {"stable", "variable"}
+    else:
+        assert item.metadata["direction"] == expected_direction
+    fact = pace_direction(v3, evidence)
+    if expected_direction is None:
+        assert fact is None
+        assert item.metadata["regularity_band"] == "homogeneous"
+        monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+        original = UserAccess.can
+        monkeypatch.setattr(
+            UserAccess, "can", lambda self, feature: feature != "llm_access" and original(self, feature),
+        )
+        result = run(v3, evidence, language=language)
+        expected = {
+            "fr": (
+                "Les allures des répétitions comparables sont homogènes. Dans l'ordre enregistré "
+                "par Garmin, le premier effort (n° 1) a duré 4 min, à 4'58/km."
+            ),
+            "en": (
+                "The comparable repetitions have homogeneous paces. In Garmin's recorded order, "
+                "the first effort (no. 1) lasted 4 min at 4:58/km."
+            ),
+            "es": (
+                "Los ritmos de las repeticiones comparables son homogéneos. En el orden registrado "
+                "por Garmin, el primer esfuerzo (n.º 1) duró 4 min, a 4:58/km."
+            ),
+        }[language]
+        assert result.claims[0].id == "interval.regularity"
+        assert result.text == expected
+        return
+
+    assert fact is not None
+    assert dict(fact.values)["direction"] == expected_direction
+    assert dict(fact.values)["scope"] == "equal_count_endpoint_groups_middle_excluded"
+    assert dict(fact.values)["pace_change_sec_per_km"] == pytest.approx(expected_delta)
+    assert fact.source_paths[0] == "workout_analysis_v2.workout.id"
+    assert "no_physiological_progression" in fact.important_limits
+
+    for module, name in (
+        ("workout_analysis_v2", "_effort_regularity"),
+        ("workout_analysis_v2", "_effort_comparison_cohort"),
+        ("workout_analysis_v2", "_efforts_comparable"),
+        ("coach_language", "_repetition_judgment"),
+    ):
+        monkeypatch.setattr(f"{module}.{name}", Mock(side_effect=AssertionError("No recalculation")))
+    assert pace_direction(v3, evidence) == fact
+
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = run(
+        v3, evidence, language=language,
+        transport=provider(selection("interval.pace_direction")),
+    )
+    phrase = {
+        ("fr", "slower"): "Les 2 dernières répétitions comparables sont 15 s/km plus lentes que les 2 premières (répétition centrale exclue).",
+        ("fr", "faster"): "Les 2 dernières répétitions comparables sont 15 s/km plus rapides que les 2 premières (répétition centrale exclue).",
+        ("en", "slower"): "The final 2 comparable repetitions are 15 s/km slower than the opening 2 (middle repetition excluded).",
+        ("en", "faster"): "The final 2 comparable repetitions are 15 s/km faster than the opening 2 (middle repetition excluded).",
+        ("es", "slower"): "Las 2 últimas repeticiones comparables son 15 s/km más lentas que las 2 primeras (se excluye la repetición central).",
+        ("es", "faster"): "Las 2 últimas repeticiones comparables son 15 s/km más rápidas que las 2 primeras (se excluye la repetición central).",
+    }
+    expected = phrase[(language, expected_direction)]
+    assert result.mode == "editorial_realization"
+    assert result.claims[0].id == "interval.pace_direction"
+    assert result.text == expected
+    assert "interval.regularity" in {fact.id for fact in facts(v3, evidence)}
+    assert "interval.regularity" not in {claim.id for claim in hybrid.select_deterministic_synthesis(
+        facts(v3, evidence),
+    )}
+    assert len(result.claims) <= 3
+
+
+@pytest.mark.parametrize("language,direction,expected", [
+    ("fr", "faster", "La dernière répétition comparable est 30 s/km plus rapide que la première."),
+    ("en", "slower", "The final comparable repetition is 30 s/km slower than the first."),
+    ("es", "faster", "La última repetición comparable es 30 s/km más rápida que la primera."),
+])
+def test_three_efforts_use_only_v2_authorized_first_last_scope(language, direction, expected):
+    paces = [315, 300, 285] if direction == "faster" else [285, 300, 315]
+    v3, evidence = calculated_case(paces, language=language)
+    item, = evidence.analysis.coach_language.conclusions
+    assert item.metadata["trend_scope"] == "first_last_of_three_efforts"
+    assert item.metadata["direction"] == direction
+    assert item.evidence["trend_limit_sec_per_km"] > 0
+    fact = pace_direction(v3, evidence, language=language)
+    assert dict(fact.values)["scope"] == "first_last_of_three_efforts"
+    assert fact.assertion == expected
+
+
+def test_even_group_direction_does_not_claim_a_middle_effort_was_excluded():
+    v3, evidence = calculated_case([295, 300, 310, 315])
+    fact = pace_direction(v3, evidence)
+    assert dict(fact.values)["group_size"] == 2
+    assert fact.assertion == (
+        "Les 2 dernières répétitions comparables sont 15 s/km plus lentes que les 2 premières."
+    )
+
+
+@pytest.mark.parametrize("paces", [
+    [300, 320],
+    [300, 300, 340, 300],
+    [300, 330, 300, 330, 300],
+])
+def test_two_efforts_outlier_and_oscillation_never_become_direction(paces):
+    v3, evidence = calculated_case(paces)
+    assert pace_direction(v3, evidence) is None
+
+
+@pytest.mark.parametrize("metadata,numeric", [
+    ({"direction": "stable"}, None),
+    ({"direction": "variable"}, None),
+    ({"direction": "faster"}, {"group_pace_change_sec_per_km": 15}),
+    ({"group_direction": "faster"}, None),
+    ({"trend_scope": "first_last_of_three_efforts"}, None),
+    ({"judgment_version": "v2"}, None),
+    (None, {"group_size": 1}),
+    (None, {"group_pace_change_sec_per_km": 0}),
+    (None, {"trend_limit_sec_per_km": 100}),
+    (None, {"pace_uncertainty_sec_per_km": 100}),
+    (None, {"atypical_candidate_count": 1}),
+])
+def test_direction_admission_rejects_contradictory_or_incomplete_proof(metadata, numeric):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315])
+    assert pace_direction(v3, change_conclusion(
+        evidence, metadata=metadata, numeric=numeric,
+    )) is None
+
+
+def test_three_effort_direction_requires_v2_persisted_significance_proof():
+    v3, evidence = calculated_case([315, 300, 285])
+    assert pace_direction(v3, evidence) is not None
+    assert pace_direction(v3, change_conclusion(
+        evidence, numeric={"trend_limit_sec_per_km": 100},
+    )) is None
+
+
+@pytest.mark.parametrize("mode", [
+    "no_v2", "wrong_user", "wrong_workout", "wrong_v3_workout", "unknown_source",
+    "unknown_v2_version", "unknown_phase_source", "disordered_phases", "partial_comparison",
+])
+def test_direction_requires_scoped_garmin_v2_provenance_and_coherent_phases(mode):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315])
+    if mode == "no_v2":
+        evidence = None
+    elif mode == "wrong_user":
+        evidence = replace(evidence, user_id="user-b")
+    elif mode == "wrong_workout":
+        evidence.analysis.workout.id = "other-session"
+    elif mode == "wrong_v3_workout":
+        v3 = v3.model_copy(update={"workout_id": "other-session"})
+    elif mode == "unknown_source":
+        evidence = replace(evidence, source="workout_intelligence_v3")
+    elif mode == "unknown_v2_version":
+        evidence.analysis.version = "v1"
+    elif mode == "unknown_phase_source":
+        evidence.analysis.phase_analysis.efforts[0].source = "synthetic"
+    elif mode == "disordered_phases":
+        phases = evidence.analysis.phase_analysis.phases
+        phases[0], phases[2] = phases[2], phases[0]
+    else:
+        v3, evidence = calculated_case(
+            [295, 300, 306, 310, 315], phases=phases_for(
+                [295, 300, 306, 310, 315], durations=[60, 120, 180, 240, 300],
+            ),
+        )
+    assert pace_direction(v3, evidence) is None
+
+
+def test_missing_phases_and_default_flag_do_not_emit_direction():
+    v3, evidence = calculated_case(phases=[])
+    assert pace_direction(v3, evidence) is None
+    assert run(v3, evidence).mode == "disabled"
+    v3, evidence = calculated_case([295, 300, 306, 310, 315])
+    assert pace_direction(v3, evidence) is not None
+    assert run(v3, evidence).mode == "disabled"
+
+
+def test_directional_fact_cannot_be_hidden_or_duplicated_by_editorial_selection(monkeypatch):
+    v3, evidence = calculated_case([295, 300, 306, 310, 315])
+    admitted = facts(v3, evidence)
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    result = run(v3, evidence, transport=provider(selection()))
+    assert result.mode == "deterministic_fallback"
+    assert result.reason == "invalid_editorial_selection"
+    assert result.claims[0].id == "interval.pace_direction"
+    for supports in (("interval.regularity",), ("effort.first",), ("effort.coverage",)):
+        with pytest.raises(ValueError):
+            validate_editorial_selection(
+                selection("interval.pace_direction", supporting=supports), admitted, "fr",
+            )
+    injected = run(
+        v3, evidence,
+        transport=provider(selection(
+            "interval.pace_direction", direction="faster",
+            text="Les répétitions prouvent une meilleure forme.",
+        )),
+    )
+    assert injected.mode == "deterministic_fallback"
+    assert injected.reason == "invalid_editorial_selection"
+    assert injected.text.startswith(
+        "Les 2 dernières répétitions comparables sont 15 s/km plus lentes",
+    )
+
+
+@pytest.mark.parametrize("language,direction", [
+    ("fr", "slower"), ("en", "faster"), ("es", "slower"),
+])
+def test_deterministic_directional_fallback_uses_v2_realization(language, direction, monkeypatch):
+    paces = [295, 300, 306, 310, 315] if direction == "slower" else [310, 305, 300, 295, 290]
+    v3, evidence = calculated_case(paces)
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    original = UserAccess.can
+    monkeypatch.setattr(
+        UserAccess, "can", lambda self, feature: feature != "llm_access" and original(self, feature),
+    )
+    result = run(v3, evidence, language=language)
+    assert result.mode == "deterministic_fallback"
+    assert not result.provider_attempted
+    assert result.claims[0].id == "interval.pace_direction"
+    expected_words = {"fr": "plus lentes", "en": "faster", "es": "más lentas"}
+    assert expected_words[language] in result.text
 
 
 @pytest.mark.parametrize("metadata", [
