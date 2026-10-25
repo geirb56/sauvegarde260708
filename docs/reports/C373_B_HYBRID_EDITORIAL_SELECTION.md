@@ -201,7 +201,7 @@ production.** Aucun merge, déploiement ou activation n’est demandé.
 
 - Branche cible : `copilot/dev` ; base de la PR : `7c3bb1d1c1eb943bb65bed350608ad33a59fb76f`.
 - HEAD audité avant correction : `8a661be36950c9db2861be6bab534f8ce75e561b`.
-- HEAD du code et des tests corrigés : `399528c6113fb85d9a8ffb41478a9c398f77e5f4`.
+- HEAD de la correction source testée : `399528c6113fb85d9a8ffb41478a9c398f77e5f4`.
 - Le catalogue de faits admissibles et les seuils n’ont pas changé.
 
 L’audit a confirmé deux défauts dans `primary_fact_candidates()` : `above_LT2`
