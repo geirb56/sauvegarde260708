@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 import json
+import random
 import re
 import socket
 from unittest.mock import Mock
@@ -210,8 +211,8 @@ def test_group_average_and_recorded_endpoints_remain_distinct(language):
     selected = closed.select_deterministic_option(closed.build_editorial_options(facts, language))
     assert selected.primary == "interval.pace_direction"
     assert selected.supporting == ("effort.first", "effort.last")
-    assert {"fr": "20 s/km en moyenne", "en": "20 s/km faster on average",
-            "es": "20 s/km de media"}[language] in selected.claims[0].text
+    assert {"fr": "en moyenne 20 s/km", "en": "averaged 20 s/km faster",
+            "es": "de media 20 s/km"}[language] in selected.claims[0].text
     assert {"fr": "5'30/km", "en": "5:30/km", "es": "5:30/km"}[language] in selected.text
     assert {"fr": "5'00/km", "en": "5:00/km", "es": "5:00/km"}[language] in selected.text
     assert "30 s/km" not in selected.claims[0].text
@@ -270,3 +271,99 @@ def test_regularity_options_can_illustrate_one_recorded_effort_without_a_checkli
         closed._validate_composition(
             "interval.regularity", ("effort.first", "effort.last"), facts, "fr",
         )
+
+
+@pytest.mark.parametrize("name", SCENARIOS)
+@pytest.mark.parametrize("language", ("fr", "en", "es"))
+def test_selection_content_survives_presentation_and_id_changes(name, language):
+    v3, evidence, permissions, _ = scenario(name)
+    facts = hybrid.build_admissible_facts(
+        v3, access=ACCESS if evidence else _access(), permissions=permissions,
+        language=language, v2_evidence=evidence,
+    )
+    options = closed.build_editorial_options(facts, language)
+    expected = closed.select_deterministic_option(options)
+    shuffled = list(options)
+    random.Random(379).shuffle(shuffled)
+    presentations = (options, tuple(reversed(options)), tuple(shuffled))
+    for presentation in presentations:
+        for opaque in (False, True):
+            renumbered = tuple(replace(
+                option, option_id=(f"choice-{i}" if opaque else f"option_{99 - i}"),
+            ) for i, option in enumerate(presentation))
+            for option in renumbered:
+                closed.validate_option(option, facts, language)
+            selected = closed.select_deterministic_option(renumbered)
+            assert replace(selected, option_id=expected.option_id) == expected
+            response = json.dumps({"option_id": selected.option_id})
+            assert closed.validate_choice(response, renumbered) == selected
+            with pytest.raises(closed.SelectionFailure, match="unknown_option_id"):
+                closed.validate_choice('{"option_id":"not-present"}', renumbered)
+
+
+def test_contextual_priority_is_rebuilt_not_trusted_metadata():
+    facts = admitted(synthetic_case("easy"))
+    options = closed.build_editorial_options(facts)
+    assert len({option.primary for option in options}) > 1
+    for option in options:
+        assert option.primary_priority == closed._candidates(facts).index(option.primary)
+        with pytest.raises(closed.SelectionFailure, match="scientific_violation"):
+            closed.validate_option(
+                replace(option, primary_priority=option.primary_priority - 1), facts, "fr",
+            )
+
+
+@pytest.mark.parametrize("language", ("fr", "en", "es"))
+@pytest.mark.parametrize("paces", ((330, 320, 310, 300), (300, 310, 320, 330)))
+def test_endpoints_form_one_sentence_without_changing_group_scope(language, paces):
+    v3, evidence = calculated_case(paces, language=language)
+    facts = admitted(v3, evidence, language=language)
+    selected = closed.select_deterministic_option(closed.build_editorial_options(facts, language))
+    assert len(selected.claims) == 3
+    assert selected.text.count(".") == 2
+    assert selected.claims[1].text.endswith(("5'30/km", "5'00/km", "5:30/km", "5:00/km"))
+    assert selected.claims[2].text.startswith({"fr": "et le dernier", "en": "and the last",
+                                              "es": "y el último"}[language])
+    assert {"fr": "efforts enregistrés", "en": "recorded efforts",
+            "es": "esfuerzos registrados"}[language] in selected.claims[1].text
+    assert {"fr": "en moyenne", "en": "averaged", "es": "de media"}[language] in selected.claims[0].text
+    assert selected.advice is None
+
+
+@pytest.mark.parametrize("language", ("fr", "en", "es"))
+def test_endpoint_pair_preserves_unequal_durations_and_fractional_values(language):
+    v3, evidence = calculated_case((330, 320, 310, 300), language=language)
+    facts = admitted(v3, evidence, language=language)
+    modified = []
+    for fact in facts:
+        values = dict(fact.values)
+        if fact.id == "effort.first":
+            values.update(recorded_pace=330.25, recorded_duration=240.5)
+        elif fact.id == "effort.last":
+            values.update(recorded_pace=300.75, recorded_duration=241.25)
+        modified.append(replace(fact, values=tuple(values.items())))
+    # Display-only fixture variations over already admitted fields, not V2 judgments.
+    facts = tuple(modified)
+    selected = closed.select_deterministic_option(closed.build_editorial_options(facts, language))
+    for value, pace in ((330.25, True), (300.75, True), (240.5, False), (241.25, False)):
+        assert closed.format_recorded_seconds(value, language, pace=pace) in selected.text
+    assert selected.text.count(".") == (6 if language == "en" else 2)
+    closed.validate_option(selected, facts, language)
+
+
+@pytest.mark.parametrize("language", ("fr", "en", "es"))
+def test_direction_with_duration_only_endpoints_never_loses_values(language):
+    v3, evidence = calculated_case((330, 320, 310, 300), language=language)
+    v3.effort_pace_observations = v3.effort_pace_observations.model_copy(
+        update={"status": "unavailable"},
+    )
+    facts = admitted(v3, evidence, language=language)
+    index = {f.id: f for f in facts}
+    assert "interval.pace_direction" in index
+    assert all("recorded_pace" not in dict(index[f].values)
+               for f in ("effort.first", "effort.last"))
+    selected = closed.select_deterministic_option(closed.build_editorial_options(facts, language))
+    assert selected.supporting == ("effort.first", "effort.last")
+    assert "None" not in selected.text
+    assert selected.text.count("4 min") == 2
+    closed.validate_option(selected, facts, language)

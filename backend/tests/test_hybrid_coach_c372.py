@@ -477,7 +477,7 @@ def test_directional_fact_cannot_be_hidden_or_duplicated_by_editorial_selection(
     assert injected.mode == "deterministic_fallback"
     assert injected.reason == "invalid_editorial_selection"
     assert injected.text.startswith(
-        "Les 2 dernières répétitions comparables sont 15 s/km en moyenne plus lentes",
+        "Tes 2 dernières répétitions comparables sont en moyenne 15 s/km plus lentes",
     )
 
 
@@ -515,19 +515,19 @@ def test_repetition_direction_precedes_session_average_above_lt2(language, monke
     ]
     expected = {
         "fr": (
-            "Les 2 dernières répétitions comparables sont 15 s/km en moyenne plus lentes que les 2 premières "
+            "Tes 2 dernières répétitions comparables sont en moyenne 15 s/km plus lentes que les 2 premières "
             "(répétition centrale exclue).",
             "Ta FC moyenne est de 180 bpm, au-dessus de ton second seuil de 170 bpm. "
             "Cette moyenne ne décrit ni chaque phase ni le temps en zones.",
         ),
         "en": (
-            "The final 2 comparable repetitions are 15 s/km slower on average than the opening 2 "
+            "Your last 2 comparable repetitions averaged 15 s/km slower than the first 2 "
             "(middle repetition excluded).",
             "Your average HR is 180 bpm, above your second threshold of 170 bpm. "
             "This average describes neither each phase nor time in zones.",
         ),
         "es": (
-            "Las 2 últimas repeticiones comparables son 15 s/km de media más lentas que las 2 primeras "
+            "Tus 2 últimas repeticiones comparables fueron de media 15 s/km más lentas que las 2 primeras "
             "(se excluye la repetición central).",
             "Tu FC media es de 180 lpm, por encima de tu segundo umbral de 170 lpm. "
             "Esta media no describe cada fase ni el tiempo en zonas.",

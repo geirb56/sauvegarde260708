@@ -59,6 +59,8 @@ class EditorialOption:
     # Structured advice is preserved; the complete realization includes it once.
     advice: legacy.HybridClaim | None = None
     advice_reason: str | None = None
+    # Internal contextual priority, rebuilt from C365/C374 candidates, never an ID.
+    primary_priority: int = 0
 
     @property
     def text(self) -> str:
@@ -172,7 +174,7 @@ def _validate_composition(primary, supporting, facts, language):
         raise SelectionFailure("option_not_admissible")
 
 
-def _realize(fact, form, language, *, pace_only=False):
+def _realize(fact, form, language, *, pace_only=False, paired=False):
     """C378: show a caveat only where the clause alone could mislead.
 
     Strictly descriptive clauses (counts, recorded endpoints, scoped pace
@@ -213,10 +215,21 @@ def _realize(fact, form, language, *, pace_only=False):
     elif fact.id == "interval.pace_direction":
         # V2 group deltas are averages, not differences between individual endpoints.
         if values["scope"] == "equal_count_endpoint_groups_middle_excluded":
-            text = text.replace(" s/km plus ", " s/km en moyenne plus ")
-            text = text.replace(" s/km faster", " s/km faster on average")
-            text = text.replace(" s/km slower", " s/km slower on average")
-            text = text.replace(" s/km más ", " s/km de media más ")
+            count = num("group_size")
+            change = format_evidence_number(abs(values["pace_change_sec_per_km"]), language)
+            faster = values["direction"] == "faster"
+            text = tr(
+                f"Tes {count} dernières répétitions comparables sont en moyenne {change} s/km "
+                f"plus {'rapides' if faster else 'lentes'} que les {count} premières",
+                f"Your last {count} comparable repetitions averaged {change} s/km "
+                f"{'faster' if faster else 'slower'} than the first {count}",
+                f"Tus {count} últimas repeticiones comparables fueron de media {change} s/km "
+                f"más {'rápidas' if faster else 'lentas'} que las {count} primeras",
+            )
+            if values["efforts"] % 2:
+                text += tr(" (répétition centrale exclue)", " (middle repetition excluded)",
+                           " (se excluye la repetición central)")
+            text += "."
     elif fact.id in {"effort.first", "effort.last"}:
         label = tr("premier", "first", "primer") if fact.id == "effort.first" else tr(
             "dernier", "last", "último",
@@ -231,14 +244,27 @@ def _realize(fact, form, language, *, pace_only=False):
             if duration else tr(f"est à {pace}", f"was at {pace}", f"fue a {pace}")
         if duration and pace:
             detail += tr(f", à {pace}", f" at {pace}", f", a {pace}")
-        text = tr(
-            f"Dans l'ordre enregistré, ton {label} effort {detail}.",
-            f"In the recorded order, your {label} effort {detail}.",
-            f"En el orden registrado, tu {label} esfuerzo {detail}.",
-        )
-        if pace_only and fact.id == "effort.last":
-            text = tr(f"Ton dernier effort {detail}.", f"Your last effort {detail}.",
-                      f"Tu último esfuerzo {detail}.")
+        if paired:
+            if pace_only and pace:
+                detail = tr(f"était à {pace}", f"was at {pace}", f"fue a {pace}")
+            if fact.id == "effort.first":
+                text = tr(
+                    f"Parmi les efforts enregistrés, le premier {detail}",
+                    f"Among the recorded efforts, the first {detail}",
+                    f"Entre los esfuerzos registrados, el primero {detail}",
+                )
+            else:
+                text = tr(f"et le dernier à {pace}.", f"and the last at {pace}.",
+                          f"y el último a {pace}.") if pace_only and pace else tr(
+                    f"et le dernier {detail}.", f"and the last {detail}.",
+                    f"y el último {detail}.",
+                )
+        else:
+            text = tr(
+                f"Ton {label} effort enregistré {detail}.",
+                f"Your {label} recorded effort {detail}.",
+                f"Tu {label} esfuerzo registrado {detail}.",
+            )
     elif fact.id == "intensity.hr":
         text = tr(
             f"Ta fréquence cardiaque moyenne est de {num('average_hr')} bpm, sans repère personnel validé pour interpréter cette valeur.",
@@ -336,11 +362,17 @@ def _make_option(option_id, primary, supporting, facts, language):
     _validate_composition(primary, supporting, facts, language)
     index = {fact.id: fact for fact in facts}
     forms = ("direct",) * (1 + len(supporting))
+    paired = primary in {"interval.pace_direction", "effort.first"} and (
+        {"effort.first", "effort.last"} <= {primary, *supporting}
+    )
     claims = tuple(_realize(
         index[fact_id], form, language,
+        paired=paired and fact_id in {"effort.first", "effort.last"},
         pace_only=(primary == "interval.pace_direction"
                    and fact_id in {"effort.first", "effort.last"}
                    and {"effort.first", "effort.last"} <= set(supporting)
+                   and "recorded_pace" in dict(index["effort.first"].values)
+                   and "recorded_pace" in dict(index["effort.last"].values)
                    and dict(index["effort.first"].values).get("recorded_duration") ==
                    dict(index["effort.last"].values).get("recorded_duration")),
     )
@@ -351,7 +383,7 @@ def _make_option(option_id, primary, supporting, facts, language):
         raise SelectionFailure("size_limit")
     return EditorialOption(
         option_id, primary, supporting, editorial_intent(index[primary]), forms, claims,
-        advice, advice_reason,
+        advice, advice_reason, _candidates(facts).index(primary),
     )
 
 
@@ -427,7 +459,7 @@ def build_editorial_options(
             bare.append(base)
     options = tuple(
         EditorialOption(f"option_{i}", o.primary, o.supporting, o.editorial_intent,
-                        o.forms, o.claims, o.advice, o.advice_reason)
+                        o.forms, o.claims, o.advice, o.advice_reason, o.primary_priority)
         for i, o in enumerate((enriched + endpoints + bare)[:MAX_OPTIONS], 1)
     )
     for option in options:
@@ -436,34 +468,35 @@ def build_editorial_options(
 
 
 def select_deterministic_option(options: tuple[EditorialOption, ...]) -> EditorialOption:
-    """Use the existing primary order; prefer complementary details, never raw length.
-
-    Option IDs encode the contextual primary ordering supplied by the builder.
-    Within that primary, endpoint groups gain concrete recorded endpoints;
-    other primaries keep the shortest useful composition rather than a metric
-    checklist. IDs break ties independently of presentation order.
-    """
+    """Use validated contextual priority and useful supports, never IDs or display order."""
     if not options:
         raise SelectionFailure("option_not_admissible")
-    first = min(options, key=lambda o: int(o.option_id.removeprefix("option_")))
+
+    def content_key(option):
+        return (len(option.text), option.primary, option.supporting, option.forms, option.text)
+
+    first = min(options, key=lambda o: (o.primary_priority, o.primary))
     same_primary = [o for o in options if o.primary == first.primary]
-    if "intensity.position" in first.supporting:
-        return first
+    threshold = [o for o in same_primary if "intensity.position" in o.supporting]
+    if threshold:
+        return min(threshold, key=content_key)
     if first.primary == "interval.pace_direction":
         endpoints = [o for o in same_primary if "effort.first" in o.supporting
                      and "effort.last" in o.supporting]
         if endpoints:
-            return min(endpoints, key=lambda o: (len(o.text), o.option_id))
+            return min(endpoints, key=content_key)
         # A global variation band complements a first/last comparison.
-        return first
+        regularity = [o for o in same_primary if "interval.regularity" in o.supporting]
+        return min(regularity or same_primary, key=content_key)
     if first.primary == "session.long":
-        return first
+        halves = [o for o in same_primary if "continuous.pace_halves" in o.supporting]
+        return min(halves or same_primary, key=content_key)
     # Keep history or a measured threshold as useful complementary information.
     useful = [o for o in same_primary if any(
         f.startswith(("trend.", "comparison.")) or f == "intensity.position"
         for f in o.supporting
     )]
-    return min(useful or same_primary, key=lambda o: (len(o.text), o.option_id))
+    return min(useful or same_primary, key=content_key)
 
 
 def _unique_object(pairs):
