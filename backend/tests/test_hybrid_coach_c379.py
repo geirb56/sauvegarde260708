@@ -173,7 +173,7 @@ def test_tampered_closed_text_is_never_accepted():
         closed.validate_option(replace(chosen, claims=(changed, *chosen.claims[1:])), facts, "fr")
 
 
-def test_provider_failure_keeps_same_deterministic_output_and_single_attempt(monkeypatch):
+def test_provider_failure_keeps_same_deterministic_output_without_attempt(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     calls = []
 
@@ -186,8 +186,8 @@ def test_provider_failure_keeps_same_deterministic_output_and_single_attempt(mon
         v3, access=ACCESS, v2_evidence=evidence, transport=unavailable,
     ))
     facts = admitted(v3, evidence)
-    assert len(calls) == 1
-    assert result.mode == "deterministic_fallback"
+    assert calls == []
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.text == closed.select_deterministic_option(
         closed.build_editorial_options(facts),
     ).text
@@ -198,9 +198,15 @@ def test_deterministic_choice_is_not_longest_text():
     facts = admitted(v3)
     options = closed.build_editorial_options(facts)
     selected = closed.select_deterministic_option(options)
-    assert selected.primary == hybrid.primary_fact_candidates(facts)[0]
+    assert selected.primary == "session.kind"
     assert selected in options
-    assert len(selected.text) < max(len(o.text) for o in options)
+    changed = tuple(replace(o, claims=tuple([
+        c.model_copy(update={"text": c.text + " " * (1000 if o == selected else 0)})
+        for c in o.claims
+    ])) for o in options)
+    # Ranking has no dependence on prose length; admission separately rejects tampering.
+    assert closed.select_deterministic_option(changed).primary == selected.primary
+    assert closed.select_deterministic_option(changed).supporting == selected.supporting
     assert json.dumps(selected.provider_option({f.id: f for f in facts}))
 
 
@@ -254,7 +260,7 @@ def test_hidden_zero_comparison_cannot_invalidate_the_deterministic_fallback(mon
     result = asyncio.run(hybrid.generate_hybrid_coach(
         v3, access=ACCESS, permissions=permissions, v2_evidence=evidence, transport=unavailable,
     ))
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.claims[0].id == "continuous.pace_halves"
 
 
@@ -265,7 +271,7 @@ def test_regularity_options_can_illustrate_one_recorded_effort_without_a_checkli
     illustrated = next(o for o in options if o.supporting == ("effort.first",))
     assert illustrated.primary == "interval.regularity"
     assert "4 min" in illustrated.text and "5'00/km" in illustrated.text
-    assert closed.select_deterministic_option(options).supporting == ()
+    assert closed.select_deterministic_option(options).supporting == ("effort.first",)
     closed.validate_option(illustrated, facts, "fr")
     with pytest.raises(closed.SelectionFailure, match="option_not_admissible"):
         closed._validate_composition(

@@ -106,9 +106,14 @@ def test_four_efforts_bounded_packet_and_realization(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(v3, transport=_provider(lambda *_: selection(supporting=("effort.last", "effort.coverage"))))
     assert result.mode == "editorial_realization"
-    assert len(result.claims) == 3
+    assert len(result.claims) == 1 and not result.provider_attempted
     assert "a duré 4 min, à 4'48/km" in result.text
-    assert "Dans l'ordre enregistré par Garmin" in result.text
+    chosen = validate_editorial_selection(
+        selection(supporting=("effort.last", "effort.coverage")), tuple(facts.values()), "fr",
+    )
+    realized = hybrid.realize_editorial_selection(chosen, tuple(facts.values()), "fr")
+    assert len(realized) == 3
+    assert "Dans l'ordre enregistré par Garmin" in hybrid._render(realized)
 
 
 def test_one_effort_not_duplicated():
@@ -486,7 +491,7 @@ def test_unrepresentable_measure_excluded_before_assertion_with_independent_fall
         raise RuntimeError("private technical details")
 
     result = _run(v3, transport=failed)
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.text and len(result.text) <= hybrid.MAX_COACH_TEXT_CHARS
     assert "private" not in result.text and "None" not in result.text
     assert result.claims[0].id == "effort.first"
@@ -505,7 +510,7 @@ def test_all_measures_excluded_or_no_efforts_keeps_honest_fallback(monkeypatch, 
         }
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(v3, transport=_provider(lambda *_: "not a selection"))
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.claims and result.text
     assert len(result.claims) <= 3
     assert "1e+308" not in result.text and "None" not in result.text
@@ -632,7 +637,7 @@ def test_above_lt2_not_displaced_when_history_and_prescription_fill_support_slot
         v3, language=language, permissions=permissions,
         transport=_provider(lambda *_: "invalid selection"),
     )
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.claims == claims
     assert "invalid selection" not in result.text
 
@@ -647,7 +652,7 @@ def test_oversized_context_uses_fallback_without_calling_provider(monkeypatch):
 
     monkeypatch.setattr(hybrid, "MAX_CONTEXT_CHARS", size - 1)
     result = _run(v3, transport=forbidden)
-    assert result.mode == "deterministic_fallback" and result.reason == "context_size_limit"
+    assert result.mode == "editorial_realization" and result.reason == "deterministic_selection_validated"
     assert result.text and not result.provider_attempted
     monkeypatch.setattr(hybrid, "MAX_CONTEXT_CHARS", size)
     assert _run(v3, transport=_provider(lambda *_: selection())).mode == "editorial_realization"
@@ -672,8 +677,10 @@ def test_coach_text_budget_rejects_whole_editorial_output_and_preserves_fallback
 def test_existing_provider_response_length_guard_still_rejects_without_echo(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(recorded_case(), transport=_provider(lambda *_: "x" * (hybrid.MAX_RESPONSE_CHARS + 1)))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "transport_response_limit"
+    assert result.mode == "editorial_realization"
+    assert not result.provider_attempted
+    with pytest.raises(ValueError):
+        validate_editorial_selection("x" * (hybrid.MAX_RESPONSE_CHARS + 1), _facts(recorded_case()), "fr")
     assert result.text and "xxxx" not in result.text
 
 
@@ -707,9 +714,10 @@ def test_no_duplicate_total_and_two_support_limit():
 ])
 def test_unknown_ids_injected_values_and_inferences_fall_back(monkeypatch, payload):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    with pytest.raises(ValueError):
+        validate_editorial_selection(payload, _facts(recorded_case()), "fr")
     result = _run(recorded_case(), transport=_provider(lambda *_: payload))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.claims[0].id == "effort.first" and len(result.claims) <= 3
     assert "999" not in result.text and "fatigue" not in result.text
 
@@ -737,7 +745,7 @@ def test_historical_and_prescription_admissions_preserved_in_fallback(monkeypatc
         raise RuntimeError("private provider failure")
 
     result = _run(v3, transport=failed, permissions=permissions)
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert [c.id for c in result.claims] == [c.id for c in claims]
     assert "private" not in result.text
 
@@ -757,7 +765,7 @@ def test_isolation_no_mutation_flag_default_and_injected_transport(monkeypatch):
     assert called == []
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(v3, transport=transport)
-    assert result.mode == "editorial_realization" and len(called) == 1
+    assert result.mode == "editorial_realization" and called == []
     assert v3.model_dump() == original
     assert _context(recorded_case()) == _context(v3)
     other = UserAccess(user_id="another-isolated-user", tier=_access().tier)

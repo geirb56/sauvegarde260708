@@ -79,9 +79,11 @@ def test_every_option_is_admissible_before_transport(name, language):
             transport=provider(json.dumps({"option_id": option.option_id})),
         )
         assert result.mode == "editorial_realization"
-        assert result.text == option.text
-        assert result.claims == list(option.claims)
-        assert result.provider_duration_sec == 0.125
+        chosen = closed.select_deterministic_option(choices)
+        assert result.text == chosen.text
+        assert result.claims == list(chosen.claims)
+        assert not result.provider_attempted and result.transport_kind == "none"
+        assert result.provider_duration_sec is None
         assert result.cost is None
     assert v3.model_dump() == before
 
@@ -288,7 +290,12 @@ def test_prescription_only_from_authority(status, authorized, language):
     ("x" * 257, "size_limit"),
 ])
 def test_rejections_never_expose_unvalidated_text(response, reason):
-    failed(run(transport=provider(response)), reason)
+    _, choices = options()
+    with pytest.raises(closed.SelectionFailure, match=reason):
+        closed.validate_choice(response, choices)
+    result = run(transport=provider(response))
+    assert result.mode == "editorial_realization" and not result.provider_attempted
+    assert result.text == closed.select_deterministic_option(choices).text
 
 
 def test_timeout_unavailable_and_missing_transport(monkeypatch):
@@ -305,12 +312,11 @@ def test_timeout_unavailable_and_missing_transport(monkeypatch):
         await asyncio.Future()
 
     monkeypatch.setattr(closed, "TIMEOUT_SECONDS", 0.001)
-    failed(run(transport=timeout), "timeout")
-    failed(run(transport=pending), "timeout")
-    failed(run(transport=error), "provider_unavailable")
-    failed(run(transport=unavailable), "provider_unavailable")
+    for transport in (timeout, pending, error, unavailable):
+        result = run(transport=transport)
+        assert result.mode == "editorial_realization" and not result.provider_attempted
     result = run()
-    failed(result, "provider_unavailable")
+    assert result.mode == "editorial_realization"
     assert result.provider_attempted is False
 
 
@@ -318,11 +324,11 @@ def test_truncation_and_context_limits(monkeypatch):
     async def truncated(*args):
         return '{"option_id":"option_1"}', True, {"response_truncated": True}
 
-    failed(run(transport=truncated), "size_limit")
+    assert run(transport=truncated).mode == "editorial_realization"
     monkeypatch.setattr(closed, "MAX_CONTEXT_CHARS", 1)
     transport = Mock(side_effect=AssertionError("must not call"))
     result = run(transport=transport)
-    failed(result, "size_limit")
+    assert result.mode == "editorial_realization"
     transport.assert_not_called()
 
 
@@ -344,18 +350,18 @@ def test_feature_flag_default_off_and_permissions(monkeypatch):
     transport.assert_not_called()
 
 
-def test_prompt_has_only_closed_options_no_identity_or_prose():
+def test_compatibility_option_payload_has_no_identity_or_prose_and_is_not_sent():
     captured = []
     result = run(transport=provider(captured=captured))
     assert result.mode == "editorial_realization"
-    system, packet, user, context_type = captured[0]
-    assert user == "anonymous" and context_type == "c374_closed_choice"
-    assert "Never write user-facing text" in system
+    assert captured == [] and not result.provider_attempted
+    facts, choices = options()
+    packet = {"options": [o.provider_option({f.id: f for f in facts}) for o in choices]}
     dumped = json.dumps(packet)
     assert "synthetic-owner" not in dumped and "synthetic-session" not in dumped
     assert "source_paths" not in dumped and "assertion" not in dumped
     assert "text" not in dumped
-    assert packet["selection_schema"]["oneOf"][0]["additionalProperties"] is False
+    assert closed.OptionChoice.model_json_schema()["additionalProperties"] is False
     for option in packet["options"]:
         assert option["clauses"]
         assert all(c["allowed_forms"] == ["direct"] for c in option["clauses"])
@@ -382,15 +388,17 @@ def test_all_options_checked_before_call_including_unselected(monkeypatch, corru
     transport.assert_not_called()
 
 
-def test_selected_option_rechecked_after_transport(monkeypatch):
+def test_selected_option_rechecked_after_selection(monkeypatch):
     _, choices = options()
     monkeypatch.setattr(closed, "build_editorial_options", lambda *args: choices)
 
-    async def corrupt(*args):
-        choices[0].claims[0].__dict__["text"] = "Unvalidated text"
-        return json.dumps({"option_id": choices[0].option_id}), True, {}
+    def corrupt(options):
+        selected = options[0]
+        selected.claims[0].__dict__["text"] = "Unvalidated text"
+        return selected
 
-    failed(run(transport=corrupt), "scientific_violation")
+    monkeypatch.setattr(closed, "select_deterministic_option", corrupt)
+    failed(run(), "scientific_violation")
 
 
 def test_realization_and_option_count_budgets(monkeypatch):
@@ -410,6 +418,7 @@ def test_empty_duplicate_and_excess_option_sets_fail_before_provider(monkeypatch
 def test_legacy_fallback_is_unchanged():
     facts, _ = options()
     before = legacy.select_deterministic_synthesis(facts)
-    failed(run(transport=provider("{")), "invalid_json")
+    result = run(transport=provider("{"))
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert legacy.select_deterministic_synthesis(facts) == before
-    assert len(before) == 1
+    assert [c.id for c in before] == ["session.kind", "intensity.position"]

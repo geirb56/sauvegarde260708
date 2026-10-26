@@ -51,9 +51,11 @@ def _enabled(monkeypatch):
     {**_selection(), "primary": {"fact_id": "intensity.position", "form": "direct", "unit": "km"}},
 ])
 def test_invalid_structures_never_reach_display(selection):
+    with pytest.raises((ValueError, TypeError)):
+        hybrid.validate_editorial_selection(json.dumps(selection), _facts(), "fr")
     result = _run(transport=_provider(lambda *_: json.dumps(selection)))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization"
+    assert not result.provider_attempted
     assert result.editorial_selection is None
     assert result.claims == hybrid.select_deterministic_synthesis(_facts())
 
@@ -71,17 +73,19 @@ def test_invalid_structures_never_reach_display(selection):
     '"supporting":[],"editorial_intent":NaN}',
 ])
 def test_malformed_and_ambiguous_json_is_rejected(response):
+    with pytest.raises((ValueError, TypeError)):
+        hybrid.validate_editorial_selection(response, _facts(), "fr")
     result = _run(transport=_provider(lambda *_: response))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization"
+    assert not result.provider_attempted
 
 
 @pytest.mark.parametrize("name,expected", [
-    ("easy", "intensity.position"),
+    ("easy", "session.kind"),
     ("long", "session.long"),
     ("intervals_4x4", "interval.count"),
     ("sparse", "session.unknown"),
-    ("treadmill", "intensity.position"),
+    ("treadmill", "session.kind"),
     ("comparable_history", "trend.probable_improvement"),
     ("no_physiology", "intensity.hr"),
 ])
@@ -91,11 +95,11 @@ def test_mock_editorial_relevance_and_no_redundant_support(name, expected):
     permissions = hybrid.HybridPermissions(history=True)
     result = _run(v3, permissions=permissions, transport=_provider())
     assert result.mode == "editorial_realization"
-    assert result.editorial_selection.primary.fact_id == expected
+    assert result.editorial_selection is None and not result.provider_attempted
     assert result.claims[0].id == expected
     ids = [claim.id for claim in result.claims]
     assert len(ids) == len(set(ids))
-    if name in {"easy", "treadmill", "sparse", "no_physiology"}:
+    if name in {"sparse", "no_physiology"}:
         assert len(ids) == 1
     if name == "intervals_4x4":
         assert ids == ["interval.count", "intensity.position"]
@@ -106,7 +110,7 @@ def test_mock_editorial_relevance_and_no_redundant_support(name, expected):
 
 
 @pytest.mark.parametrize("name,expected", [
-    ("easy", "intensity.position"),
+    ("easy", "session.kind"),
     ("long", "session.long"),
     ("intervals_4x4", "interval.count"),
     ("sparse", "session.unknown"),
@@ -117,7 +121,7 @@ def test_contextual_primary_policy_for_session_types(name, expected):
         synthetic_case(name),
         permissions=hybrid.HybridPermissions(history=True),
     )
-    assert hybrid.primary_fact_candidates(facts)[0] == expected
+    assert expected in hybrid.primary_fact_candidates(facts)
     assert hybrid.select_deterministic_synthesis(facts)[0].id == expected
 
 
@@ -173,14 +177,16 @@ def test_distinctive_long_run_can_lead_a_supported_high_average_hr(language):
         for fact in (next(f for f in facts if f.id == "session.long"),
                      next(f for f in facts if f.id == "intensity.position"))
     ]
-    assert [claim.text for claim in result.claims] == expected_claims
+    assert result.claims == hybrid.select_deterministic_synthesis(facts, language)
+    chosen = hybrid.validate_editorial_selection(valid, facts, language)
+    assert [c.text for c in hybrid.realize_editorial_selection(chosen, facts, language)] == expected_claims
     assert all(claim.evidence_refs and claim.conclusion_ids for claim in result.claims)
     refused = json.dumps(_selection("session.kind"))
     fallback = _run(
         v3, permissions=permissions, language=language,
         transport=_provider(lambda *_: refused),
     )
-    assert fallback.mode == "deterministic_fallback"
+    assert fallback.mode == "editorial_realization" and not fallback.provider_attempted
     assert fallback.claims[0].id == "session.long"
 
 
@@ -192,8 +198,8 @@ def test_reliable_continuous_session_preserves_candidates_and_leads_fallback_wit
     permissions = hybrid.HybridPermissions(history=True)
     facts = _facts(v3, permissions=permissions, language=language)
     candidates = hybrid.primary_fact_candidates(facts)
-    history = [f.id for f in facts if f.id.startswith("trend.")]
-    history += [f.id for f in facts if f.id.startswith("comparison.")]
+    history = sorted(f.id for f in facts if f.id.startswith("trend."))
+    history += sorted(f.id for f in facts if f.id.startswith("comparison."))
     assert candidates == ("intensity.position", *history, "session.kind")
     fallback_ids = [c.id for c in hybrid.select_deterministic_synthesis(facts)]
     assert fallback_ids == [history[0]]
@@ -209,13 +215,17 @@ def test_reliable_continuous_session_preserves_candidates_and_leads_fallback_wit
     )
     assert selected.mode == "editorial_realization"
     assert selected.claims[0].id == history[0]
-    assert selected.claims[0].text == hybrid.realize_clause(primary, "explain", language)
+    assert selected.claims == hybrid.select_deterministic_synthesis(facts, language)
+    direct = hybrid.validate_editorial_selection(valid, facts, language)
+    assert hybrid.realize_editorial_selection(direct, facts, language)[0].text == hybrid.realize_clause(
+        primary, "explain", language,
+    )
     invalid = json.dumps(_selection("intensity.position", intent="compare_history"))
     result = _run(
         v3, permissions=permissions, language=language,
         transport=_provider(lambda *_: invalid),
     )
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert [c.id for c in result.claims] == fallback_ids
     assert all(fact.source_paths for fact in facts if fact.id in candidates)
 
@@ -235,7 +245,7 @@ def test_unknown_session_type_does_not_admit_a_direction_or_free_llm_choice(lang
             "interval.pace_direction",
         ))),
     )
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.claims[0].id == "session.unknown"
     assert result.claims[0].text == next(f.assertion for f in facts if f.id == "session.unknown")
     assert result.claims[0].evidence_refs
@@ -285,11 +295,13 @@ def test_unknown_session_with_corroborated_history_keeps_cautious_primary(langua
     assert selected.claims[0].evidence_refs == list(unknown.source_paths)
 
     refused = json.dumps(_selection(historical.id, intent="compare_history"))
+    with pytest.raises(ValueError, match="contextual_primary_priority"):
+        hybrid.validate_editorial_selection(refused, facts, language)
     rejected = _run(
         v3, permissions=permissions, language=language,
         transport=_provider(lambda *_: refused),
     )
-    assert rejected.mode == "deterministic_fallback"
+    assert rejected.mode == "editorial_realization" and not rejected.provider_attempted
     assert [claim.id for claim in rejected.claims] == ["session.unknown"]
     assert rejected.text == unknown.assertion
 
@@ -368,16 +380,16 @@ def test_composition_space_has_no_free_transition_or_hidden_prose():
 def test_distinct_comparison_roles_signs_units_and_counts(fact_id, expected):
     v3 = synthetic_case("comparable_history")
     selection = json.dumps(_selection(fact_id, intent="compare_history"))
-    result = _run(v3, permissions=hybrid.HybridPermissions(history=True),
-                  transport=_provider(lambda *_: selection))
-    assert result.mode == "editorial_realization"
-    assert expected in result.text
+    facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True))
+    chosen = hybrid.validate_editorial_selection(selection, facts, "fr")
+    text = hybrid._render(hybrid.realize_editorial_selection(chosen, facts, "fr"))
+    assert expected in text
     if fact_id == "comparison.pace":
-        assert "moyenne de 5" in result.text and "médiane" not in result.text
+        assert "moyenne de 5" in text and "médiane" not in text
     if fact_id == "comparison.hr":
-        assert "moyenne de 2" in result.text
+        assert "moyenne de 2" in text
     if fact_id.startswith("trend."):
-        assert "6 observations" in result.text and "92 jours" in result.text
+        assert "6 observations" in text and "92 jours" in text
 
 
 def test_threshold_precision_does_not_change_comparison_by_rounding():
@@ -395,25 +407,26 @@ def test_approximation_is_explicit_and_keeps_direction(delta, expected):
     v3 = synthetic_case("comparable_history")
     v3.historical_comparison.pace_at_comparable_hr.pace_difference_sec_per_km = delta
     response = json.dumps(_selection("comparison.pace", "rounded", intent="compare_history"))
-    result = _run(v3, permissions=hybrid.HybridPermissions(history=True),
-                  transport=_provider(lambda *_: response))
+    facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True))
     if expected is None:
-        assert result.mode == "deterministic_fallback"
+        with pytest.raises(ValueError):
+            hybrid.validate_editorial_selection(response, facts, "fr")
     else:
-        assert result.mode == "editorial_realization"
-        assert "environ " + expected + " s/km" in result.text
+        chosen = hybrid.validate_editorial_selection(response, facts, "fr")
+        text = hybrid._render(hybrid.realize_editorial_selection(chosen, facts, "fr"))
+        assert "environ " + expected + " s/km" in text
 
 
-def test_llm_can_choose_observation_order_and_omit_default_primary():
+def test_transport_cannot_choose_observation_order_or_omit_default_primary():
     selection = _selection("intensity.position", supporting=[{"fact_id": "interval.count", "form": "direct"}])
     result = _run(synthetic_case("intervals_4x4"),
                   transport=_provider(lambda *_: json.dumps(selection)))
-    assert [c.id for c in result.claims] == ["intensity.position", "interval.count"]
-    assert result.text.startswith("Ta FC moyenne")
+    assert [c.id for c in result.claims] == ["interval.count", "intensity.position"]
+    assert not result.provider_attempted
     selection["supporting"] = []
     result = _run(synthetic_case("intervals_4x4"),
                   transport=_provider(lambda *_: json.dumps(selection)))
-    assert result.mode == "editorial_realization" and len(result.claims) == 1
+    assert result.mode == "editorial_realization" and len(result.claims) == 2
 
 
 def test_history_and_prescription_are_filtered_before_prompt_and_selection():
@@ -424,7 +437,7 @@ def test_history_and_prescription_are_filtered_before_prompt_and_selection():
     for fact_id, intent in [("trend.probable_improvement", "compare_history"),
                             ("prescription.review", "review_prescription")]:
         result = _run(v3, transport=_provider(lambda *_: json.dumps(_selection(fact_id, intent=intent))))
-        assert result.mode == "deterministic_fallback"
+        assert result.mode == "editorial_realization" and not result.provider_attempted
         assert fact_id not in {c.id for c in result.claims}
     permissions = hybrid.HybridPermissions(history=True, prescription=True)
     packet = _context(v3, permissions=permissions)
@@ -498,12 +511,12 @@ def test_provider_failures_are_atomic_and_never_expose_response(failure, monkeyp
 
     monkeypatch.setattr(hybrid, "TIMEOUT_SECONDS", 0.01)
     result = _run(transport=provider)
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.editorial_selection is None
     assert result.claims == hybrid.select_deterministic_synthesis(_facts())
     assert "private-provider-payload" not in result.model_dump_json()
     if failure == "timeout":
-        assert result.reason == "timeout"
+        assert result.reason == "deterministic_selection_validated"
 
 
 def test_generation_never_calls_the_retired_lexical_validator(monkeypatch):
@@ -512,4 +525,4 @@ def test_generation_never_calls_the_retired_lexical_validator(monkeypatch):
 
     monkeypatch.setattr(hybrid, "validate_generated_narrative", forbidden)
     assert _run(transport=_provider()).mode == "editorial_realization"
-    assert _run(transport=_provider(lambda *_: "Ta FC est stable.")).mode == "deterministic_fallback"
+    assert _run(transport=_provider(lambda *_: "Ta FC est stable.")).mode == "editorial_realization"

@@ -1,4 +1,4 @@
-"""C374-C: bounded backend compositions; the provider selects one opaque ID.
+"""Bounded backend compositions selected deterministically from admitted facts.
 
 This is an opt-in internal entry point, not a production route or a fallback.
 Callers must supply owner-scoped V3/V2 data, as for the existing hybrid coach.
@@ -6,7 +6,6 @@ Callers must supply owner-scoped V3/V2 data, as for the existing hybrid coach.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 import json
 import os
@@ -101,7 +100,7 @@ class ClosedChoiceResult(BaseModel):
     advice: legacy.HybridClaim | None = None
     advice_reason: str | None = None
     blockers: list[str] = Field(default_factory=lambda: [
-        "real_llm_editorial_quality_not_evaluated",
+        "production_wiring_not_validated",
     ])
 
 
@@ -109,6 +108,13 @@ def _candidates(facts):
     candidates = primary_fact_candidates(facts)
     index = {f.id: f for f in facts}
     intensity = index.get("intensity.position")
+    kind = index.get("session.kind")
+    if (kind and kind.confidence in {"medium", "high"}
+            and dict(kind.values).get("classification") == "easy_run_probable"
+            and intensity and dict(intensity.values).get("position") == "below_LT1"
+            and not any(f.id.startswith(("interval.", "effort.", "trend.", "comparison."))
+                        or f.id in {"continuous.pace_halves", "session.long"} for f in facts)):
+        return ("session.kind", *(f for f in candidates if f != "session.kind"))
     if (candidates and candidates[0] == "intensity.position" and intensity
             and dict(intensity.values).get("position") != "above_LT2"):
         history = tuple(f for f in candidates if f.startswith(("trend.", "comparison.")))
@@ -388,7 +394,7 @@ def _make_option(option_id, primary, supporting, facts, language):
 
 
 def validate_option(option, facts, language):
-    """Rebuild from admitted authority, including all caveats, before and after LLM."""
+    """Rebuild from admitted authority, including all caveats, around selection."""
     if option.forms != ("direct",) * (1 + len(option.supporting)):
         raise SelectionFailure("option_not_admissible")
     expected = _make_option(
@@ -410,8 +416,8 @@ def build_editorial_options(
     ))
     index = {fact.id: fact for fact in displayable}
     enriched, bare = [], []
-    history = tuple(f.id for f in displayable if f.id.startswith("trend."))
-    history += tuple(f.id for f in displayable if f.id.startswith("comparison."))
+    history = tuple(sorted(f.id for f in displayable if f.id.startswith("trend.")))
+    history += tuple(sorted(f.id for f in displayable if f.id.startswith("comparison.")))
     endpoints = []
     # Do not promote a formerly ineligible primary when hiding a zero delta.
     # Validation must see the same authority snapshot as candidate generation.
@@ -421,7 +427,7 @@ def build_editorial_options(
         preferred = []
         if primary == "interval.pace_direction":
             preferred.append("interval.regularity")
-        elif primary == "interval.regularity" and "interval.pace_direction" not in index:
+        elif primary == "interval.regularity":
             preferred.append("effort.first")
         if primary == "intensity.position":
             preferred.extend((*history[:1],) if history else ("session.kind",))
@@ -473,13 +479,23 @@ def select_deterministic_option(options: tuple[EditorialOption, ...]) -> Editori
         raise SelectionFailure("option_not_admissible")
 
     def content_key(option):
-        return (len(option.text), option.primary, option.supporting, option.forms, option.text)
+        # Fixed semantic fact/form vocabulary; no prose length or opaque option IDs.
+        return (
+            option.primary, option.supporting, option.forms, option.editorial_intent,
+            option.text, tuple(c.model_dump_json() for c in option.claims),
+            option.advice.model_dump_json() if option.advice else "",
+            option.advice_reason or "",
+        )
 
     first = min(options, key=lambda o: (o.primary_priority, o.primary))
     same_primary = [o for o in options if o.primary == first.primary]
     threshold = [o for o in same_primary if "intensity.position" in o.supporting]
     if threshold:
         return min(threshold, key=content_key)
+    if first.primary == "interval.regularity":
+        # One recorded effort illustrates the verdict without repeating its scope.
+        illustrated = [o for o in same_primary if o.supporting == ("effort.first",)]
+        return min(illustrated or same_primary, key=content_key)
     if first.primary == "interval.pace_direction":
         endpoints = [o for o in same_primary if "effort.first" in o.supporting
                      and "effort.last" in o.supporting]
@@ -562,7 +578,7 @@ async def generate_closed_choice_coach(
     if not access.can("llm_access"):
         return ClosedChoiceResult(mode="denied", reason="llm_access_not_authorized")
     language = legacy._language(language)
-    result = ClosedChoiceResult(mode="failed", reason="provider_unavailable", language=language)
+    result = ClosedChoiceResult(mode="failed", reason="option_not_admissible", language=language)
     try:
         facts = legacy.build_admissible_facts(
             intelligence, access=access, permissions=permissions,
@@ -576,48 +592,8 @@ async def generate_closed_choice_coach(
         for option in options:
             validate_option(option, facts, language)
         result.option_count = len(options)
-        index = {fact.id: fact for fact in facts}
-        prompt = json.dumps({
-            "language": language,
-            "options": [option.provider_option(index) for option in options],
-            "selection_schema": {
-                "oneOf": [
-                    {**OptionChoice.model_json_schema(), "properties": {
-                        "option_id": {"type": "string", "enum": [o.option_id for o in options]},
-                    }},
-                    Abstention.model_json_schema(),
-                ],
-            },
-        }, ensure_ascii=False, allow_nan=False)
-        if len(prompt) > MAX_CONTEXT_CHARS:
-            raise SelectionFailure("size_limit")
-        # Explicit injection is required: no implicit production provider activation.
-        if transport is None:
-            return result
-        result.provider_attempted = True
-        result.transport_kind = "injected"
-        response, success, metadata = await asyncio.wait_for(
-            transport(
-                "Select exactly one complete editorial option for the runner. "
-                'Return only {"option_id":"option_N"} or {"abstain":true}. '
-                "Prefer distinctive useful information without redundant complements. "
-                "Never write user-facing text, combine options, alter facts, values or units, "
-                "infer physiology, causality, fitness, fatigue or prescriptions.",
-                prompt, "anonymous", "c374_closed_choice",
-            ),
-            timeout=TIMEOUT_SECONDS,
-        )
-        if success is not True:
-            raise SelectionFailure("provider_unavailable")
-        if not isinstance(response, str):
-            raise SelectionFailure("invalid_response")
-        if isinstance(metadata, dict):
-            if metadata.get("response_truncated") is True:
-                raise SelectionFailure("size_limit")
-            duration = metadata.get("duration_sec")
-            if legacy._finite(duration) and duration >= 0:
-                result.provider_duration_sec = duration
-        selected = validate_choice(response, options)
+        # ``transport`` remains accepted for API compatibility, never invoked.
+        selected = select_deterministic_option(options)
         validate_option(selected, facts, language)
         result.mode = "editorial_realization"
         result.reason = "option_validated"
@@ -626,13 +602,11 @@ async def generate_closed_choice_coach(
         result.claims = list(selected.claims)
         result.advice, result.advice_reason = selected.advice, selected.advice_reason
         result.verification_scope = "closed_realization"
-    except asyncio.TimeoutError:
-        result.reason = "timeout"
     except SelectionFailure as exc:
         result.reason = str(exc)
     except Exception:
-        # Neither untrusted content nor provider exception details reach diagnostics.
-        result.reason = "provider_unavailable" if result.provider_attempted else "option_not_admissible"
+        # Never expose unvalidated content or internal exception details.
+        result.reason = "option_not_admissible"
     finally:
         result.elapsed_ms = (perf_counter() - start) * 1000
     return result

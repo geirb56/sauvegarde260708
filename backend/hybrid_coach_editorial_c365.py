@@ -131,8 +131,8 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
         intensity is not None
         and dict(intensity.values).get("position") == "above_LT2"
     )
-    history = tuple(fact.id for fact in facts if fact.id.startswith("trend."))
-    history += tuple(fact.id for fact in facts if fact.id.startswith("comparison."))
+    history = tuple(sorted(fact.id for fact in facts if fact.id.startswith("trend.")))
+    history += tuple(sorted(fact.id for fact in facts if fact.id.startswith("comparison.")))
     regularity = index.get("interval.regularity")
     band = dict(regularity.values).get("regularity_band") if regularity is not None else None
     halves = "continuous.pace_halves" in index
@@ -251,14 +251,6 @@ ADVICE_REGISTRY: tuple[AdviceRule, ...] = (
         (("fr", "Sur une prochaine séance comparable où tu recherches la régularité, essaie de stabiliser davantage tes allures."),
          ("en", "On a future comparable session where you aim for regularity, try to keep your paces steadier."),
          ("es", "En una próxima sesión comparable en la que busques regularidad, intenta estabilizar más tus ritmos.")),
-    ),
-    AdviceRule(
-        "advice.keep_consistency", "interval.regularity",
-        ("v2_regularity_band_homogeneous", "all_comparable_recorded_efforts"),
-        ("v2_directional_progression_admitted",),
-        (("fr", "Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables."),
-         ("en", "This consistency is a useful reference for your next comparable sets."),
-         ("es", "Esta constancia es una buena referencia para tus próximas series comparables.")),
     ),
     AdviceRule(
         "advice.effort_distribution", "interval.pace_direction",

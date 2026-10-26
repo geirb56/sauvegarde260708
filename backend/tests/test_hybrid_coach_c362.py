@@ -242,24 +242,21 @@ def test_rich_and_poor_responses_follow_value_not_word_quota(monkeypatch):
     assert not hybrid.validate_generated_narrative("x" * (hybrid.MAX_RESPONSE_CHARS + 1), _facts())[0]
 
 
-def test_prompt_requests_editorial_decisions_not_scientific_prose(monkeypatch):
+def test_entrypoint_no_longer_constructs_or_sends_an_editorial_prompt(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
 
     async def provider(system, prompt, user, context_type):
-        assert "word quota" in system and "60–110" not in system
-        assert "Never return prose" in system
-        assert "Backend realization supplies all scientific assertions" in system
-        assert "Select the distinctive observation first" in system
-        assert json.loads(prompt)["threshold_conventions"]["LT1"].startswith("Personal first lactate")
-        return _editorial_text(json.loads(prompt)), True, {}
+        pytest.fail("The deterministic entrypoint must never construct a provider request")
 
-    assert _run(transport=provider).mode == "editorial_realization"
+    result = _run(transport=provider)
+    assert result.mode == "editorial_realization" and not result.provider_attempted
+    assert result.transport_kind == "none" and result.provider_duration_sec is None
 
 
 def test_rejected_science_still_uses_deterministic_fallback(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(transport=_provider(lambda *_: "Tu construis ta base aérobie."))
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.text == hybrid._render(hybrid.select_deterministic_synthesis(_facts()))
     assert result.verdict == "HOLD"
 
@@ -288,4 +285,4 @@ def test_independent_review_regressions_trigger_fallback(name, text, reason, mon
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(synthetic_case(name), transport=_provider(lambda *_: text))
     assert hybrid.validate_generated_narrative(text, _facts(synthetic_case(name)))[1] == reason
-    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
