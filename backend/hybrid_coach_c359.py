@@ -757,6 +757,7 @@ def build_admissible_facts(
         conditions = [
             "scoped_same_user_and_workout", "v2_continuous_structure",
             "explicit_v2_faster_or_slower", "equal_distance_halves", "whole_session_measured",
+            "consistent_with_v2_session_pacing_reference",
         ]
         limits = list(_REQUIRED_LIMITS["continuous.pace_halves"]) + [
             "terrain_weather_not_controlled",
@@ -768,6 +769,9 @@ def build_admissible_facts(
             f"{path}.metadata.coverage", f"{path}.evidence.first_half_pace_sec_per_km",
             f"{path}.evidence.second_half_pace_sec_per_km",
             f"{path}.evidence.second_half_pace_change_sec_per_km",
+            "workout_analysis_v2.pacing.fastest_split_min_km",
+            "workout_analysis_v2.pacing.slowest_split_min_km",
+            "workout_analysis_v2.pacing.average_pace_min_km",
         ]
         source = AdmissibleFact(
             "continuous.pace_halves", tuple(values.items()), tuple(units.items()),

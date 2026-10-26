@@ -1,7 +1,7 @@
 # C378 — Coach Editorial V2
 
 - Base : `copilot/dev` @ `d4cc34b` (Merge PR #371, C374-C)
-- Head : branche `copilot/c378-coach-editorial-v2` (code commit `0b10aad` + commits de tests/rapport de cette PR)
+- Head : branche `copilot/c378-coach-editorial-v2` (commits `0b10aad`, `1d9919e`, puis corrections d'audit pré-merge, section 11)
 - Statut : PR ouverte, **non mergée, non déployée**. STOP avant C379.
 
 ## 1. Audit initial
@@ -72,7 +72,7 @@ En support, `intensity.position` est retenu uniquement s'il est au-dessus de LT2
 |---|---|---|---|---|
 | `advice.keep_consistency` (B) | `interval.regularity` | bande `homogeneous` ; tous les efforts enregistrés sont comparables | direction progressive V2 admise | workout_analysis_v2 regularity band |
 | `advice.stabilize_paces` (A) | `interval.regularity` | bande `variable` ; tous les efforts enregistrés sont comparables | direction progressive V2 admise (séance possiblement progressive) | idem |
-| `advice.effort_distribution` (C) | `interval.pace_direction` | direction V2 explicite ; efforts comparables | bande homogène | workout_analysis_v2 pace direction |
+| `advice.effort_distribution` (C) | `interval.pace_direction` | **intention d'allure stable vérifiée** (`verified_steady_pacing_intent`, toujours fausse aujourd'hui → jamais admis) ; direction V2 explicite ; efforts comparables | bande homogène | workout_analysis_v2 pace direction |
 | `advice.continuous_pacing` (D) | `continuous.pace_halves` | seconde moitié plus lente ; mesure sur toute la séance ; type easy/steady fiable (confiance medium/high) | sortie longue | workout_analysis_v2 coach.pacing |
 
 Principes communs :
@@ -146,6 +146,7 @@ Valeurs: {'direction': 'faster', 'scope': 'equal_count_endpoint_groups_middle_ex
 Secondaires: []
 Conseil: advice.effort_distribution — Pour une prochaine séance où tu recherches une allure stable, essaie de trouver ton rythme dès les premières répétitions. | raison: advice_admitted
 Mode: deterministic_fallback provider_unavailable
+[SORTIE HISTORIQUE @1d9919e — comportement corrigé, voir section 11 : conseil désormais absent]
 Texte: Les 2 dernières répétitions comparables sont 20 s/km plus rapides que les 2 premières.
 
 ### Fractionné irrégulier 300/330/295/325 (fr)
@@ -187,7 +188,7 @@ Texte: Garmin a enregistré une séance fractionnée avec 4 phases d'effort et 3
 
 Lecture :
 - Fractionné régulier : régularité en tête, conseil B.
-- Fractionné progressif : direction en tête (−20 s/km sur les groupes extrêmes, sans conclusion sur la séance entière), conseil C formulé conditionnellement.
+- Fractionné progressif : direction en tête (−20 s/km sur les groupes extrêmes, sans conclusion sur la séance entière). À `1d9919e` le conseil C était admis ; **corrigé** : abstention `condition_unmet:verified_steady_pacing_intent` (section 11).
 - Fractionné irrégulier : variabilité, conseil A.
 - Sortie continue : seconde moitié plus lente.
   - Conseil D seulement quand le type easy/steady est fiable.
@@ -233,8 +234,190 @@ Couverture C378 :
 
 - Le texte d'observation et le conseil sont séparés ; C379 doit composer le commentaire de 70 à 110 mots à partir de `claims` + `advice` + `limits`, sans recalcul.
 - Aucun verdict de régularité continue n'est admis, car V2 ne le produit pas.
-- L'objectif réel de la séance reste inconnu ; les conseils restent conditionnels.
+- L'objectif réel de la séance reste inconnu ; les conseils restent conditionnels, et `advice.effort_distribution` n'est jamais admis tant qu'aucun fait admis n'établit une intention d'allure stable.
+- `continuous.pace_halves` : contrôle de cohérence avec les références `pacing` de la réponse V2, pas une re-validation des splits Garmin (voir section 11).
 - La sortie longue n'a pas de conseil.
 - Les valeurs sont affichées à la précision admise, sans arrondi éditorial.
 - La sélection LLM existante (choix d'option fermée C374) est inchangée.
 - Le Coach hybride reste derrière un flag, sans câblage en production.
+
+## 11. Corrections d'audit avant merge (PR #373, audit de `1d9919e`)
+
+Le périmètre est inchangé : C365 et C372, la provenance du fait dans C359 (`build_admissible_facts`), plus les tests. Les fichiers suivants ne sont pas touchés :
+- calculs V2/V3 et seuils ;
+- routes, frontend, entitlements, flags ;
+- LLM ;
+- `narrative_coach_v3`.
+
+Aucun nouveau module n'est ajouté.
+
+### 11.1 Correction 1 — conseil sur répétitions progressives
+
+**Cause.** La règle `advice.effort_distribution` ne demandait que deux conditions : une direction V2 explicite et des efforts comparables. Toute accélération ou décélération significative déclenchait donc un conseil de stabilisation. Or une progression peut être voulue. L'intention d'allure stable n'est portée par aucun fait admis, et la prescription est hors du périmètre Coach : elle ne doit pas servir à deviner cette intention.
+
+**Modification.** Dans `backend/hybrid_coach_editorial_c365.py`, la règle C du registre `ADVICE_REGISTRY` reçoit une première condition, `verified_steady_pacing_intent`. Le prédicat de `_advice_predicate()` en vocabulaire fermé l'évalue à `False`, faute de signal fiable, ce qui revient à désactiver l'admission. L'identifiant est conservé pour la compatibilité.
+
+`select_advice()` n'est pas modifié. Il renvoie désormais `condition_unmet:verified_steady_pacing_intent` et garde le détail dans `rejections`.
+
+| Cas | Avant (`1d9919e`) | Après |
+|---|---|---|
+| Fractionné plus rapide | observation + `advice.effort_distribution` | observation conservée, pas de conseil, `condition_unmet:verified_steady_pacing_intent` |
+| Fractionné plus lent | observation + `advice.effort_distribution` | observation conservée, pas de conseil, même raison |
+| Fractionné homogène | `advice.keep_consistency` | inchangé |
+| Fractionné irrégulier | `advice.stabilize_paces` (comparabilité + contre-indication direction) | inchangé |
+| Prescription présente (`consistent` / `deviation`) | exclue du commentaire | exclue ; elle ne fournit pas l'intention, toujours abstention |
+
+### 11.2 Correction 2 — validation de `continuous.pace_halves`
+
+**Audit du contrat.** `WorkoutAnalysisV2Response` ne transporte **pas** les splits kilométriques bruts : `km_splits` reste dans le document `workouts` qui alimente V2. Les moitiés (`first/second_half_pace_sec_per_km`) sont calculées par `coach_language.build_coach_language` à partir de ces splits.
+
+`approved_v2_continuous_pacing()` ne vérifiait que la cohérence interne de la conclusion. Une conclusion modifiée mais cohérente avec elle-même pouvait donc être admise, par exemple avec des moitiés 333/393 s/km et une différence de +60.
+
+**Références disponibles dans la même réponse, hors de la conclusion.** Ce sont trois champs de `analysis.pacing`, issus du document `workouts` par `_build_pacing` et arrondis à 0,001 min/km :
+- `fastest_split_min_km` ;
+- `slowest_split_min_km` ;
+- `average_pace_min_km`, qui est l'allure moyenne Garmin de la séance.
+
+**Validation ajoutée.** Elle vit dans `_within_pacing_reference()`, dans `backend/hybrid_coach_v2_c372.py`. Aucune allure n'est recalculée : la fonction vérifie deux identités des moitiés à distance égale.
+
+1. Chaque moitié est une moyenne de splits, donc elle doit se situer entre le split le plus rapide et le plus lent.
+2. La moyenne des deux moitiés doit être égale à l'allure moyenne de la séance.
+
+Tolérances : la constante V2 existante `MEASUREMENT_RECONCILIATION_REL_TOL` (1 %), plus 0,03 s/km pour l'arrondi d'affichage.
+
+Si une référence manque, si `pacing.available` est faux ou si la plage est inversée, la conclusion n'est pas admise : c'est une abstention.
+
+Le fait C359 ajoute :
+- la condition `consistent_with_v2_session_pacing_reference` ;
+- les trois chemins `workout_analysis_v2.pacing.*` dans `source_paths`.
+
+Le dictionnaire approuvé expose `reference_check = "v2_pacing_split_range_and_session_average"`.
+
+**Ce n'est pas une validation indépendante des données sources.** C'est un contrôle de cohérence entre deux parties de la même réponse V2. Elle détecte :
+- une conclusion exagérée qui sort de la plage des splits ;
+- une conclusion décalée qui contredit l'allure moyenne.
+
+Elle ne détecte pas, et ces cas sont testés comme limites explicites :
+- une inversion symétrique des deux moitiés, qui garde la plage et la moyenne (la réponse n'a pas de splits ordonnés) ;
+- un décalage plus petit que la tolérance de réconciliation.
+
+Effet de bord connu : si l'allure moyenne Garmin est calculée sur le temps en mouvement alors que les splits couvrent le temps écoulé, avec des pauses, la moyenne peut sortir de la tolérance. Le Coach s'abstient alors de ce fait ; il ne s'expose pas à une fausse admission.
+
+### 11.3 Tests ajoutés ou modifiés (`backend/tests/test_hybrid_coach_c378.py`)
+
+- `test_02_03_progressive_intervals_keep_observation_and_abstain_without_verified_intent` :
+  - plus rapide et plus lent, en FR/EN/ES ;
+  - l'observation est conservée et localisée ;
+  - pas de conseil, raison et `rejections` explicites ;
+  - les autres conditions V2 sont bien satisfaites, donc l'abstention tient uniquement à l'intention ;
+  - pas de conseil de régularité ;
+  - les options fermées n'ont pas de conseil ;
+  - le fallback est déterministe.
+- `test_02b_prescription_never_supplies_the_missing_pacing_intent` : prescription `consistent` / `deviation`.
+- Pour `continuous.pace_halves` :
+  - `test_continuous_halves_original_v2_conclusion_is_admitted_with_reference_provenance` ;
+  - `test_continuous_halves_tampered_conclusions_are_rejected`, qui couvre :
+    - une différence incohérente ;
+    - une direction incohérente ;
+    - une couverture partielle ;
+    - une mauvaise portée ;
+    - des moitiés cohérentes entre elles mais hors de la plage des splits ;
+    - des moitiés cohérentes mais contraires à la moyenne de séance ;
+  - `test_continuous_halves_contradicted_by_reference_measurements_are_rejected` ;
+  - `test_continuous_halves_abstain_when_reference_measurements_are_missing` ;
+  - `test_continuous_halves_reject_wrong_user_activity_or_structure` ;
+  - `test_continuous_halves_within_rounding_of_references_remain_admitted` ;
+  - `test_continuous_halves_residual_limit_is_explicit_not_hidden` (inversion symétrique, décalage sous la tolérance).
+- Les tests 01 (homogène → `keep_consistency`) et 04 (irrégulier → `stabilize_paces`) sont inchangés et passent.
+
+### 11.4 Résultats exacts
+
+Commandes lancées depuis `backend/` :
+
+| Suite | Résultat |
+|---|---|
+| `tests/test_hybrid_coach_c359.py` | 60 passed |
+| `tests/test_hybrid_coach_c362.py` | 74 passed |
+| `tests/test_hybrid_coach_c364_audit.py` | 32 passed |
+| `tests/test_hybrid_coach_c365.py` | 99 passed |
+| `tests/test_hybrid_coach_c371.py` | 223 passed |
+| `tests/test_hybrid_coach_c372.py` | 128 passed |
+| `tests/test_hybrid_coach_c374.py` | 108 passed |
+| `tests/test_hybrid_coach_c378.py` | 94 passed (72 à `1d9919e`) |
+| `+ narrative_coach_v3*, coach_language*, workout_intelligence_v3*` | 1519 passed, 2 failed |
+
+Les 2 échecs sont préexistants et d'environnement : `lib.GEN_EMAIL`, identiques à la base.
+
+Suite complète `python -m pytest tests -q` :
+- base `1d9919e` : 263 failed, 5157 passed, 136 errors ;
+- après : 263 failed, **5179 passed**, 136 errors.
+
+L'ensemble des tests en échec ou en erreur est identique (diff vide). Les échecs viennent de l'environnement : Redis, MongoDB et `cryptography`.
+
+### 11.5 Limites résiduelles
+
+- `advice.effort_distribution` reste dans le registre mais n'est jamais admis. Le réactiver demandera un fait admis qui établit l'intention de régularité, sans utiliser la prescription.
+- `advice.continuous_pacing` (D) s'appuie encore sur une classification V3 probable easy/steady à confiance moyenne ou haute, en plus d'une formulation conditionnelle. Cette règle n'est pas modifiée ici, hors du périmètre de l'audit, et reste à réévaluer avant C379.
+- `continuous.pace_halves` passe un contrôle de cohérence avec `analysis.pacing`, mais il n'y a pas de re-validation contre les splits sources : inversion symétrique et décalage sous la tolérance restent possibles (voir 11.2).
+
+### 11.6 Exemples réellement produits par le code (après correction)
+
+Script `/tmp` qui appelle `generate_hybrid_coach()` en fallback déterministe (transport indisponible) avec les fixtures V2/V3 des tests. Sortie copiée sans modification :
+
+```text
+### Fractionné progressivement plus rapide 330→300 s/km (fr)
+Faits admis: intensity.hr, effort.first, effort.last, effort.coverage, interval.regularity, interval.pace_direction
+Fait principal: interval.pace_direction
+Conseil: None | raison: condition_unmet:verified_steady_pacing_intent
+Texte: Les 2 dernières répétitions comparables sont 20 s/km plus rapides que les 2 premières.
+
+### Fractionné progressivement plus rapide 330→300 s/km (en)
+Faits admis: intensity.hr, effort.first, effort.last, effort.coverage, interval.regularity, interval.pace_direction
+Fait principal: interval.pace_direction
+Conseil: None | raison: condition_unmet:verified_steady_pacing_intent
+Texte: The final 2 comparable repetitions are 20 s/km faster than the opening 2.
+
+### Fractionné progressivement plus rapide 330→300 s/km (es)
+Faits admis: intensity.hr, effort.first, effort.last, effort.coverage, interval.regularity, interval.pace_direction
+Fait principal: interval.pace_direction
+Conseil: None | raison: condition_unmet:verified_steady_pacing_intent
+Texte: Las 2 últimas repeticiones comparables son 20 s/km más rápidas que las 2 primeras.
+
+### Fractionné progressivement plus lent 300→330 s/km (fr)
+Faits admis: intensity.hr, effort.first, effort.last, effort.coverage, interval.regularity, interval.pace_direction
+Fait principal: interval.pace_direction
+Conseil: None | raison: condition_unmet:verified_steady_pacing_intent
+Texte: Les 2 dernières répétitions comparables sont 20 s/km plus lentes que les 2 premières.
+
+### Fractionné homogène 4×300 s/km (fr)
+Faits admis: intensity.hr, effort.first, effort.last, effort.coverage, interval.regularity
+Fait principal: interval.regularity
+Conseil: advice.keep_consistency — Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables. | raison: advice_admitted
+Texte: Les allures des répétitions comparables sont homogènes.
+
+### Fractionné irrégulier 300/330/295/325 (fr)
+Faits admis: intensity.hr, effort.first, effort.last, effort.coverage, interval.regularity
+Fait principal: interval.regularity
+Conseil: advice.stabilize_paces — Sur une prochaine séance comparable où tu recherches la régularité, essaie de stabiliser davantage tes allures. | raison: advice_admitted
+Texte: Les répétitions comparables présentent des variations d'allure importantes.
+
+### Footing 5×5:48 + 5×6:18, V2 original (fr)
+Faits admis: session.kind, intensity.hr, continuous.pace_halves
+Fait principal: continuous.pace_halves
+Conseil: advice.continuous_pacing — Sur une prochaine sortie comparable où tu vises une allure régulière, essaie de répartir ton allure plus également entre les deux moitiés. | raison: advice_admitted
+Texte: La seconde moitié en distance de ta séance est 30 s/km plus lente que la première.
+
+approved_v2_continuous_pacing (moitiés 333/393, cohérentes entre elles, hors plage des splits 348–378): None
+### Footing, conclusion V2 modifiée (333/393 s/km, +60) (fr)
+Faits admis: session.kind, intensity.hr
+Fait principal: intensity.hr
+Conseil: None | raison: no_advice_for_primary
+Texte: Ta FC moyenne enregistrée est de 145 bpm ; elle ne suffit pas à établir une zone physiologique.
+
+### Footing, référence V2 pacing.average_pace_min_km absente (fr)
+Faits admis: session.kind, intensity.hr
+Fait principal: intensity.hr
+Conseil: None | raison: no_advice_for_primary
+Texte: Ta FC moyenne enregistrée est de 145 bpm ; elle ne suffit pas à établir une zone physiologique.
+```
+

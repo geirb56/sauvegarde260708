@@ -126,7 +126,7 @@ def test_01_regular_intervals_select_regularity_and_keep_consistency_advice(lang
 
 @pytest.mark.parametrize("paces,direction", [(FASTER, "faster"), (SLOWER, "slower")])
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_02_03_progressive_intervals_select_direction_with_conditional_distribution_advice(
+def test_02_03_progressive_intervals_keep_observation_and_abstain_without_verified_intent(
     paces, direction, language,
 ):
     v3, evidence = calculated_case(paces, language=language)
@@ -135,18 +135,54 @@ def test_02_03_progressive_intervals_select_direction_with_conditional_distribut
     assert dict(index["interval.pace_direction"].values)["direction"] == direction
     assert dict(index["interval.regularity"].values)["regularity_band"] != "homogeneous"
     result = fallback(v3, evidence, language=language)
+    # The factual progression is kept as the lead observation...
     assert ids(result.claims) == ["interval.pace_direction"]
-    assert result.advice.id == "advice.effort_distribution"
-    # A deliberate progression is not treated as an error: the advice is conditional.
-    assert {"fr": "où tu recherches", "en": "where you aim", "es": "en la que busques"}[
-        language] in result.advice.text
-    # Regularity advice is contraindicated when a direction is admitted.
-    assert select_advice("interval.regularity", facts, language).reason == (
-        "condition_unmet:v2_regularity_band_variable"
-        if dict(index["interval.regularity"].values)["regularity_band"] != "variable"
-        else "contraindicated:v2_directional_progression_admitted"
+    assert {"fr": {"faster": "plus rapides", "slower": "plus lentes"},
+            "en": {"faster": "faster", "slower": "slower"},
+            "es": {"faster": "más rápid", "slower": "más lent"}}[language][direction] in result.text
+    # ...but a progression is never turned into a pacing-distribution advice while
+    # the steady-pacing intent is unknown.
+    assert result.advice is None
+    assert result.advice_reason == "condition_unmet:verified_steady_pacing_intent"
+    decision = select_advice("interval.pace_direction", facts, language)
+    assert decision.advice_id is None
+    assert decision.rejections == (
+        ("advice.effort_distribution", "condition_unmet:verified_steady_pacing_intent"),
+    )
+    # The other V2 conditions are met: the abstention is due to intent alone.
+    assert _advice_predicate("v2_explicit_pace_direction", index)
+    assert _advice_predicate("v2_comparable_recorded_efforts", index)
+    assert _advice_predicate("verified_steady_pacing_intent", index) is False
+    # No regularity advice either while a direction is admitted.
+    regularity = select_advice("interval.regularity", facts, language)
+    assert regularity.advice_id is None
+    assert regularity.reason in {
+        "contraindicated:v2_directional_progression_admitted",
+        "condition_unmet:v2_regularity_band_variable",
+    }
+    # Closed options and the deterministic fallback agree and are repeatable.
+    for option in closed.build_editorial_options(facts, language):
+        assert option.advice is None
+    again = fallback(v3, evidence, language=language)
+    assert (again.text, again.advice, again.advice_reason) == (
+        result.text, result.advice, result.advice_reason,
     )
     assert_safe(result)
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_02b_prescription_never_supplies_the_missing_pacing_intent(language):
+    for status in ("consistent", "deviation"):
+        v3, evidence = calculated_case(FASTER, language=language)
+        v3.prescription_assessment.status = status
+        facts = admitted(v3, evidence, language=language, prescription=True)
+        assert "prescription.review" in {f.id for f in facts}
+        assert select_advice("interval.pace_direction", facts, language).advice_id is None
+        result = fallback(v3, evidence, language=language, prescription=True)
+        assert "prescription.review" not in ids(result.claims)
+        assert result.advice is None
+        assert result.advice_reason == "condition_unmet:verified_steady_pacing_intent"
+        assert_safe(result)
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -474,3 +510,138 @@ def test_selection_never_relies_on_metric_presence_alone():
     candidates = hybrid.primary_fact_candidates(admitted(v3, evidence))
     assert candidates[0] == "interval.regularity"
     assert not {"effort.first", "effort.last", "interval.count"} & set(candidates)
+
+
+# C378 audit correction: continuous.pace_halves is cross-checked against the
+# independent V2 session pacing references (split extremes, session average).
+
+def _pacing_conclusion(evidence):
+    conclusions = evidence.analysis.coach_language.conclusions
+    index = next(i for i, c in enumerate(conclusions) if c.code == "coach.pacing")
+    return index, conclusions[index]
+
+
+def _with_conclusion(evidence, *, metadata=None, proof=None):
+    analysis = evidence.analysis.model_copy(deep=True)
+    index, item = _pacing_conclusion(ScopedV2Evidence(evidence.user_id, analysis))
+    analysis.coach_language.conclusions[index] = item.model_copy(update={
+        "metadata": {**item.metadata, **(metadata or {})},
+        "evidence": {**item.evidence, **(proof or {})},
+    })
+    return replace(evidence, analysis=analysis)
+
+
+def _with_pacing(evidence, **fields):
+    analysis = evidence.analysis.model_copy(deep=True)
+    analysis.pacing = analysis.pacing.model_copy(update=fields)
+    return replace(evidence, analysis=analysis)
+
+
+def _halves_admitted(v3, scoped):
+    approved = approved_v2_continuous_pacing(scoped, user_id=OWNER, workout_id=v3.workout_id)
+    facts = admitted(v3, scoped)
+    assert (approved is not None) == ("continuous.pace_halves" in {f.id for f in facts})
+    return approved
+
+
+def test_continuous_halves_original_v2_conclusion_is_admitted_with_reference_provenance():
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    approved = _halves_admitted(v3, evidence)
+    assert approved["reference_check"] == "v2_pacing_split_range_and_session_average"
+    assert approved["pace_change_sec_per_km"] == 30
+    fact = next(f for f in admitted(v3, evidence) if f.id == "continuous.pace_halves")
+    assert "consistent_with_v2_session_pacing_reference" in fact.usage_conditions
+    assert {"workout_analysis_v2.pacing.fastest_split_min_km",
+            "workout_analysis_v2.pacing.slowest_split_min_km",
+            "workout_analysis_v2.pacing.average_pace_min_km"} <= set(fact.source_paths)
+
+
+@pytest.mark.parametrize("tamper", [
+    pytest.param({"proof": {"second_half_pace_change_sec_per_km": 45.0}}, id="incoherent_change"),
+    pytest.param({"metadata": {"direction": "faster"}}, id="incoherent_direction"),
+    pytest.param({"metadata": {"coverage": "measured_segments"}}, id="partial_coverage"),
+    pytest.param({"metadata": {"comparison_scope": "measured_segments"}}, id="wrong_scope"),
+    # Exaggerated together but internally coherent: halves leave the recorded split range.
+    pytest.param({"proof": {"first_half_pace_sec_per_km": 333.0,
+                            "second_half_pace_sec_per_km": 393.0,
+                            "second_half_pace_change_sec_per_km": 60.0}},
+                 id="coherent_halves_outside_split_range"),
+    # Shifted together inside the split range: contradicts the session average.
+    pytest.param({"proof": {"first_half_pace_sec_per_km": 354.0,
+                            "second_half_pace_sec_per_km": 380.0,
+                            "second_half_pace_change_sec_per_km": 26.0}},
+                 id="coherent_halves_contradict_session_average"),
+])
+def test_continuous_halves_tampered_conclusions_are_rejected(tamper):
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    assert _halves_admitted(v3, _with_conclusion(evidence, **tamper)) is None
+
+
+@pytest.mark.parametrize("tamper", [
+    # A symmetric swap keeps the split range and the session average; the V2
+    # response carries no ordered per-split data that could contradict it.
+    pytest.param({"metadata": {"direction": "faster"},
+                  "proof": {"first_half_pace_sec_per_km": 378.0,
+                            "second_half_pace_sec_per_km": 348.0,
+                            "second_half_pace_change_sec_per_km": -30.0}}, id="symmetric_swap"),
+    # A coherent shift smaller than the reconciliation tolerance of the average.
+    pytest.param({"proof": {"first_half_pace_sec_per_km": 350.0,
+                            "second_half_pace_sec_per_km": 377.0,
+                            "second_half_pace_change_sec_per_km": 27.0}},
+                 id="shift_within_tolerance"),
+])
+def test_continuous_halves_residual_limit_is_explicit_not_hidden(tamper):
+    """Documented residual: these are consistency checks, not source re-validation."""
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    approved = _halves_admitted(v3, _with_conclusion(evidence, **tamper))
+    assert approved is not None
+    assert approved["reference_check"] == "v2_pacing_split_range_and_session_average"
+
+
+@pytest.mark.parametrize("fields", [
+    pytest.param({"fastest_split_min_km": 5.9}, id="fastest_split_contradicts_first_half"),
+    pytest.param({"slowest_split_min_km": 6.1}, id="slowest_split_contradicts_second_half"),
+    pytest.param({"average_pace_min_km": 6.3}, id="session_average_contradicts_halves"),
+    pytest.param({"fastest_split_min_km": 6.4, "slowest_split_min_km": 5.7}, id="inverted_range"),
+])
+def test_continuous_halves_contradicted_by_reference_measurements_are_rejected(fields):
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    assert _halves_admitted(v3, _with_pacing(evidence, **fields)) is None
+
+
+@pytest.mark.parametrize("fields", [
+    {"fastest_split_min_km": None}, {"slowest_split_min_km": None},
+    {"average_pace_min_km": None}, {"available": False},
+])
+def test_continuous_halves_abstain_when_reference_measurements_are_missing(fields):
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    scoped = _with_pacing(evidence, **fields)
+    assert _halves_admitted(v3, scoped) is None
+    result = fallback(v3, scoped)
+    assert "continuous.pace_halves" not in ids(result.claims)
+    assert result.advice is None
+    assert_safe(result)
+
+
+def test_continuous_halves_reject_wrong_user_activity_or_structure():
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    assert _halves_admitted(v3, replace(evidence, user_id="another-user")) is None
+    assert approved_v2_continuous_pacing(
+        evidence, user_id=OWNER, workout_id="another-workout",
+    ) is None
+    analysis = evidence.analysis.model_copy(deep=True)
+    analysis.workout = analysis.workout.model_copy(update={"id": "another-workout"})
+    assert _halves_admitted(v3, replace(evidence, analysis=analysis)) is None
+    analysis = evidence.analysis.model_copy(deep=True)
+    analysis.signals.session_structure = analysis.signals.session_structure.model_copy(
+        update={"code": "intervals"},
+    )
+    assert _halves_admitted(v3, replace(evidence, analysis=analysis)) is None
+
+
+def test_continuous_halves_within_rounding_of_references_remain_admitted():
+    v3, evidence = continuous_case(SLOWER_HALF, classification="easy_run_probable")
+    # Display rounding of the published references (0.001 min/km) is tolerated.
+    scoped = _with_pacing(evidence, average_pace_min_km=6.0505,
+                          fastest_split_min_km=5.8004, slowest_split_min_km=6.2996)
+    assert _halves_admitted(v3, scoped) is not None

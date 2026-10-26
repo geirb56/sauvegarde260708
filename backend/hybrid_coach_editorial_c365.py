@@ -262,7 +262,11 @@ ADVICE_REGISTRY: tuple[AdviceRule, ...] = (
     ),
     AdviceRule(
         "advice.effort_distribution", "interval.pace_direction",
-        ("v2_explicit_pace_direction", "v2_comparable_recorded_efforts"),
+        # A pace progression is not by itself a distribution error: this advice
+        # requires a verified steady-pacing intent, which no admitted fact carries
+        # today (prescription is outside Coach scope), so it always abstains.
+        ("verified_steady_pacing_intent", "v2_explicit_pace_direction",
+         "v2_comparable_recorded_efforts"),
         ("v2_regularity_band_homogeneous",),
         (("fr", "Pour une prochaine séance où tu recherches une allure stable, essaie de trouver ton rythme dès les premières répétitions."),
          ("en", "For a future session where you aim for a steady pace, try to settle into your rhythm from the first repetitions."),
@@ -315,6 +319,9 @@ def _advice_predicate(name: str, index: dict) -> bool:
                 "easy_run_probable", "steady_run_probable",
             },
         "long_session": "session.long" in index,
+        # No admitted fact establishes the runner's pacing intent; the planned
+        # prescription must not be used to guess it. Fail closed until one does.
+        "verified_steady_pacing_intent": False,
     }.get(name, False)
 
 
