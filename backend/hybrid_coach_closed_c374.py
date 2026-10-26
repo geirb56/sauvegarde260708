@@ -143,6 +143,9 @@ def _validate_composition(primary, supporting, facts, language):
     # Keep the old exclusion when a global regularity verdict is also present.
     if "interval.pace_direction" in selected and "interval.regularity" not in selected:
         relaxed.update(selected & {"effort.first", "effort.last"})
+    if ("interval.regularity" in selected and "interval.pace_direction" not in selected
+            and len(selected & {"effort.first", "effort.last"}) == 1):
+        relaxed.update(selected & {"effort.first", "effort.last"})
     if primary == "session.unknown" and primary not in primary_fact_candidates(facts):
         # No support is needed: the unknown fact already includes descriptive HR.
         if supporting:
@@ -161,9 +164,11 @@ def _validate_composition(primary, supporting, facts, language):
     except (ValueError, TypeError) as exc:
         raise SelectionFailure("option_not_admissible") from exc
     # A relaxed pair must not hide an exclusion against a third fact.
-    if "interval.regularity" in selected and selected & {
-        "interval.count", "effort.first", "effort.last", "effort.coverage",
-    }:
+    if "interval.regularity" in selected and (
+        selected & {"interval.count", "effort.coverage"}
+        or len(selected & {"effort.first", "effort.last"}) > 1
+        or "interval.pace_direction" in selected and selected & {"effort.first", "effort.last"}
+    ):
         raise SelectionFailure("option_not_admissible")
 
 
@@ -376,12 +381,16 @@ def build_editorial_options(
     history = tuple(f.id for f in displayable if f.id.startswith("trend."))
     history += tuple(f.id for f in displayable if f.id.startswith("comparison."))
     endpoints = []
-    for primary in _candidates(displayable):
+    # Do not promote a formerly ineligible primary when hiding a zero delta.
+    # Validation must see the same authority snapshot as candidate generation.
+    for primary in (candidate for candidate in _candidates(facts) if candidate in index):
         base = _make_option("", primary, (), facts, language)
         support = []
         preferred = []
         if primary == "interval.pace_direction":
             preferred.append("interval.regularity")
+        elif primary == "interval.regularity" and "interval.pace_direction" not in index:
+            preferred.append("effort.first")
         if primary == "intensity.position":
             preferred.extend((*history[:1],) if history else ("session.kind",))
         elif primary == "continuous.pace_halves":

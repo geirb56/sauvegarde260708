@@ -230,3 +230,43 @@ def test_selection_and_realization_never_recalculate_science(monkeypatch):
     selected = closed.select_deterministic_option(closed.build_editorial_options(facts))
     assert selected.primary == "interval.pace_direction"
     closed.validate_option(selected, facts, "fr")
+
+
+def test_hidden_zero_comparison_cannot_invalidate_the_deterministic_fallback(monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    v3, evidence = continuous_case([5.8] * 5 + [6.3] * 5)
+    v3.historical_comparison = synthetic_case("comparable_history").historical_comparison
+    v3.historical_comparison.pace_at_comparable_hr.pace_difference_sec_per_km = 0
+    v3.historical_comparison.hr_at_comparable_pace.hr_difference_bpm = 3
+    permissions = hybrid.HybridPermissions(history=True)
+    facts = admitted(v3, evidence, history=True)
+    assert {"continuous.pace_halves", "comparison.pace", "comparison.hr"} <= {f.id for f in facts}
+    options = closed.build_editorial_options(facts)
+    assert options
+    for option in options:
+        closed.validate_option(option, facts, "fr")
+        assert "comparison.pace" not in (option.primary, *option.supporting)
+
+    async def unavailable(*args):
+        return "", False, {}
+
+    result = asyncio.run(hybrid.generate_hybrid_coach(
+        v3, access=ACCESS, permissions=permissions, v2_evidence=evidence, transport=unavailable,
+    ))
+    assert result.mode == "deterministic_fallback"
+    assert result.claims[0].id == "continuous.pace_halves"
+
+
+def test_regularity_options_can_illustrate_one_recorded_effort_without_a_checklist():
+    v3, evidence, _, _ = scenario("homogeneous")
+    facts = admitted(v3, evidence)
+    options = closed.build_editorial_options(facts)
+    illustrated = next(o for o in options if o.supporting == ("effort.first",))
+    assert illustrated.primary == "interval.regularity"
+    assert "4 min" in illustrated.text and "5'00/km" in illustrated.text
+    assert closed.select_deterministic_option(options).supporting == ()
+    closed.validate_option(illustrated, facts, "fr")
+    with pytest.raises(closed.SelectionFailure, match="option_not_admissible"):
+        closed._validate_composition(
+            "interval.regularity", ("effort.first", "effort.last"), facts, "fr",
+        )
