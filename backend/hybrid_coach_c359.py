@@ -859,52 +859,22 @@ def _bounded_claims(facts: list[AdmissibleFact]) -> list[HybridClaim]:
     return claims
 
 
-def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[HybridClaim]:
+def select_deterministic_synthesis(
+    facts: tuple[AdmissibleFact, ...], language: str = "fr",
+) -> list[HybridClaim]:
     """Apply contextual editorial rules and keep only distinct useful support.
 
     C378: prescription review is outside the Coach editorial scope; at most one
     primary and two distinct supports, never two facts restating one observation.
     """
-    displayable = tuple(
-        fact for fact in editorial_scope(facts) if len(fact.assertion) <= MAX_COACH_TEXT_CHARS
-    )
-    index = {fact.id: fact for fact in displayable}
-    primary_candidates = primary_fact_candidates(displayable)
-    if not primary_candidates:
-        return []
-    primary_id = primary_candidates[0]
-    intensity = index.get("intensity.position")
-    high_intensity = (
-        ("intensity.position",)
-        if intensity is not None and dict(intensity.values).get("position") == "above_LT2"
-        else ()
-    )
-    history = tuple(fact.id for fact in displayable if fact.id.startswith("trend."))
-    history += tuple(fact.id for fact in displayable if fact.id.startswith("comparison."))
-    if primary_id == "session.long":
-        support_ids = ("continuous.pace_halves", *high_intensity)
-    elif primary_id == "continuous.pace_halves":
-        support_ids = ("intensity.position", *history[:1])
-    elif primary_id == "intensity.position":
-        support_ids = history[:1]
-    elif primary_id == "interval.count":
-        support_ids = ("intensity.position", "intensity.hr")
-    elif primary_id.startswith(("trend.", "comparison.")) or primary_id in {
-        "interval.pace_direction", "interval.regularity", "effort.first", "effort.last",
-    }:
-        support_ids = high_intensity
-    else:
-        support_ids = ()
+    # Reuse C374's closed options and realizer; no second template system or I/O.
+    from hybrid_coach_closed_c374 import build_editorial_options, select_deterministic_option
 
-    selected = [index[primary_id]]
-    selected_ids = {primary_id}
-    for fact_id in support_ids:
-        if fact_id in index and fact_id not in selected_ids:
-            selected.append(index[fact_id])
-            selected_ids.add(fact_id)
-        if len(selected) == 3:
-            break
-    return _bounded_claims(selected)
+    displayable = tuple(f for f in facts if len(f.assertion) <= MAX_COACH_TEXT_CHARS)
+    options = build_editorial_options(displayable, _language(language))
+    if options:
+        return list(select_deterministic_option(options).claims)
+    return []
 
 
 def _render(claims: list[HybridClaim]) -> str:
@@ -1358,11 +1328,12 @@ async def generate_hybrid_coach(
         v2_evidence=v2_evidence,
     )
     lang = _language(language)
-    claims = select_deterministic_synthesis(facts)
+    claims = select_deterministic_synthesis(facts, lang)
     advice, advice_reason = admissible_advice(claims, facts, lang)
     result = HybridResult(
         mode="deterministic_fallback", reason="provider_unavailable",
-        text=_render(claims), claims=claims, verification_scope="closed_realization",
+        text=_render([*claims, *([advice] if advice else [])]),
+        claims=claims, verification_scope="closed_realization",
         language=lang, advice=advice, advice_reason=advice_reason,
     )
     if (intelligence.session_classification.type == "intervals"

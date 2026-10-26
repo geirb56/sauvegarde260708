@@ -261,15 +261,15 @@ def test_category_uncertain_in_actual_v2_is_not_reclassified():
 
 
 @pytest.mark.parametrize("language,expected", [
-    ("fr", "Les répétitions comparables présentent des variations d'allure importantes."),
-    ("en", "The comparable repetitions show large pace variations."),
-    ("es", "Las repeticiones comparables presentan variaciones de ritmo importantes."),
+    ("fr", "Tes 4 répétitions comparables présentent des variations d'allure importantes."),
+    ("en", "Your 4 comparable repetitions show large pace variations."),
+    ("es", "Tus 4 repeticiones comparables muestran variaciones de ritmo importantes."),
 ])
 def test_variable_repetitions_without_direction_stay_descriptive(language, expected):
     v3, evidence = calculated_case([300, 330, 300, 330], language=language)
     assert regularity(v3, evidence) is not None
     assert pace_direction(v3, evidence) is None
-    claims = hybrid.select_deterministic_synthesis(facts(v3, evidence, language=language))
+    claims = hybrid.select_deterministic_synthesis(facts(v3, evidence, language=language), language)
     assert [claim.id for claim in claims] == ["interval.regularity"]
     assert claims[0].text == expected
 
@@ -300,12 +300,13 @@ def test_real_v2_direction_and_hybrid_output_for_five_repetitions(
         )
         result = run(v3, evidence, language=language)
         expected = {
-            "fr": "Les allures des répétitions comparables sont homogènes.",
-            "en": "The comparable repetitions have homogeneous paces.",
-            "es": "Los ritmos de las repeticiones comparables son homogéneos.",
+            "fr": "Sur tes 5 répétitions comparables, tu as couru à des allures proches.",
+            "en": "Your 5 comparable repetitions show similar paces.",
+            "es": "Tus 5 repeticiones comparables muestran ritmos similares.",
         }[language]
         assert result.claims[0].id == "interval.regularity"
-        assert result.text == expected
+        assert result.claims[0].text == expected
+        assert result.advice and result.text.count(result.advice.text) == 1
         return
 
     assert fact is not None
@@ -476,7 +477,7 @@ def test_directional_fact_cannot_be_hidden_or_duplicated_by_editorial_selection(
     assert injected.mode == "deterministic_fallback"
     assert injected.reason == "invalid_editorial_selection"
     assert injected.text.startswith(
-        "Les 2 dernières répétitions comparables sont 15 s/km plus lentes",
+        "Tes 2 dernières répétitions comparables sont en moyenne 15 s/km plus lentes",
     )
 
 
@@ -508,25 +509,28 @@ def test_repetition_direction_precedes_session_average_above_lt2(language, monke
         fact.id for fact in admitted
     }
     assert hybrid.primary_fact_candidates(admitted) == ("interval.pace_direction",)
-    claims = hybrid.select_deterministic_synthesis(admitted)
+    claims = hybrid.select_deterministic_synthesis(admitted, language)
     assert [claim.id for claim in claims[:2]] == [
         "interval.pace_direction", "intensity.position",
     ]
     expected = {
         "fr": (
-            "Les 2 dernières répétitions comparables sont 15 s/km plus lentes que les 2 premières "
+            "Tes 2 dernières répétitions comparables sont en moyenne 15 s/km plus lentes que les 2 premières "
             "(répétition centrale exclue).",
-            "Ta FC moyenne est de 180 bpm, au-dessus de LT2 ; elle ne décrit pas tout l'effort.",
+            "Ta FC moyenne est de 180 bpm, au-dessus de ton second seuil de 170 bpm. "
+            "Cette moyenne ne décrit ni chaque phase ni le temps en zones.",
         ),
         "en": (
-            "The final 2 comparable repetitions are 15 s/km slower than the opening 2 "
+            "Your last 2 comparable repetitions averaged 15 s/km slower than the first 2 "
             "(middle repetition excluded).",
-            "Your average HR is 180 bpm, above LT2; it does not describe the entire effort.",
+            "Your average HR is 180 bpm, above your second threshold of 170 bpm. "
+            "This average describes neither each phase nor time in zones.",
         ),
         "es": (
-            "Las 2 últimas repeticiones comparables son 15 s/km más lentas que las 2 primeras "
+            "Tus 2 últimas repeticiones comparables fueron de media 15 s/km más lentas que las 2 primeras "
             "(se excluye la repetición central).",
-            "Tu FC media es de 180 lpm, por encima de LT2; no describe todo el esfuerzo.",
+            "Tu FC media es de 180 lpm, por encima de tu segundo umbral de 170 lpm. "
+            "Esta media no describe cada fase ni el tiempo en zonas.",
         ),
     }[language]
     assert tuple(claim.text for claim in claims) == expected
@@ -572,7 +576,11 @@ def test_homogeneous_repetitions_allow_a_bounded_lt2_alternative(language, monke
     fallback = run(v3, evidence, language=language)
     assert fallback.mode == "deterministic_fallback"
     assert fallback.claims[0].id == "interval.regularity"
-    assert fallback.claims[0].text == HOMOGENEOUS[language]
+    assert fallback.claims[0].text == {
+        "fr": "Sur tes 5 répétitions comparables, tu as couru à des allures proches.",
+        "en": "Your 5 comparable repetitions show similar paces.",
+        "es": "Tus 5 repeticiones comparables muestran ritmos similares.",
+    }[language]
     assert [claim.id for claim in fallback.claims] == [
         "interval.regularity", "intensity.position",
     ]
@@ -838,7 +846,11 @@ def test_deterministic_fallback_prioritizes_v2_without_llm_access(language, monk
     result = run(v3, evidence, language=language)
     assert result.mode == "deterministic_fallback"
     assert not result.provider_attempted
-    assert result.claims[0].text == HOMOGENEOUS[language]
+    assert result.claims[0].text == {
+        "fr": "Sur tes 4 répétitions comparables, tu as couru à des allures proches.",
+        "en": "Your 4 comparable repetitions show similar paces.",
+        "es": "Tus 4 repeticiones comparables muestran ritmos similares.",
+    }[language]
     assert result.claims[0].id == "interval.regularity"
     assert len(result.claims) <= 3
     assert len({c.id for c in result.claims} & {

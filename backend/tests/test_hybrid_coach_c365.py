@@ -185,7 +185,7 @@ def test_distinctive_long_run_can_lead_a_supported_high_average_hr(language):
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
-def test_reliable_continuous_session_ranks_threshold_then_corroborated_history(language):
+def test_reliable_continuous_session_preserves_candidates_and_leads_fallback_with_history(language):
     # C378 continuous priorities: threshold position (3) before admissible history (4);
     # history stays a selectable candidate and the fallback's single support.
     v3 = synthetic_case("comparable_history")
@@ -196,7 +196,7 @@ def test_reliable_continuous_session_ranks_threshold_then_corroborated_history(l
     history += [f.id for f in facts if f.id.startswith("comparison.")]
     assert candidates == ("intensity.position", *history, "session.kind")
     fallback_ids = [c.id for c in hybrid.select_deterministic_synthesis(facts)]
-    assert fallback_ids == ["intensity.position", history[0]]
+    assert fallback_ids == [history[0]]
     packet = _context(v3, permissions=permissions, language=language)
     assert packet["primary_fact_candidates"] == list(candidates)
     primary = next(fact for fact in facts if fact.id == history[0])

@@ -136,7 +136,7 @@ def test_02_03_progressive_intervals_keep_observation_and_abstain_without_verifi
     assert dict(index["interval.regularity"].values)["regularity_band"] != "homogeneous"
     result = fallback(v3, evidence, language=language)
     # The factual progression is kept as the lead observation...
-    assert ids(result.claims) == ["interval.pace_direction"]
+    assert ids(result.claims) == ["interval.pace_direction", "effort.first", "effort.last"]
     assert {"fr": {"faster": "plus rapides", "slower": "plus lentes"},
             "en": {"faster": "faster", "slower": "slower"},
             "es": {"faster": "más rápid", "slower": "más lent"}}[language][direction] in result.text
@@ -290,7 +290,7 @@ def test_08_long_run_keeps_duration_first_and_never_concludes_fatigue(language):
 def test_09_authorized_history_is_kept_as_a_single_admissible_comparison(language):
     result = fallback(synthetic_case("comparable_history"), access=_access(),
                       language=language, history=True)
-    assert result.claims[0].id == "intensity.position"
+    assert result.claims[0].id.startswith(("trend.", "comparison."))
     historical = [c for c in result.claims if c.id.startswith(("trend.", "comparison."))]
     assert len(historical) == 1
     assert {"not_proof_of_fitness", "no_cause", "terrain_weather_not_controlled"} <= set(
