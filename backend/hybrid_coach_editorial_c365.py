@@ -240,6 +240,7 @@ class AdviceDecision:
     provenance: str | None = None
     source_paths: tuple[str, ...] = ()
     text: str = ""
+    rejections: tuple[tuple[str, str], ...] = ()
 
 
 ADVICE_REGISTRY: tuple[AdviceRule, ...] = (
@@ -328,21 +329,24 @@ def select_advice(
     rules = [rule for rule in ADVICE_REGISTRY if rule.trigger_fact == primary_id]
     if not rules:
         return AdviceDecision("no_advice_for_primary")
-    reason = "no_advice_for_primary"
+    rejections = []
     for rule in rules:
         unmet = next((c for c in rule.conditions if not _advice_predicate(c, index)), None)
         if unmet is not None:
-            reason = f"condition_unmet:{unmet}"
+            rejections.append((rule.id, f"condition_unmet:{unmet}"))
             continue
         blocked = next((c for c in rule.contraindications if _advice_predicate(c, index)), None)
         if blocked is not None:
-            reason = f"contraindicated:{blocked}"
+            rejections.append((rule.id, f"contraindicated:{blocked}"))
             continue
         return AdviceDecision(
             "advice_admitted", rule.id, primary_id, rule.conditions, rule.provenance,
             index[primary_id].source_paths, dict(rule.texts)[language],
         )
-    return AdviceDecision(reason)
+    # A met-but-contraindicated rule is the most informative abstention reason.
+    reason = next((r for _, r in rejections if r.startswith("contraindicated:")),
+                  rejections[0][1])
+    return AdviceDecision(reason, rejections=tuple(rejections))
 
 
 def _unique_object(pairs):
