@@ -15,13 +15,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from access_control import UserAccess
 from hybrid_coach_editorial_c365 import (
-    EditorialSelection, allowed_forms, editorial_intent, fact_category,
-    primary_fact_candidates, format_evidence_number,
+    AdviceDecision, EditorialSelection, allowed_forms, editorial_intent, editorial_scope,
+    fact_category, primary_fact_candidates, format_evidence_number, select_advice,
     format_recorded_seconds, RECORDED_WHOLE_DIGITS, realize_clause, validate_editorial_selection,
 )
 from narrative_coach_v3 import Transport, format_narrative_number
 from hybrid_coach_v2_c372 import (
-    ScopedV2Evidence, approved_v2_pace_direction, approved_v2_regularity,
+    ScopedV2Evidence, approved_v2_continuous_pacing, approved_v2_pace_direction,
+    approved_v2_regularity,
 )
 from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
@@ -59,7 +60,8 @@ _VALUE_MEANINGS = {
     "both_count": "Number of coherent recorded identities with both admitted metrics.",
     "regularity_band": "Exact V2 descriptive pacing band for all comparable recorded efforts, not physiology.",
     "direction": "V2's explicit faster/slower pace-direction conclusion.",
-    "scope": "V2's exact repetition comparison scope: equal endpoint groups or first-to-last.",
+    "scope": "V2's exact comparison scope: equal repetition endpoint groups, first-to-last repetition, or equal-distance halves of a continuous session.",
+    "coverage": "V2's declared measured coverage of the continuous session, not an independent check.",
     "pace_change_sec_per_km": "V2's already-established pace difference in its declared scope; later minus earlier.",
     "group_size": "Number of comparable repetitions in each V2 endpoint group.",
     "comparability_basis": "V2's declared basis for comparing the recorded efforts, not a new comparison.",
@@ -77,6 +79,9 @@ _REQUIRED_LIMITS = {
     "intensity.hr": ("no_physiological_zone", "average_not_whole_effort"),
     "session.unknown": ("unknown_not_easy",),
     "prescription.review": ("no_new_prescription", "no_inferred_cause"),
+    "continuous.pace_halves": (
+        "equal_distance_halves_only", "no_fatigue_or_endurance_inference", "no_causal_inference",
+    ),
 }
 
 @dataclass(frozen=True)
@@ -139,6 +144,8 @@ class HybridClaim(BaseModel):
     evidence_ids: list[str]
     conclusion_ids: list[str]
     evidence_refs: list[str]
+    # C378: interpretation limits stay attached to the claim even when not displayed.
+    limits: list[str] = Field(default_factory=list)
 
 
 class HybridResult(BaseModel):
@@ -161,6 +168,10 @@ class HybridResult(BaseModel):
     elapsed_ms: Optional[float] = None
     provider_duration_sec: Optional[float] = None
     cost: Optional[float] = None
+    language: Optional[str] = None
+    # C378: optional closed-registry advice for the primary claim, or why it abstained.
+    advice: Optional[HybridClaim] = None
+    advice_reason: Optional[str] = None
 
 
 def _authorized(access: Optional[UserAccess]) -> bool:
@@ -732,6 +743,39 @@ def build_admissible_facts(
                 conditions, limits, 120, refs,
                 realize_clause(assertion_source, "direct", lang),
             )
+    halves = approved_v2_continuous_pacing(
+        v2_evidence, user_id=access.user_id, workout_id=intelligence.workout_id,
+    ) if cls.type != "intervals" else None
+    if halves is not None:
+        path = f"workout_analysis_v2.coach_language.conclusions[{halves['index']}]"
+        values = {
+            "direction": halves["direction"], "scope": halves["scope"],
+            "pace_change_sec_per_km": halves["pace_change_sec_per_km"],
+            "coverage": halves["coverage"], "source": "workout_analysis_v2",
+        }
+        units = {"pace_change_sec_per_km": "s/km"}
+        conditions = [
+            "scoped_same_user_and_workout", "v2_continuous_structure",
+            "explicit_v2_faster_or_slower", "equal_distance_halves", "whole_session_measured",
+        ]
+        limits = list(_REQUIRED_LIMITS["continuous.pace_halves"]) + [
+            "terrain_weather_not_controlled",
+        ]
+        refs = [
+            "workout_analysis_v2.workout.id", "workout_analysis_v2.signals.session_structure",
+            f"{path}.code", f"{path}.available", f"{path}.kind",
+            f"{path}.metadata.direction", f"{path}.metadata.comparison_scope",
+            f"{path}.metadata.coverage", f"{path}.evidence.first_half_pace_sec_per_km",
+            f"{path}.evidence.second_half_pace_sec_per_km",
+            f"{path}.evidence.second_half_pace_change_sec_per_km",
+        ]
+        source = AdmissibleFact(
+            "continuous.pace_halves", tuple(values.items()), tuple(units.items()),
+            "v2_continuous_half_pace_direction", "none", tuple(conditions), tuple(limits),
+            115, tuple(refs), "",
+        )
+        add("continuous.pace_halves", values, units, "v2_continuous_half_pace_direction",
+            "none", conditions, limits, 115, refs, realize_clause(source, "direct", lang))
     return tuple(facts)
 
 
@@ -745,6 +789,7 @@ def build_hybrid_context(
         intelligence, access=access, permissions=permissions, language=language,
         v2_evidence=v2_evidence,
     )
+    facts = editorial_scope(facts)
     return {
         "language": _language(language),
         "facts": [
@@ -768,7 +813,34 @@ def _claim(fact: AdmissibleFact) -> HybridClaim:
     return HybridClaim(
         id=fact.id, text=fact.assertion, evidence_ids=[fact.id],
         conclusion_ids=[fact.allowed_conclusion], evidence_refs=list(fact.source_paths),
+        limits=list(fact.important_limits),
     )
+
+
+def advice_claim(decision: AdviceDecision) -> HybridClaim:
+    """Advice is a separate closed claim, traceable to its triggering admitted fact."""
+    return HybridClaim(
+        id=decision.advice_id, section="advice", text=decision.text,
+        evidence_ids=[decision.trigger_fact], conclusion_ids=[decision.advice_id],
+        evidence_refs=list(decision.source_paths),
+    )
+
+
+def admissible_advice(
+    claims: list[HybridClaim], facts: tuple[AdmissibleFact, ...], language: str,
+) -> tuple[Optional[HybridClaim], str]:
+    """At most one registry advice for the selected primary claim, or an abstention.
+
+    Returned separately so existing observation text/claims contracts are unchanged.
+    """
+    primary = claims[0].id if claims else None
+    decision = select_advice(primary, facts, _language(language))
+    if decision.advice_id is None:
+        return None, decision.reason
+    claim = advice_claim(decision)
+    if len(_render([*claims, claim])) > MAX_COACH_TEXT_CHARS:
+        return None, "size_limit"
+    return claim, decision.reason
 
 
 def _bounded_claims(facts: list[AdmissibleFact]) -> list[HybridClaim]:
@@ -784,9 +856,13 @@ def _bounded_claims(facts: list[AdmissibleFact]) -> list[HybridClaim]:
 
 
 def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[HybridClaim]:
-    """Apply contextual editorial rules and keep only distinct useful support."""
+    """Apply contextual editorial rules and keep only distinct useful support.
+
+    C378: prescription review is outside the Coach editorial scope; at most one
+    primary and two distinct supports, never two facts restating one observation.
+    """
     displayable = tuple(
-        fact for fact in facts if len(fact.assertion) <= MAX_COACH_TEXT_CHARS
+        fact for fact in editorial_scope(facts) if len(fact.assertion) <= MAX_COACH_TEXT_CHARS
     )
     index = {fact.id: fact for fact in displayable}
     primary_candidates = primary_fact_candidates(displayable)
@@ -795,52 +871,24 @@ def select_deterministic_synthesis(facts: tuple[AdmissibleFact, ...]) -> list[Hy
     primary_id = primary_candidates[0]
     intensity = index.get("intensity.position")
     high_intensity = (
-        intensity is not None and dict(intensity.values).get("position") == "above_LT2"
+        ("intensity.position",)
+        if intensity is not None and dict(intensity.values).get("position") == "above_LT2"
+        else ()
     )
-    prescription_deviation = (
-        "prescription.review" in index
-        and dict(index["prescription.review"].values).get("status") == "deviation"
-    )
-    if primary_id == "prescription.review":
-        history_facts = tuple(
-            fact for fact in displayable
-            if fact.id == "session.long" or fact.id.startswith(("trend.", "comparison."))
-        )
-        historical_candidate = primary_fact_candidates(history_facts)[:1]
-        repetition_candidate = next(
-            (fact_id for fact_id in (
-                "interval.pace_direction", "interval.regularity",
-                "effort.first", "effort.last", "interval.count",
-            ) if fact_id in index),
-            None,
-        )
-        support_ids = (*historical_candidate, repetition_candidate)
-        if high_intensity:
-            support_ids += ("intensity.position",)
-    elif primary_id == "session.long":
-        support_ids = ("intensity.position",) if high_intensity else ()
-        if prescription_deviation:
-            support_ids += ("prescription.review",)
-    elif primary_id.startswith(("trend.", "comparison.")):
-        support_ids = ("intensity.position",) if high_intensity else ()
-        if prescription_deviation:
-            support_ids += ("prescription.review",)
-    elif primary_id == "interval.pace_direction":
-        support_ids = ("intensity.position",) if high_intensity else ()
-        if prescription_deviation:
-            support_ids += ("prescription.review",)
-    elif primary_id == "interval.regularity":
-        support_ids = ("intensity.position",) if high_intensity else ()
-        if prescription_deviation:
-            support_ids += ("prescription.review",)
+    history = tuple(fact.id for fact in displayable if fact.id.startswith("trend."))
+    history += tuple(fact.id for fact in displayable if fact.id.startswith("comparison."))
+    if primary_id == "session.long":
+        support_ids = ("continuous.pace_halves", *high_intensity)
+    elif primary_id == "continuous.pace_halves":
+        support_ids = ("intensity.position", *history[:1])
     elif primary_id == "intensity.position":
-        support_ids = ("prescription.review",) if prescription_deviation else ()
+        support_ids = history[:1]
     elif primary_id == "interval.count":
         support_ids = ("intensity.position", "intensity.hr")
-    elif primary_id in {"effort.first", "effort.last"}:
-        support_ids = ("intensity.position",) if high_intensity else ()
-        if prescription_deviation:
-            support_ids += ("prescription.review",)
+    elif primary_id.startswith(("trend.", "comparison.")) or primary_id in {
+        "interval.pace_direction", "interval.regularity", "effort.first", "effort.last",
+    }:
+        support_ids = high_intensity
     else:
         support_ids = ()
 
@@ -1305,10 +1353,13 @@ async def generate_hybrid_coach(
         intelligence, access=access, permissions=permissions, language=language,
         v2_evidence=v2_evidence,
     )
+    lang = _language(language)
     claims = select_deterministic_synthesis(facts)
+    advice, advice_reason = admissible_advice(claims, facts, lang)
     result = HybridResult(
         mode="deterministic_fallback", reason="provider_unavailable",
         text=_render(claims), claims=claims, verification_scope="closed_realization",
+        language=lang, advice=advice, advice_reason=advice_reason,
     )
     if (intelligence.session_classification.type == "intervals"
             and not any(f.id == "interval.regularity" for f in facts)):
@@ -1333,9 +1384,9 @@ async def generate_hybrid_coach(
         "transitions or extra fields. Select the distinctive observation first, but only from the "
         "primary_fact_candidates contextual shortlist in the contract. It is not permission to select "
         "any admitted fact. "
-        "For repeated sessions, V2 pace direction remains the lead fact when admitted; a documented, "
-        "authorized type-level prescription deviation may also be a candidate, never an inferred pace "
-        "target. Do not promote session-average HR above LT2 over an admitted V2 direction. With V2 "
+        "Comment on the performed session only: never judge conformity to a plan or prescription. "
+        "For repeated sessions, V2 pace direction is the lead fact when admitted, unless V2 rates all "
+        "comparable efforts homogeneous. Do not promote session-average HR above LT2 over an admitted V2 direction. With V2 "
         "regularity but no direction, choose the more useful of that verdict and an independently "
         "admitted threshold observation. For continuous sessions, a supported long-duration comparison "
         "or corroborated history can lead; historical evidence is not automatically more important "
@@ -1372,11 +1423,13 @@ async def generate_hybrid_coach(
                 try:
                     selection = validate_editorial_selection(text, facts, _language(language))
                     realized = realize_editorial_selection(selection, facts, language)
+                    advice, advice_reason = admissible_advice(realized, facts, lang)
                 except (ValueError, TypeError):
                     result.reason = "invalid_editorial_selection"
                 else:
                     result.claims = realized
                     result.text = _render(realized)
+                    result.advice, result.advice_reason = advice, advice_reason
                     result.editorial_selection = selection
                     result.mode = "editorial_realization"
                     result.reason = "editorial_selection_validated"

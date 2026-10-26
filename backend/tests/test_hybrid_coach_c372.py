@@ -651,9 +651,10 @@ def test_repetition_direction_and_corroborated_history_are_bounded_alternatives(
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
-def test_documented_type_only_prescription_deviation_can_lead_v2_direction(
+def test_documented_prescription_deviation_never_leads_or_supports_coach_comment(
     language, monkeypatch,
 ):
+    # C378: the review stays admitted by C359 for other consumers, outside the Coach comment.
     v3, evidence = calculated_case([295, 300, 306, 310, 315], language=language)
     v3.prescription_assessment.status = "deviation"
     permissions = hybrid.HybridPermissions(prescription=True)
@@ -663,36 +664,34 @@ def test_documented_type_only_prescription_deviation_can_lead_v2_direction(
         v3, access=ACCESS, permissions=permissions, v2_evidence=evidence,
         language=language,
     )
-    assert hybrid.primary_fact_candidates(admitted) == (
-        "interval.pace_direction", "prescription.review",
-    )
-    fallback = hybrid.select_deterministic_synthesis(admitted)
-    assert fallback[0].id == "interval.pace_direction"
-    assert "prescription.review" in {claim.id for claim in fallback}
     review = next(fact for fact in admitted if fact.id == "prescription.review")
     assert "type_only_not_full_compliance" in review.important_limits
-    assert fallback[1].text == review.assertion
-    response = json.dumps({
-        "primary": {"fact_id": "prescription.review", "form": "direct"},
-        "supporting": [{"fact_id": "interval.pace_direction", "form": "direct"}],
-        "editorial_intent": "review_prescription",
-    })
-    chosen = validate_editorial_selection(response, admitted, language)
-    assert chosen.primary.fact_id == "prescription.review"
-    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
-    result = run(
-        v3, evidence, language=language, permissions=permissions,
-        transport=provider(response),
-    )
-    assert result.mode == "editorial_realization"
-    assert result.claims[0].id == "prescription.review"
-    assert result.claims[0].text == hybrid.realize_clause(review, "direct", language)
-    refused = run(
-        v3, evidence, language=language, permissions=permissions,
-        transport=provider(selection("interval.regularity")),
-    )
-    assert refused.mode == "deterministic_fallback"
-    assert refused.claims[0].id == "interval.pace_direction"
+    assert hybrid.primary_fact_candidates(admitted) == ("interval.pace_direction",)
+    fallback = hybrid.select_deterministic_synthesis(admitted)
+    assert fallback[0].id == "interval.pace_direction"
+    assert "prescription.review" not in {claim.id for claim in fallback}
+    for response in (
+        json.dumps({
+            "primary": {"fact_id": "prescription.review", "form": "direct"},
+            "supporting": [{"fact_id": "interval.pace_direction", "form": "direct"}],
+            "editorial_intent": "review_prescription",
+        }),
+        json.dumps({
+            "primary": {"fact_id": "interval.pace_direction", "form": "direct"},
+            "supporting": [{"fact_id": "prescription.review", "form": "direct"}],
+            "editorial_intent": "describe_session",
+        }),
+    ):
+        with pytest.raises(ValueError, match="prescription_outside_coach_scope"):
+            validate_editorial_selection(response, admitted, language)
+        monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+        result = run(
+            v3, evidence, language=language, permissions=permissions,
+            transport=provider(response),
+        )
+        assert result.mode == "deterministic_fallback"
+        assert result.claims[0].id == "interval.pace_direction"
+        assert review.assertion not in result.text
 
 
 @pytest.mark.parametrize("metadata", [

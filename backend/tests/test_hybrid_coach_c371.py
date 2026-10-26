@@ -570,8 +570,11 @@ def test_recorded_endpoint_stands_alone_without_a_distinctive_complement():
         permissions=hybrid.HybridPermissions(history=True),
     )
     claims = hybrid.select_deterministic_synthesis(rich)
-    assert claims[0].id.startswith("trend.")
-    assert len(claims) == 1
+    # C378: reliable threshold position leads a continuous session; history supports it.
+    assert [c.id for c in claims][0] == "intensity.position"
+    assert claims[1].id.startswith("trend.")
+    assert len(claims) == 2
+    assert not any(c.id.startswith("effort.") for c in claims)
 
 
 @pytest.mark.parametrize("prescription", [False, True])
@@ -582,8 +585,12 @@ def test_historical_comparison_precedes_generic_effort_observation(prescription)
         v3.prescription_assessment.status = "consistent"
     facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True, prescription=prescription))
     claims = hybrid.select_deterministic_synthesis(facts)
-    assert claims[0].id.startswith("comparison.")
-    assert len(claims) == 1
+    # C378: history still precedes generic recorded endpoints, after threshold position;
+    # a prescription review is never part of the Coach comment.
+    assert claims[0].id == "intensity.position"
+    assert claims[1].id.startswith("comparison.")
+    assert len(claims) == 2
+    assert not any(c.id.startswith("effort.") or c.id == "prescription.review" for c in claims)
 
 
 def test_above_threshold_observation_kept_instead_of_redundant_effort_coverage():
@@ -616,9 +623,11 @@ def test_above_lt2_not_displaced_when_history_and_prescription_fill_support_slot
     facts = _facts(v3, language=language, permissions=permissions)
     assert f"effort.{endpoint}" in {f.id for f in facts}
     claims = hybrid.select_deterministic_synthesis(facts)
-    assert claims[0].id.startswith("trend." if trend else "comparison.")
-    assert [c.id for c in claims[1:]] == ["intensity.position"]
-    assert "180" in claims[1].text
+    # C378: the above-LT2 average leads; history is the single support; no prescription.
+    assert claims[0].id == "intensity.position"
+    assert "180" in claims[0].text
+    assert len(claims) == 2
+    assert claims[1].id.startswith("trend." if trend else "comparison.")
     assert len(hybrid._render(claims)) <= hybrid.MAX_COACH_TEXT_CHARS
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = _run(
@@ -713,10 +722,13 @@ def test_historical_and_prescription_admissions_preserved_in_fallback(monkeypatc
     v3 = v3.model_copy(update={"prescription_assessment": WIV3PrescriptionAssessment(status="consistent")})
     facts = _facts(v3, permissions=permissions)
     claims = hybrid.select_deterministic_synthesis(facts)
-    assert claims[0].id == "session.long" if base == "long" else claims[0].id.startswith(
-        ("trend.", "comparison."),
-    )
-    assert len(claims) == 1
+    if base == "long":
+        assert [c.id for c in claims] == ["session.long"]
+    else:
+        assert claims[0].id == "intensity.position"
+        assert claims[1].id.startswith(("trend.", "comparison."))
+        assert len(claims) == 2
+    assert "prescription.review" not in {c.id for c in claims}
     assert "prescription.review" in {fact.id for fact in facts}
     unauthorized = {f.id for f in _facts(v3)}
     assert "prescription.review" not in unauthorized

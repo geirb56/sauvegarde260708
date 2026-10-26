@@ -18,8 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from access_control import UserAccess
 import hybrid_coach_c359 as legacy
 from hybrid_coach_editorial_c365 import (
-    EditorialClause, EditorialSelection, editorial_intent, primary_fact_candidates,
-    realize_clause, validate_editorial_selection,
+    EDITORIAL_EXCLUDED_FACTS, EditorialClause, EditorialSelection, editorial_intent,
+    primary_fact_candidates, realize_clause, validate_editorial_selection,
 )
 from hybrid_coach_v2_c372 import ScopedV2Evidence
 from narrative_coach_v3 import Transport
@@ -55,6 +55,9 @@ class EditorialOption:
     editorial_intent: str
     forms: tuple[str, ...]
     claims: tuple[legacy.HybridClaim, ...]
+    # C378: optional closed-registry advice for this option's primary (not in ``text``).
+    advice: legacy.HybridClaim | None = None
+    advice_reason: str | None = None
 
     @property
     def text(self) -> str:
@@ -66,6 +69,7 @@ class EditorialOption:
             "primary": self.primary,
             "supporting": list(self.supporting),
             "editorial_intent": self.editorial_intent,
+            "advice_id": self.advice.id if self.advice is not None else None,
             "clauses": [
                 {**facts[fact_id].provider_fact(), "allowed_forms": [form]}
                 for fact_id, form in zip((self.primary, *self.supporting), self.forms)
@@ -88,6 +92,9 @@ class ClosedChoiceResult(BaseModel):
     elapsed_ms: float | None = None
     provider_duration_sec: float | None = None
     cost: float | None = None
+    language: str | None = None
+    advice: legacy.HybridClaim | None = None
+    advice_reason: str | None = None
     blockers: list[str] = Field(default_factory=lambda: [
         "real_llm_editorial_quality_not_evaluated",
     ])
@@ -105,7 +112,8 @@ def _validate_composition(primary, supporting, facts, language):
     index = {fact.id: fact for fact in facts}
     if (len(index) != len(facts) or len(ids) != len(set(ids)) or len(supporting) > 2
             or any(fact_id not in index for fact_id in ids)
-            or primary not in _candidates(facts)):
+            or primary not in _candidates(facts)
+            or set(ids) & EDITORIAL_EXCLUDED_FACTS):
         raise SelectionFailure("option_not_admissible")
     selected = set(ids)
     # Unknown already contains the available HR: adding descriptive HR repeats it.
@@ -145,6 +153,15 @@ def _validate_composition(primary, supporting, facts, language):
 
 
 def _realize(fact, form, language):
+    """C378: show a caveat only where the clause alone could mislead.
+
+    Strictly descriptive clauses (counts, recorded endpoints, scoped pace
+    comparisons, probable type, duration) no longer repeat physiological
+    disclaimers: their limits stay in ``HybridClaim.limits`` and in the admitted
+    fact, and every option is still rebuilt and compared before/after selection.
+    A threshold position (average read as whole-session intensity) and a
+    historical comparison (read as a fitness change) keep one short caveat.
+    """
     if form != "direct":
         raise SelectionFailure("option_not_admissible")
     text = realize_clause(fact, form, language)
@@ -152,59 +169,24 @@ def _realize(fact, form, language):
     def tr(fr, en, es):
         return {"fr": fr, "en": en, "es": es}[language]
 
-    if fact.id in {"intensity.hr", "intensity.position", "session.unknown"}:
+    if fact.id == "intensity.position":
         text += tr(
-            " Une FC moyenne ne décrit pas chaque phase ni le temps en zones et ne démontre ni progression ni cause physiologique.",
-            " An average HR describes neither each phase nor time in zones and establishes neither progress nor a physiological cause.",
-            " Una FC media no describe cada fase ni el tiempo en zonas y no demuestra progreso ni una causa fisiológica.",
+            " Cette moyenne ne décrit ni chaque phase ni le temps en zones.",
+            " This average describes neither each phase nor time in zones.",
+            " Esta media no describe cada fase ni el tiempo en zonas.",
         )
-    if fact.id in {"interval.regularity", "interval.pace_direction"}:
+    if fact.id.startswith("comparison."):
         text += tr(
-            " Cette observation des allures des répétitions comparables enregistrées ne démontre ni fatigue, ni récupération, ni progression physiologique, ni causalité.",
-            " This observation of recorded comparable repetition paces establishes neither fatigue, recovery, physiological progress nor causality.",
-            " Esta observación de los ritmos de repeticiones comparables registradas no demuestra fatiga, recuperación, progreso fisiológico ni causalidad.",
+            " Les effets du terrain et de la météo ne sont pas isolés ; ce n'est pas une preuve de changement de forme.",
+            " Effects of terrain and weather are not isolated; this is not proof of a fitness change.",
+            " No se aíslan los efectos del terreno y del clima; no es una prueba de cambio de forma.",
         )
-    if fact.id == "interval.regularity":
+    if fact.id.startswith("trend."):
+        # The trend assertion already states it is not proof of a fitness change.
         text += tr(
-            " Ce constat décrit les allures, pas une stabilité physiologique ni une évaluation bonne ou mauvaise.",
-            " This describes paces, not physiological stability or a good-or-bad assessment.",
-            " Esto describe ritmos, no estabilidad fisiológica ni una valoración buena o mala.",
-        )
-    if fact.id == "interval.count":
-        text += tr(
-            " Ce décompte ne donne pas les durées des répétitions et ne permet pas de juger leur régularité.",
-            " This count supplies no repetition durations and does not establish regularity.",
-            " Este recuento no aporta duraciones de repeticiones ni permite juzgar su regularidad.",
-        )
-    if fact.id == "session.kind":
-        text += tr(
-            " Ce type probable ne détermine pas l'intensité physiologique de chaque phase.",
-            " This probable type does not establish each phase's physiological intensity.",
-            " Este tipo probable no determina la intensidad fisiológica de cada fase.",
-        )
-    if fact.id.startswith("effort."):
-        text += tr(
-            " Ces observations enregistrées ne garantissent pas la couverture de toute la séance et ne démontrent ni fatigue ni récupération.",
-            " These recorded observations do not guarantee whole-session coverage and establish neither fatigue nor recovery.",
-            " Estas observaciones registradas no garantizan la cobertura de toda la sesión ni demuestran fatiga o recuperación.",
-        )
-    if fact.id.startswith(("comparison.", "trend.")):
-        text += tr(
-            " Ce n'est pas une preuve de changement de forme ni de causalité ; les effets du terrain et de la météo ne sont pas isolés.",
-            " This is not proof of a fitness change or causality; terrain and weather effects are not isolated.",
-            " No es una prueba de cambio de forma ni de causalidad; no se aíslan los efectos del terreno y del clima.",
-        )
-    if fact.id == "session.long":
-        text += tr(
-            " La durée ne détermine pas l'intensité physiologique.",
-            " Duration does not establish physiological intensity.",
-            " La duración no determina la intensidad fisiológica.",
-        )
-    if fact.id == "prescription.review":
-        text += tr(
-            " Cette lecture porte uniquement sur le type probable, pas sur la conformité complète ; elle n'infère aucune cause et ne crée aucune prescription ni allure cible.",
-            " This reviews probable type only, not full compliance; it infers no cause and creates no prescription or target pace.",
-            " Esta lectura trata solo del tipo probable, no del cumplimiento completo; no infiere causas ni crea prescripciones o ritmos objetivo.",
+            " Les effets du terrain et de la météo ne sont pas isolés.",
+            " Effects of terrain and weather are not isolated.",
+            " No se aíslan los efectos del terreno y del clima.",
         )
     return legacy._claim(fact).model_copy(update={"text": text})
 
@@ -215,12 +197,13 @@ def _make_option(option_id, primary, supporting, facts, language):
     forms = ("direct",) * (1 + len(supporting))
     claims = tuple(_realize(index[fact_id], form, language)
                    for fact_id, form in zip((primary, *supporting), forms))
-    option = EditorialOption(
-        option_id, primary, supporting, editorial_intent(index[primary]), forms, claims,
-    )
-    if len(option.text) > legacy.MAX_COACH_TEXT_CHARS:
+    if len(" ".join(claim.text for claim in claims)) > legacy.MAX_COACH_TEXT_CHARS:
         raise SelectionFailure("size_limit")
-    return option
+    advice, advice_reason = legacy.admissible_advice(list(claims), facts, language)
+    return EditorialOption(
+        option_id, primary, supporting, editorial_intent(index[primary]), forms, claims,
+        advice, advice_reason,
+    )
 
 
 def validate_option(option, facts, language):
@@ -241,18 +224,20 @@ def build_editorial_options(
     language = legacy._language(language)
     index = {fact.id: fact for fact in facts}
     enriched, bare = [], []
-    deviation = ("prescription.review" in index
-                 and dict(index["prescription.review"].values).get("status") == "deviation")
+    history = tuple(f.id for f in facts if f.id.startswith("trend."))
+    history += tuple(f.id for f in facts if f.id.startswith("comparison."))
     for primary in _candidates(facts):
         base = _make_option("", primary, (), facts, language)
         support = []
         preferred = []
         if primary == "interval.pace_direction":
             preferred.append("interval.regularity")
-        if deviation:
-            preferred.append("prescription.review")
         if primary == "intensity.position":
-            preferred.append("session.kind")
+            preferred.extend(("session.kind", *history[:1]))
+        elif primary == "continuous.pace_halves":
+            preferred.extend(("intensity.position", *history[:1]))
+        elif primary == "session.long":
+            preferred.append("continuous.pace_halves")
         elif primary == "session.kind":
             preferred.append("intensity.position")
         elif primary == "interval.count":
@@ -275,7 +260,7 @@ def build_editorial_options(
             bare.append(base)
     options = tuple(
         EditorialOption(f"option_{i}", o.primary, o.supporting, o.editorial_intent,
-                        o.forms, o.claims)
+                        o.forms, o.claims, o.advice, o.advice_reason)
         for i, o in enumerate((enriched + bare)[:MAX_OPTIONS], 1)
     )
     for option in options:
@@ -345,8 +330,8 @@ async def generate_closed_choice_coach(
         return ClosedChoiceResult(mode="disabled", reason="flag_off")
     if not access.can("llm_access"):
         return ClosedChoiceResult(mode="denied", reason="llm_access_not_authorized")
-    result = ClosedChoiceResult(mode="failed", reason="provider_unavailable")
     language = legacy._language(language)
+    result = ClosedChoiceResult(mode="failed", reason="provider_unavailable", language=language)
     try:
         facts = legacy.build_admissible_facts(
             intelligence, access=access, permissions=permissions,
@@ -408,6 +393,7 @@ async def generate_closed_choice_coach(
         result.option_id = selected.option_id
         result.text = selected.text
         result.claims = list(selected.claims)
+        result.advice, result.advice_reason = selected.advice, selected.advice_reason
         result.verification_scope = "closed_realization"
     except asyncio.TimeoutError:
         result.reason = "timeout"

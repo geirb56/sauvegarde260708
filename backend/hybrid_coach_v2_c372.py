@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import math
 
+from coach_language import PACE_DISPLAY_CHANGE_SEC_KM
 from narrative_coach_v3 import _approved_repetition_judgment
 from workout_analysis_v2 import WorkoutAnalysisV2Response
 
@@ -152,5 +153,59 @@ def approved_v2_pace_direction(
                 "pace_change_sec_per_km": change,
             }
         return None
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def approved_v2_continuous_pacing(
+    evidence: ScopedV2Evidence | None, *, user_id: str, workout_id: str,
+) -> dict | None:
+    """C378: admit only V2's own significant equal-distance-halves pace conclusion.
+
+    No new comparison is computed: the direction and change are V2's, and only
+    their internal coherence (sign, difference, V2 display threshold, whole
+    measured coverage, continuous structure) is checked before transport.
+    """
+    if (type(evidence) is not ScopedV2Evidence or not user_id or not workout_id
+            or evidence.user_id != user_id or evidence.source != "workout_analysis_v2"
+            or type(evidence.analysis) is not WorkoutAnalysisV2Response):
+        return None
+    analysis = evidence.analysis
+    try:
+        structure = analysis.signals.session_structure
+        if (analysis.version != "v2" or analysis.workout.id != workout_id
+                or structure.available is not True or structure.code != "continuous"
+                or analysis.coach_language is None
+                or analysis.phase_analysis.efforts and len(analysis.phase_analysis.phases) != 1):
+            return None
+        conclusions = analysis.coach_language.conclusions
+        eligible = [
+            item for item in conclusions
+            if item.code in {"coach.pacing", "coach.execution.pace_hr"}
+        ]
+        if len(eligible) != 1:
+            return None
+        item = eligible[0]
+        metadata, proof = item.metadata, item.evidence
+        direction = metadata.get("direction")
+        first = proof.get("first_half_pace_sec_per_km")
+        second = proof.get("second_half_pace_sec_per_km")
+        change = proof.get("second_half_pace_change_sec_per_km")
+        if (item.available is not True or item.kind != "conclusion"
+                or metadata.get("comparison_scope") != "equal_distance_halves"
+                or metadata.get("coverage") != "whole_session"
+                or direction not in {"faster", "slower"}
+                or not all(_finite_positive(value) for value in (first, second))
+                or not _finite_number(change)
+                or not math.isclose(change, second - first, rel_tol=0, abs_tol=1e-8)
+                or abs(change) < PACE_DISPLAY_CHANGE_SEC_KM
+                or (direction == "faster" and change >= 0)
+                or (direction == "slower" and change <= 0)):
+            return None
+        return {
+            "direction": direction, "scope": "equal_distance_halves",
+            "pace_change_sec_per_km": change, "coverage": "whole_session",
+            "code": item.code, "index": conclusions.index(item),
+        }
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         return None
