@@ -20,6 +20,7 @@ import hybrid_coach_c359 as legacy
 from hybrid_coach_editorial_c365 import (
     EDITORIAL_EXCLUDED_FACTS, EditorialClause, EditorialSelection, editorial_intent,
     primary_fact_candidates, realize_clause, validate_editorial_selection,
+    format_evidence_number, format_recorded_seconds,
 )
 from hybrid_coach_v2_c372 import ScopedV2Evidence
 from narrative_coach_v3 import Transport
@@ -55,13 +56,15 @@ class EditorialOption:
     editorial_intent: str
     forms: tuple[str, ...]
     claims: tuple[legacy.HybridClaim, ...]
-    # C378: optional closed-registry advice for this option's primary (not in ``text``).
+    # Structured advice is preserved; the complete realization includes it once.
     advice: legacy.HybridClaim | None = None
     advice_reason: str | None = None
 
     @property
     def text(self) -> str:
-        return " ".join(claim.text for claim in self.claims)
+        return " ".join(claim.text for claim in (
+            *self.claims, *((self.advice,) if self.advice else ()),
+        ))
 
     def provider_option(self, facts: dict[str, legacy.AdmissibleFact]) -> dict:
         return {
@@ -102,6 +105,14 @@ class ClosedChoiceResult(BaseModel):
 
 def _candidates(facts):
     candidates = primary_fact_candidates(facts)
+    index = {f.id: f for f in facts}
+    intensity = index.get("intensity.position")
+    if (candidates and candidates[0] == "intensity.position" and intensity
+            and dict(intensity.values).get("position") != "above_LT2"):
+        history = tuple(f for f in candidates if f.startswith(("trend.", "comparison.")))
+        if history:
+            # A qualified personal comparison is more distinctive than a routine average.
+            candidates = (*history, *(f for f in candidates if f not in history))
     if any(f.id == "session.unknown" for f in facts) and "intensity.hr" in candidates:
         return (*candidates, "session.unknown")
     return candidates
@@ -128,6 +139,10 @@ def _validate_composition(primary, supporting, facts, language):
         relaxed.add("session.kind" if primary != "session.kind" else "intensity.position")
     if {"interval.regularity", "interval.pace_direction"} <= selected:
         relaxed.add("interval.regularity")
+    # Recorded endpoints illustrate a scoped group comparison, never replace it.
+    # Keep the old exclusion when a global regularity verdict is also present.
+    if "interval.pace_direction" in selected and "interval.regularity" not in selected:
+        relaxed.update(selected & {"effort.first", "effort.last"})
     if primary == "session.unknown" and primary not in primary_fact_candidates(facts):
         # No support is needed: the unknown fact already includes descriptive HR.
         if supporting:
@@ -152,7 +167,7 @@ def _validate_composition(primary, supporting, facts, language):
         raise SelectionFailure("option_not_admissible")
 
 
-def _realize(fact, form, language):
+def _realize(fact, form, language, *, pace_only=False):
     """C378: show a caveat only where the clause alone could mislead.
 
     Strictly descriptive clauses (counts, recorded endpoints, scoped pace
@@ -169,7 +184,127 @@ def _realize(fact, form, language):
     def tr(fr, en, es):
         return {"fr": fr, "en": en, "es": es}[language]
 
+    values = dict(fact.values)
+
+    def num(key):
+        return format_evidence_number(values[key], language)
+
+    if fact.id == "interval.regularity":
+        band = values["regularity_band"]
+        description = {
+            "homogeneous": tr("des allures proches", "similar paces", "ritmos similares"),
+            "noticeable": tr("des variations d'allure perceptibles",
+                             "noticeable pace variations", "variaciones de ritmo perceptibles"),
+            "variable": tr("des variations d'allure importantes",
+                           "large pace variations", "variaciones de ritmo importantes"),
+        }[band]
+        text = tr(
+            f"Sur tes {num('efforts')} répétitions comparables, tu as couru à {description}."
+            if band == "homogeneous" else
+            f"Tes {num('efforts')} répétitions comparables présentent {description}.",
+            f"Your {num('efforts')} comparable repetitions show {description}.",
+            f"Tus {num('efforts')} repeticiones comparables muestran {description}.",
+        )
+    elif fact.id == "interval.pace_direction":
+        # V2 group deltas are averages, not differences between individual endpoints.
+        if values["scope"] == "equal_count_endpoint_groups_middle_excluded":
+            text = text.replace(" s/km plus ", " s/km en moyenne plus ")
+            text = text.replace(" s/km faster", " s/km faster on average")
+            text = text.replace(" s/km slower", " s/km slower on average")
+            text = text.replace(" s/km más ", " s/km de media más ")
+    elif fact.id in {"effort.first", "effort.last"}:
+        label = tr("premier", "first", "primer") if fact.id == "effort.first" else tr(
+            "dernier", "last", "último",
+        )
+        pace = format_recorded_seconds(values["recorded_pace"], language, pace=True) \
+            if "recorded_pace" in values else None
+        duration = format_recorded_seconds(values["recorded_duration"], language) \
+            if "recorded_duration" in values else None
+        if pace_only and pace:
+            duration = None
+        detail = tr(f"a duré {duration}", f"lasted {duration}", f"duró {duration}") \
+            if duration else tr(f"est à {pace}", f"was at {pace}", f"fue a {pace}")
+        if duration and pace:
+            detail += tr(f", à {pace}", f" at {pace}", f", a {pace}")
+        text = tr(
+            f"Dans l'ordre enregistré, ton {label} effort {detail}.",
+            f"In the recorded order, your {label} effort {detail}.",
+            f"En el orden registrado, tu {label} esfuerzo {detail}.",
+        )
+        if pace_only and fact.id == "effort.last":
+            text = tr(f"Ton dernier effort {detail}.", f"Your last effort {detail}.",
+                      f"Tu último esfuerzo {detail}.")
+    elif fact.id == "intensity.hr":
+        text = tr(
+            f"Ta fréquence cardiaque moyenne est de {num('average_hr')} bpm, sans repère personnel validé pour interpréter cette valeur.",
+            f"Your average heart rate is {num('average_hr')} bpm, without a validated personal reference to interpret it.",
+            f"Tu frecuencia cardíaca media es de {num('average_hr')} lpm, sin una referencia personal validada para interpretarla.",
+        )
+    elif fact.id.startswith("comparison."):
+        pace = fact.id == "comparison.pace"
+        key = "pace_difference" if pace else "hr_difference"
+        delta = values[key]
+        change = format_evidence_number(abs(delta), language)
+        n = num("references")
+        if delta == 0:
+            text = tr(
+                "Ta fréquence cardiaque moyenne est la même que sur les séances de référence à allure comparable."
+                if not pace else "Ton allure est la même que sur les séances de référence à FC comparable.",
+                "Your average heart rate matches the reference sessions at comparable pace."
+                if not pace else "Your pace matches the reference sessions at comparable heart rate.",
+                "Tu frecuencia cardíaca media coincide con las sesiones de referencia a ritmo comparable."
+                if not pace else "Tu ritmo coincide con las sesiones de referencia a FC comparable.",
+            )
+        elif pace:
+            text = tr(
+                f"À FC comparable, ton allure est {change} s/km plus {'rapide' if delta < 0 else 'lente'} que la moyenne de tes {n} séances de référence.",
+                f"At comparable heart rate, your pace is {change} s/km {'faster' if delta < 0 else 'slower'} than the average of your {n} reference sessions.",
+                f"A FC comparable, tu ritmo es {change} s/km más {'rápido' if delta < 0 else 'lento'} que la media de tus {n} sesiones de referencia.",
+            )
+        else:
+            text = tr(
+                f"À allure comparable, ta fréquence cardiaque moyenne est {change} bpm plus {'basse' if delta < 0 else 'élevée'} que la moyenne de tes {n} séances de référence.",
+                f"At comparable pace, your average heart rate is {change} bpm {'lower' if delta < 0 else 'higher'} than the average of your {n} reference sessions.",
+                f"A ritmo comparable, tu frecuencia cardíaca media es {change} lpm más {'baja' if delta < 0 else 'alta'} que la media de tus {n} sesiones de referencia.",
+            )
+    elif fact.id.startswith("trend."):
+        delta = values["median_change"]
+        change = format_evidence_number(abs(delta), language)
+        detail = tr(
+            f"ton allure médiane récente est {change} s/km plus {'rapide' if delta < 0 else 'lente'} qu'auparavant",
+            f"your recent median pace is {change} s/km {'faster' if delta < 0 else 'slower'} than before",
+            f"tu ritmo mediano reciente es {change} s/km más {'rápido' if delta < 0 else 'lento'} que antes",
+        ) if delta else tr("ton allure médiane est inchangée", "your median pace is unchanged",
+                          "tu ritmo mediano no ha cambiado")
+        text = tr(
+            f"Sur les {num('observations')} observations de ton historique, {detail}.",
+            f"Across the {num('observations')} observations in your history, {detail}.",
+            f"En las {num('observations')} observaciones de tu historial, {detail}.",
+        )
+        if "span" in values:
+            text = text[:-1] + tr(
+                f" sur {num('span')} jours.", f" over {num('span')} days.",
+                f" durante {num('span')} días.",
+            )
+        # Keep V3's qualified status: a pace observation is not proof of fitness.
+        qualification = {
+            "probable_improvement": tr("amélioration probable", "probable improvement",
+                                       "mejora probable"),
+            "possible_decline": tr("baisse possible", "possible decline", "descenso posible"),
+            "stable": tr("tendance stable", "stable trend", "tendencia estable"),
+        }[values["status"]]
+        text += tr(
+            f" Cela suggère une {qualification}, sans prouver un changement de forme.",
+            f" This suggests a {qualification}, not proof of a fitness change.",
+            f" Esto sugiere una {qualification}, sin demostrar un cambio de forma.",
+        )
     if fact.id == "intensity.position":
+        for technical, plain in {
+            "fr": (("ton LT1", "ton premier seuil"), ("ton LT2", "ton second seuil")),
+            "en": (("your LT1", "your first threshold"), ("your LT2", "your second threshold")),
+            "es": (("tu LT1", "tu primer umbral"), ("tu LT2", "tu segundo umbral")),
+        }[language]:
+            text = text.replace(technical, plain)
         text += tr(
             " Cette moyenne ne décrit ni chaque phase ni le temps en zones.",
             " This average describes neither each phase nor time in zones.",
@@ -182,11 +317,12 @@ def _realize(fact, form, language):
             " No se aíslan los efectos del terreno y del clima; no es una prueba de cambio de forma.",
         )
     if fact.id.startswith("trend."):
-        # The trend assertion already states it is not proof of a fitness change.
-        text += tr(
-            " Les effets du terrain et de la météo ne sont pas isolés.",
-            " Effects of terrain and weather are not isolated.",
-            " No se aíslan los efectos del terreno y del clima.",
+        text = text.replace(
+            tr("sans prouver un changement de forme.", "not proof of a fitness change.",
+               "sin demostrar un cambio de forma."),
+            tr("sans prouver un changement de forme ; les effets du terrain et de la météo restent mêlés.",
+               "not proof of a fitness change; effects of terrain and weather remain mixed.",
+               "sin demostrar un cambio de forma; los efectos del terreno y del clima siguen mezclados."),
         )
     return legacy._claim(fact).model_copy(update={"text": text})
 
@@ -195,11 +331,19 @@ def _make_option(option_id, primary, supporting, facts, language):
     _validate_composition(primary, supporting, facts, language)
     index = {fact.id: fact for fact in facts}
     forms = ("direct",) * (1 + len(supporting))
-    claims = tuple(_realize(index[fact_id], form, language)
+    claims = tuple(_realize(
+        index[fact_id], form, language,
+        pace_only=(primary == "interval.pace_direction"
+                   and fact_id in {"effort.first", "effort.last"}
+                   and {"effort.first", "effort.last"} <= set(supporting)
+                   and dict(index["effort.first"].values).get("recorded_duration") ==
+                   dict(index["effort.last"].values).get("recorded_duration")),
+    )
                    for fact_id, form in zip((primary, *supporting), forms))
-    if len(" ".join(claim.text for claim in claims)) > legacy.MAX_COACH_TEXT_CHARS:
-        raise SelectionFailure("size_limit")
     advice, advice_reason = legacy.admissible_advice(list(claims), facts, language)
+    text = " ".join(c.text for c in (*claims, *((advice,) if advice else ())))
+    if len(text) > legacy.MAX_COACH_TEXT_CHARS:
+        raise SelectionFailure("size_limit")
     return EditorialOption(
         option_id, primary, supporting, editorial_intent(index[primary]), forms, claims,
         advice, advice_reason,
@@ -222,22 +366,28 @@ def build_editorial_options(
 ) -> tuple[EditorialOption, ...]:
     """At most two information sets per primary, never lexical permutations."""
     language = legacy._language(language)
-    index = {fact.id: fact for fact in facts}
+    # Zero deltas remain admitted, but are not an editorial result in themselves.
+    displayable = tuple(f for f in facts if not (
+        f.id.startswith("comparison.")
+        and dict(f.values).get("pace_difference" if f.id == "comparison.pace" else "hr_difference") == 0
+    ))
+    index = {fact.id: fact for fact in displayable}
     enriched, bare = [], []
-    history = tuple(f.id for f in facts if f.id.startswith("trend."))
-    history += tuple(f.id for f in facts if f.id.startswith("comparison."))
-    for primary in _candidates(facts):
+    history = tuple(f.id for f in displayable if f.id.startswith("trend."))
+    history += tuple(f.id for f in displayable if f.id.startswith("comparison."))
+    endpoints = []
+    for primary in _candidates(displayable):
         base = _make_option("", primary, (), facts, language)
         support = []
         preferred = []
         if primary == "interval.pace_direction":
             preferred.append("interval.regularity")
         if primary == "intensity.position":
-            preferred.extend(("session.kind", *history[:1]))
+            preferred.extend((*history[:1],) if history else ("session.kind",))
         elif primary == "continuous.pace_halves":
             preferred.extend(("intensity.position", *history[:1]))
         elif primary == "session.long":
-            preferred.append("continuous.pace_halves")
+            preferred.extend(("continuous.pace_halves", *history[:1], "intensity.position"))
         elif primary == "session.kind":
             preferred.append("intensity.position")
         elif primary == "interval.count":
@@ -246,7 +396,9 @@ def build_editorial_options(
             preferred.extend(("effort.last", "effort.coverage"))
         intensity = index.get("intensity.position")
         if intensity and dict(intensity.values).get("position") == "above_LT2":
-            preferred.append("intensity.position")
+            preferred = ["intensity.position"] if primary in {
+                "interval.pace_direction", "interval.regularity", "effort.first", "effort.last",
+            } else ["intensity.position", *preferred]
         for fact_id in preferred:
             if fact_id not in index or fact_id in (primary, *support) or len(support) == 2:
                 continue
@@ -256,16 +408,53 @@ def build_editorial_options(
                 continue
             support.append(fact_id)
         enriched.append(_make_option("", primary, tuple(support), facts, language))
+        if primary == "interval.pace_direction":
+            endpoint_ids = tuple(f for f in ("effort.first", "effort.last") if f in index)
+            # One first/last comparison already describes these endpoints; do not repeat it.
+            if (dict(index[primary].values)["scope"] ==
+                    "equal_count_endpoint_groups_middle_excluded" and endpoint_ids):
+                endpoints.append(_make_option("", primary, endpoint_ids, facts, language))
         if support:
             bare.append(base)
     options = tuple(
         EditorialOption(f"option_{i}", o.primary, o.supporting, o.editorial_intent,
                         o.forms, o.claims, o.advice, o.advice_reason)
-        for i, o in enumerate((enriched + bare)[:MAX_OPTIONS], 1)
+        for i, o in enumerate((enriched + endpoints + bare)[:MAX_OPTIONS], 1)
     )
     for option in options:
         validate_option(option, facts, language)
     return options
+
+
+def select_deterministic_option(options: tuple[EditorialOption, ...]) -> EditorialOption:
+    """Use the existing primary order; prefer complementary details, never raw length.
+
+    Option IDs encode the contextual primary ordering supplied by the builder.
+    Within that primary, endpoint groups gain concrete recorded endpoints;
+    other primaries keep the shortest useful composition rather than a metric
+    checklist. IDs break ties independently of presentation order.
+    """
+    if not options:
+        raise SelectionFailure("option_not_admissible")
+    first = min(options, key=lambda o: int(o.option_id.removeprefix("option_")))
+    same_primary = [o for o in options if o.primary == first.primary]
+    if "intensity.position" in first.supporting:
+        return first
+    if first.primary == "interval.pace_direction":
+        endpoints = [o for o in same_primary if "effort.first" in o.supporting
+                     and "effort.last" in o.supporting]
+        if endpoints:
+            return min(endpoints, key=lambda o: (len(o.text), o.option_id))
+        # A global variation band complements a first/last comparison.
+        return first
+    if first.primary == "session.long":
+        return first
+    # Keep history or a measured threshold as useful complementary information.
+    useful = [o for o in same_primary if any(
+        f.startswith(("trend.", "comparison.")) or f == "intensity.position"
+        for f in o.supporting
+    )]
+    return min(useful or same_primary, key=lambda o: (len(o.text), o.option_id))
 
 
 def _unique_object(pairs):

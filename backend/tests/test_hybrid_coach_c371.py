@@ -570,10 +570,9 @@ def test_recorded_endpoint_stands_alone_without_a_distinctive_complement():
         permissions=hybrid.HybridPermissions(history=True),
     )
     claims = hybrid.select_deterministic_synthesis(rich)
-    # C378: reliable threshold position leads a continuous session; history supports it.
-    assert [c.id for c in claims][0] == "intensity.position"
-    assert claims[1].id.startswith("trend.")
-    assert len(claims) == 2
+    # C379: a qualified personal comparison is more distinctive than a routine average.
+    assert claims[0].id.startswith("trend.")
+    assert len(claims) == 1
     assert not any(c.id.startswith("effort.") for c in claims)
 
 
@@ -585,11 +584,10 @@ def test_historical_comparison_precedes_generic_effort_observation(prescription)
         v3.prescription_assessment.status = "consistent"
     facts = _facts(v3, permissions=hybrid.HybridPermissions(history=True, prescription=prescription))
     claims = hybrid.select_deterministic_synthesis(facts)
-    # C378: history still precedes generic recorded endpoints, after threshold position;
+    # C379: history precedes both generic recorded endpoints and a routine average;
     # a prescription review is never part of the Coach comment.
-    assert claims[0].id == "intensity.position"
-    assert claims[1].id.startswith("comparison.")
-    assert len(claims) == 2
+    assert claims[0].id.startswith("comparison.")
+    assert len(claims) == 1
     assert not any(c.id.startswith("effort.") or c.id == "prescription.review" for c in claims)
 
 
@@ -622,8 +620,8 @@ def test_above_lt2_not_displaced_when_history_and_prescription_fill_support_slot
     permissions = hybrid.HybridPermissions(history=True, prescription=True)
     facts = _facts(v3, language=language, permissions=permissions)
     assert f"effort.{endpoint}" in {f.id for f in facts}
-    claims = hybrid.select_deterministic_synthesis(facts)
-    # C378: the above-LT2 average leads; history is the single support; no prescription.
+    claims = hybrid.select_deterministic_synthesis(facts, language)
+    # C379: the above-LT2 average leads; history is the single support; no prescription.
     assert claims[0].id == "intensity.position"
     assert "180" in claims[0].text
     assert len(claims) == 2
@@ -662,7 +660,8 @@ def test_coach_text_budget_rejects_whole_editorial_output_and_preserves_fallback
     bounded = hybrid.select_deterministic_synthesis(tuple(oversized if f is first else f for f in facts))
     assert bounded and first.id not in {c.id for c in bounded}
     assert len(hybrid._render(bounded)) <= hybrid.MAX_COACH_TEXT_CHARS
-    assert all(c.text == next(f.assertion for f in facts if f.id == c.id) for c in bounded)
+    assert all(c.evidence_refs == list(next(f.source_paths for f in facts if f.id == c.id))
+               for c in bounded)
     clause = selection()
     chosen = validate_editorial_selection(clause, facts, "fr")
     monkeypatch.setattr(hybrid, "MAX_COACH_TEXT_CHARS", len(first.assertion) - 1)
@@ -723,11 +722,10 @@ def test_historical_and_prescription_admissions_preserved_in_fallback(monkeypatc
     facts = _facts(v3, permissions=permissions)
     claims = hybrid.select_deterministic_synthesis(facts)
     if base == "long":
-        assert [c.id for c in claims] == ["session.long"]
+        assert [c.id for c in claims] == ["session.long", "intensity.position"]
     else:
-        assert claims[0].id == "intensity.position"
-        assert claims[1].id.startswith(("trend.", "comparison."))
-        assert len(claims) == 2
+        assert claims[0].id.startswith(("trend.", "comparison."))
+        assert len(claims) == 1
     assert "prescription.review" not in {c.id for c in claims}
     assert "prescription.review" in {fact.id for fact in facts}
     unauthorized = {f.id for f in _facts(v3)}
