@@ -14,7 +14,6 @@ from hybrid_coach_editorial_c365 import primary_fact_candidates
 from hybrid_coach_v2_c372 import ScopedV2Evidence
 from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
-
 VERSION = "c377-session-coaching-intelligence-1"
 Confidence = Literal["high", "medium", "low", "none"]
 EvidenceValue = str | int | float
@@ -41,7 +40,9 @@ class _DecisionModel(BaseModel):
 
 class CoachingObservation(_DecisionModel):
     code: FactCode
-    category: Literal["pacing", "structure", "intensity", "history", "classification"]
+    category: Literal[
+        "pacing", "structure", "intensity", "history", "classification"
+    ]
     fact_ids: list[FactCode] = Field(min_length=1, max_length=1)
     source_paths: list[str] = Field(min_length=1)
     evidence: dict[str, EvidenceValue]
@@ -64,7 +65,9 @@ class CoachingObservation(_DecisionModel):
             or (type(item) in (int, float) and not math.isfinite(item))
             for item in value.values()
         ):
-            raise ValueError("Coaching observations require finite, typed evidence")
+            raise ValueError(
+                "Coaching observations require finite, typed evidence"
+            )
         return value
 
 
@@ -95,7 +98,9 @@ class CoachingInterpretation(_DecisionModel):
 
 class CoachingAdvice(_DecisionModel):
     code: Literal["SEEK_STEADIER_PACE", "PRESERVE_PACE_CONSISTENCY"]
-    linked_observation_codes: list[FactCode] = Field(min_length=1, max_length=1)
+    linked_observation_codes: list[FactCode] = Field(
+        min_length=1, max_length=1
+    )
     linked_interpretation_codes: list[str] = Field(min_length=1, max_length=1)
     advice_intent: Literal["SEEK_STEADIER_PACE", "PRESERVE_PACE_CONSISTENCY"]
     conditions: list[str] = Field(min_length=1)
@@ -111,67 +116,96 @@ class SessionCoachingDecision(_DecisionModel):
     supporting_observations: list[CoachingObservation] = Field(max_length=2)
     interpretation: CoachingInterpretation | None
     advice: CoachingAdvice | None
-    abstention_reason: Literal[
-        "permission_not_granted",
-        "no_admissible_observation",
-        "insufficient_evidence",
-        "no_safe_specific_advice",
-    ] | None = None
+    abstention_reason: (
+        Literal[
+            "permission_not_granted",
+            "no_admissible_observation",
+            "insufficient_evidence",
+            "no_safe_specific_advice",
+        ]
+        | None
+    ) = None
     limitations: list[str]
     provenance: list[str]
 
 
 _FACTS = {
     "interval.pace_direction": (
-        "pacing", "recorded_comparable_efforts", "v2_repetition_pace_direction",
+        "pacing",
+        "recorded_comparable_efforts",
+        "v2_repetition_pace_direction",
         ("workout_analysis_v2.",),
     ),
     "interval.regularity": (
-        "pacing", "recorded_comparable_efforts", "v2_repetition_pacing_band",
+        "pacing",
+        "recorded_comparable_efforts",
+        "v2_repetition_pacing_band",
         ("workout_analysis_v2.",),
     ),
     "effort.first": (
-        "pacing", "recorded_effort_endpoints", "recorded_effort_description_only",
+        "pacing",
+        "recorded_effort_endpoints",
+        "recorded_effort_description_only",
         ("effort_pace_observations.", "effort_duration_observations."),
     ),
     "effort.last": (
-        "pacing", "recorded_effort_endpoints", "recorded_effort_description_only",
+        "pacing",
+        "recorded_effort_endpoints",
+        "recorded_effort_description_only",
         ("effort_pace_observations.", "effort_duration_observations."),
     ),
     "effort.coverage": (
-        "structure", "recorded_session", "recorded_effort_description_only",
+        "structure",
+        "recorded_session",
+        "recorded_effort_description_only",
         ("effort_pace_observations", "effort_duration_observations"),
     ),
     "interval.count": (
-        "structure", "recorded_session", "recorded_intervals_without_regularity",
+        "structure",
+        "recorded_session",
+        "recorded_intervals_without_regularity",
         ("session_classification.",),
     ),
     "intensity.position": (
-        "intensity", "personal_thresholds", "average_hr_threshold_position",
+        "intensity",
+        "personal_thresholds",
+        "average_hr_threshold_position",
         ("intensity_assessment.",),
     ),
     "intensity.hr": (
-        "intensity", "recorded_session", "descriptive_average_hr_only",
+        "intensity",
+        "recorded_session",
+        "descriptive_average_hr_only",
         ("intensity_assessment.",),
     ),
     "session.kind": (
-        "classification", "recorded_session_classification", "probable_session_type",
+        "classification",
+        "recorded_session_classification",
+        "probable_session_type",
         ("session_classification.",),
     ),
     "session.long": (
-        "history", "owner_scoped_history", "probable_long_duration_comparison",
+        "history",
+        "owner_scoped_history",
+        "probable_long_duration_comparison",
         ("session_classification.",),
     ),
     "session.unknown": (
-        "classification", "recorded_session_classification", "session_type_unproven",
+        "classification",
+        "recorded_session_classification",
+        "session_type_unproven",
         ("session_classification.", "intensity_assessment."),
     ),
     "comparison.pace": (
-        "history", "owner_scoped_history", "observed_pace_difference_at_comparable_hr",
+        "history",
+        "owner_scoped_history",
+        "observed_pace_difference_at_comparable_hr",
         ("historical_comparison.",),
     ),
     "comparison.hr": (
-        "history", "owner_scoped_history", "observed_hr_difference_at_comparable_pace",
+        "history",
+        "owner_scoped_history",
+        "observed_hr_difference_at_comparable_pace",
         ("historical_comparison.",),
     ),
 }
@@ -194,7 +228,9 @@ def _admitted_fact(fact: AdmissibleFact, *, history: bool) -> bool:
     if fact.allowed_conclusion != conclusion or not fact.source_paths:
         return False
     if any(
-        not isinstance(path, str) or not path or not path.startswith(prefixes)
+        not isinstance(path, str)
+        or not path
+        or not path.startswith(prefixes)
         or "prescription" in path.lower()
         for path in fact.source_paths
     ):
@@ -212,14 +248,16 @@ def _admitted_fact(fact: AdmissibleFact, *, history: bool) -> bool:
             return False
         if fact.id == "interval.regularity" and (
             values.get("source") != "workout_analysis_v2"
-            or values.get("regularity_band") not in {"homogeneous", "noticeable", "variable"}
+            or values.get("regularity_band")
+            not in {"homogeneous", "noticeable", "variable"}
             or values.get("status") != "available"
         ):
             return False
         if fact.id == "interval.pace_direction" and (
             values.get("source") != "workout_analysis_v2"
             or values.get("direction") not in {"faster", "slower"}
-            or values.get("scope") not in {
+            or values.get("scope")
+            not in {
                 "equal_count_endpoint_groups_middle_excluded",
                 "first_last_of_three_efforts",
             }
@@ -245,7 +283,8 @@ def _observation(fact: AdmissibleFact) -> CoachingObservation:
 
 
 def _interpretation(
-    observation: CoachingObservation, fact: AdmissibleFact,
+    observation: CoachingObservation,
+    fact: AdmissibleFact,
 ) -> CoachingInterpretation:
     values = dict(fact.values)
     meaning = "INSUFFICIENT_EVIDENCE"
@@ -270,10 +309,16 @@ def _interpretation(
         ]
     elif fact.id == "intensity.position":
         meaning = "INTENSITY_POSITION_SUPPORTED"
-        conditions = ["validated_v3_personal_thresholds", "session_average_only"]
+        conditions = [
+            "validated_v3_personal_thresholds",
+            "session_average_only",
+        ]
     elif fact.id.startswith("comparison."):
         meaning = "HISTORICAL_COMPARISON_OBSERVED"
-        conditions = ["owner_scoped_history_permission", "v3_strong_comparability"]
+        conditions = [
+            "owner_scoped_history_permission",
+            "v3_strong_comparability",
+        ]
     return CoachingInterpretation(
         code=meaning,
         meaning=meaning,
@@ -303,7 +348,7 @@ def _advice(
         ]
         contraindications = [
             "intentionally_variable_efforts",
-            "session_objective_unknown",
+            "workout_objective_calls_for_pace_changes",
         ]
     elif band == "homogeneous":
         code = "PRESERVE_PACE_CONSISTENCY"
@@ -313,8 +358,8 @@ def _advice(
             "next_similar_session_only",
         ]
         contraindications = [
-            "intentionally_progressive_efforts",
-            "session_objective_unknown",
+            "planned_progression_or_pace_variation",
+            "workout_objective_calls_for_different_pacing",
         ]
     else:
         return None
@@ -337,11 +382,12 @@ def build_session_coaching_decision(
     permissions: HybridPermissions = HybridPermissions(),
     v2_evidence: ScopedV2Evidence | None = None,
 ) -> SessionCoachingDecision:
-    """Build an offline decision from admitted evidence; prescription is excluded."""
-    workout_id = (
-        intelligence.workout_id
-        if type(intelligence) is WorkoutIntelligenceV3 else None
-    )
+    """Build from admitted evidence; prescription is excluded."""
+    workout_id = None
+    if type(intelligence) is WorkoutIntelligenceV3:
+        candidate_id = intelligence.workout_id
+        if type(candidate_id) is str and candidate_id:
+            workout_id = candidate_id
     common = {
         "workout_id": workout_id,
         "primary_observation": None,
@@ -357,14 +403,15 @@ def build_session_coaching_decision(
     }
     if not admissible._authorized(access):
         return SessionCoachingDecision(
-            **common, abstention_reason="permission_not_granted",
+            **common,
+            abstention_reason="permission_not_granted",
         )
-    if (
-        type(intelligence) is not WorkoutIntelligenceV3
-        or intelligence.version != "v3"
+    if type(intelligence) is not WorkoutIntelligenceV3 or (
+        intelligence.version != "v3" or workout_id is None
     ):
         return SessionCoachingDecision(
-            **common, abstention_reason="no_admissible_observation",
+            **common,
+            abstention_reason="no_admissible_observation",
         )
 
     history_authorized = (
@@ -377,30 +424,38 @@ def build_session_coaching_decision(
         v2_evidence=v2_evidence,
     )
     admitted = tuple(
-        fact for fact in facts
+        fact
+        for fact in facts
         if _admitted_fact(fact, history=history_authorized)
     )
-    if not admitted:
+    if not admitted or len({fact.id for fact in admitted}) != len(admitted):
         return SessionCoachingDecision(
-            **common, abstention_reason="no_admissible_observation",
+            **common,
+            abstention_reason="no_admissible_observation",
         )
 
     by_id = {fact.id: fact for fact in admitted}
     candidates = [
-        fact_id for fact_id in primary_fact_candidates(admitted)
+        fact_id
+        for fact_id in primary_fact_candidates(admitted)
         if fact_id in by_id
     ]
     if "interval.pace_direction" in by_id:
         candidates = [
             "interval.pace_direction",
-            *(["interval.regularity"] if "interval.regularity" in by_id else []),
+            *(
+                ["interval.regularity"]
+                if "interval.regularity" in by_id
+                else []
+            ),
         ]
     elif "interval.regularity" in by_id:
         candidates = ["interval.regularity"]
     candidates = list(dict.fromkeys(candidates))
     if not candidates:
         return SessionCoachingDecision(
-            **common, abstention_reason="no_admissible_observation",
+            **common,
+            abstention_reason="no_admissible_observation",
         )
 
     primary_fact = by_id[candidates[0]]
@@ -415,7 +470,11 @@ def build_session_coaching_decision(
 
     regularity_fact = by_id.get("interval.regularity")
     regularity_observation = next(
-        (item for item in [primary, *supporting] if item.code == "interval.regularity"),
+        (
+            item
+            for item in [primary, *supporting]
+            if item.code == "interval.regularity"
+        ),
         None,
     )
     advice = None
@@ -426,16 +485,22 @@ def build_session_coaching_decision(
         and interpretation.observation_codes == [regularity_observation.code]
     ):
         advice = _advice(
-            regularity_fact, regularity_observation, interpretation,
+            regularity_fact,
+            regularity_observation,
+            interpretation,
             has_direction="interval.pace_direction" in by_id,
         )
     if advice is None and reason is None:
         reason = "no_safe_specific_advice"
 
     observations = [primary, *supporting]
-    provenance = list(dict.fromkeys(
-        path for observation in observations for path in observation.source_paths
-    ))
+    provenance = list(
+        dict.fromkeys(
+            path
+            for observation in observations
+            for path in observation.source_paths
+        )
+    )
     return SessionCoachingDecision(
         **{
             **common,
