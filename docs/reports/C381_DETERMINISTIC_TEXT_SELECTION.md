@@ -6,8 +6,10 @@
 - Base exacte : `copilot/dev`, `43701db2695d94ea339112be8407eaf05dac4a83`.
 - HEAD initial : même SHA ; branche de travail : `copilot/delete-llm-text-selection`.
 - `origin/copilot/dev` a été récupérée et son SHA vérifié, sans merge ni changement de branche.
-- HEAD du code validé : renseigné ci-dessous après commit de la validation ;
-  le rapport peut ensuite faire l'objet d'un commit documentaire seul.
+- HEAD du code validé et analysé par CodeQL :
+  `ca16f671d82f792bb5cbcf784f58d04cab076f1e`.
+- La finalisation du présent rapport est un commit documentaire seul,
+  postérieur à ce HEAD ; aucun code n'a changé après la validation.
 
 L'audit a précédé toute modification. Les chemins ci-dessous sont relatifs à
 `/home/runner/work/sauvegarde260708/sauvegarde260708/` ; les références de lignes de
@@ -308,7 +310,15 @@ test original pour `en`, `fr`, `es`. Les trois assertions échouent également
 - Revue finale du code de production : aucun problème significatif restant
   signalé.
 - `git diff --check` : réussi lors de la validation.
-- Contrôles secrets et CodeQL après commit : résultats finaux ci-dessous.
+- Scan de secrets de l'ensemble des 16 fichiers modifiés/créés avant commit :
+  **aucun secret détecté**.
+- CodeQL après commit `ca16f671d82f792bb5cbcf784f58d04cab076f1e` :
+  analyse Python, **0 alerte**. Changement déclaré non trivial, car les
+  chemins de sélection et leur traitement d'échec changent.
+- Vérification finale Git : arbre propre après le commit du code,
+  `git diff --check` réussi ; diff nul par rapport à la base pour
+  `workout_analysis_v2.py`, `coach_language.py`, `workout_intelligence_v3.py`,
+  `workout_intelligence_v3_service.py` et `server.py`.
 
 ### Limites explicites
 
@@ -324,8 +334,8 @@ test original pour `en`, `fr`, `es`. Les trois assertions échouent également
 
 ## G. Verdicts séparés
 
-- **PR : GO pour revue du correctif ciblé**, sous réserve du contrôle CodeQL
-  final et avec les trois échecs V2 préexistants explicitement signalés.
+- **PR : GO pour revue du correctif ciblé**, avec contrôles secrets/CodeQL
+  réussis et les trois échecs V2 préexistants explicitement signalés.
   Ce verdict n'affirme ni un replay réel ni une suite V2 intégralement verte.
 - **Branchement en production : NO-GO dans cette PR.** Aucun branchement,
   déploiement ni validation sur les quatre séances réelles.
