@@ -726,3 +726,617 @@ L'environnement isolé ne disposait pas de `fastapi` et des dépendances du serv
 Limites résiduelles importantes : `faster_odd` s'abstient réellement sur la direction, malgré son nom ; `partial` désactive le bloc V3 d'allures sans invalider le jugement V2 à couverture complète ; easy/tempo/FC seule ne prouvent pas une intensité physiologique en l'absence de repères ; `long_history` conserve l'exclusion du second historique. Ces limites ne doivent pas être masquées par une formulation plus chaleureuse.
 
 **Recommandation : HOLD avant intégration.** Les tests ciblés de l'implémentation sont verts et aucune contradiction scientifique n'est reproduite, mais il reste à archiver les choix expérimentaux bruts antérieurs pour les rendre rejouables, à effectuer une revue éditoriale humaine FR/EN/ES et à valider les deux tests API dans un environnement serveur complet. Ne pas confondre cette réalisation interne avec une intégration de production. **Aucun merge ni déploiement.**
+
+## 11. Corrections finales avant merge
+
+### 11.1 HEAD, base et portée de cette mise à jour
+
+Cette section est un **addendum**, non une réécriture des résultats initiaux. Les sections 1 à 10 restent intégralement conservées comme photographie historique, y compris leurs anciens HEAD, résultats et réserves d'environnement. Les validations finales ci-dessous actualisent ces réserves sans transformer les échecs initiaux en succès rétroactifs.
+
+- **Base exacte de la PR** : `copilot/dev`, `d67313aec9afc56676c34fe1e91b1c482a4538d8`.
+- **HEAD avant corrections, audité sur la véritable PR 374 via API et localement** : `a296eee6aa7deaaec5a7174dd65c171ea7749ceb`.
+- **HEAD de l'implémentation finale testée** : `fd0f8d3ca5f9629e8a55dbbf449120a4376d6337`.
+- Le successeur documentaire portant cet addendum ne peut pas contenir son propre hash final ; aucun SHA documentaire n'est inventé.
+- Travail exclusivement sur la **même PR 374**, branche `copilot/c379-human-coach-realization`. Pas de nouvelle PR, de merge, de déploiement ni de changement de branche d'intégration.
+
+Source du corpus final : `tmp/c379-final-evaluation.json`, intermédiaire ignoré contenant les 22 sorties réelles avant/après. Le « avant » a été obtenu en exécutant le véritable module C374 extrait par `git show` du HEAD `a296eee6aa7deaaec5a7174dd65c171ea7749ceb`, et non en reconstituant ses phrases à la main ; le « après » utilise l'implémentation finale. Les exécutions de validation sont celles déjà effectuées sur le HEAD indiqué, communiquées pour cet addendum : **aucun test, lint, build ou commit n'est relancé par cette édition documentaire**.
+
+### 11.2 Fichiers modifiés depuis l'audit
+
+| Fichier | Périmètre des corrections finales |
+|---|---|
+| `backend/hybrid_coach_closed_c374.py` | Réalisation appariée des endpoints et priorité interne indépendante des IDs techniques ; garde pour les endpoints sans allure. |
+| `backend/tests/test_hybrid_coach_c372.py` | Quatre attentes de chaînes du fallback fermé actualisées, sans changer les formes lexicales du chemin C365 réussi. |
+| `backend/tests/test_hybrid_coach_c379.py` | Non-régressions d'ordre/renommage, métadonnées, phrases appariées, décimales et durées seules. |
+| `docs/reports/C379_HUMAN_COACH_REALIZATION.md` | Présent addendum ; conservation intégrale du rapport antérieur. |
+
+Cette passe documentaire ne modifie que le dernier fichier. Aucune modification de requirements, de workflow, de configuration xdist, de route ou de permission.
+
+### 11.3 Causes identifiées : A, B et C
+
+**A — Phrases d'endpoints fragmentées.** Deux assertions correctement traçables étaient rendues comme deux phrases séparées, avec un préambule « Dans l'ordre enregistré » peu naturel. L'enjeu était éditorial : relier les deux observations sans confondre la moyenne des groupes et les valeurs individuelles, ni prétendre vérifier une chronologie absolue.
+
+**B — Priorité éditoriale implicitement encodée dans `option_N`.** La sélection déterministe dépendait d'identifiants techniques reflétant indirectement l'ordre de construction. Les permuter ou les renommer ne devait pourtant changer ni le principal ni les supports. La priorité existante devait être rendue explicite et revalidée, pas remplacée par un nouveau score.
+
+**C — FastAPI absent de l'environnement initial.** Les deux échecs API des sections précédentes provenaient d'un environnement incomplet, pas d'une preuve que les endpoints étaient corrects ou incorrects. Il fallait restaurer les dépendances serveur nécessaires et **exécuter réellement** les deux tests, sans contournement de production.
+
+### 11.4 Corrections et invariants préservés
+
+**A corrigé en FR/EN/ES.** Les premier et dernier efforts sont maintenant réunis en une phrase portée par **deux fragments de claims traçables**, conservant leurs faits, références et limites propres. « Parmi les efforts enregistrés » qualifie le périmètre ; ce n'est pas une affirmation de chronologie absolue. La phrase précédente décrit toujours la **moyenne des groupes comparables** ; les allures individuelles ne sont pas présentées comme le delta de cette moyenne.
+
+Les durées égales ne sont omises dans la réalisation d'allures appariées que si **les deux endpoints disposent d'une allure**. Les durées différentes et les décimales restent conservées. La revue a découvert un défaut couplé : des endpoints avec uniquement des durées pouvaient subir une suppression indue. La garde a été corrigée et les cas « durées seules » exécutés dans les trois langues. L'omission éditoriale d'une durée égale ne supprime jamais sa valeur du catalogue de faits ; les cinq sorties changées du corpus n'en perdent aucune information supplémentaire.
+
+**B corrigé sans nouveau moteur de ranking.** `primary_priority` est une métadonnée interne dérivée de `_candidates(facts).index(primary)`, donc des priorités C365/C374 déjà existantes. `_make_option` la reconstruit ; `validate_option` compare l'option à cette reconstruction et rejette une altération. Ce champ n'est **ni une preuve ni un champ du paquet fournisseur**.
+
+L'ID d'option est opaque : il sert au lookup du choix LLM, pas à établir une priorité éditoriale. Le déterministe ne dépend plus de l'ordre de présentation ou du suffixe numérique. À principal fixé, le choix reste fondé sur les supports sémantiquement utiles et une longueur bornée, puis sur le contenu pour départager, jamais sur l'ID. Aucun nouveau score scientifique ou moteur de classement n'est introduit.
+
+Restent inchangés : `validate_choice`, schéma de réponse, fournisseur injecté, permissions, admission des faits, calculs, registre et conditions des conseils. Le chemin lexical **C365 réussi** reste inchangé ; seules quatre attentes de chaînes C372 du **fallback fermé** sont actualisées. Training reste l'autorité de prescription, Garmin l'autorité d'observation effectuée ; `None` n'est pas assimilé à `0`.
+
+**C corrigé pour le périmètre testé.** L'environnement isolé a été restauré avec Python **3.12.3** et les paquets des requirements backend existants nécessaires aux tests (**127 paquets installés**), dont `fastapi 0.110.1`, `starlette 0.37.2`, `pytest 9.1.1`, `pytest-xdist 3.8.0`, `pydantic 2.13.4` et `flake8 7.3.0`.
+
+Le wheel privé personnalisé de `litellm` était inaccessible depuis cet hôte ; `emergentintegrations` n'était pas disponible sur l'index. Ils ont été omis **uniquement de la liste d'installation temporaire**, sans modifier les requirements du projet. Ils ne sont pas nécessaires aux tests exécutés. Cela ne signifie ni « toutes les dépendances installées » ni « environnement prêt pour la production ». Les fixtures utilisent le serveur et la base mockés existants, pas une infrastructure réelle.
+
+### 11.5 Tests exécutés : couverture et commandes exactes
+
+Les tests C379 passent de **35 à 114**, soit **79 ajouts** :
+
+- **66 cas de permutation** : 22 scénarios × 3 langues ; pour chacun, ordre original, ordre inversé et mélange fixe `Random(379)`, avec renumérotation numérique et IDs opaques.
+- Contrôle de falsification de la métadonnée de priorité.
+- **Six tests de paires** d'endpoints.
+- **Trois tests décimales/durées**, dont durées différentes.
+- **Trois tests durées seules**, FR/EN/ES, après correction du défaut découvert en revue.
+
+Les 79 ajouts correspondent à 66 + 1 + 6 + 3 + 3, dont le test d'altération des métadonnées. Les 22 scénarios × 3 langues ne doivent pas être confondus avec les 22 commentaires effectivement archivés en 11.7. La configuration xdist existante `-n 2 --dist loadscope` reste inchangée.
+
+**Commande finale réellement exécutée après CodeQL**, sur le HEAD d'implémentation indiqué :
+
+```text
+cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && /tmp/c379-final-venv/bin/python -m pytest tests/test_hybrid_coach_c359.py tests/test_hybrid_coach_c362.py tests/test_hybrid_coach_c364_audit.py tests/test_hybrid_coach_c365.py tests/test_hybrid_coach_c371.py tests/test_hybrid_coach_c372.py tests/test_hybrid_coach_c374.py tests/test_hybrid_coach_c378.py tests/test_hybrid_coach_c379.py tests/test_narrative_coach_v3.py tests/test_coach_language.py tests/test_workout_intelligence_v3.py -q
+=> 1635 passed, 7 warnings in 4.98s
+```
+
+Les deux tests API ont aussi été **exécutés individuellement pour de vrai par l'agent d'environnement**, depuis `backend`, avec l'interpréteur actif suivant :
+
+```text
+/tmp/c379-final-venv/bin/python -m pytest tests/test_workout_intelligence_v3.py::test_c369_existing_http_response_serializes_both_observation_blocks tests/test_workout_intelligence_v3.py::test_v3_api_endpoint_is_additive -v
+=> 2 passed, 7 warnings in 1.50s
+```
+
+Ces deux tests figurent également dans le passage final à 1 635 succès ; le passage individuel n'est pas ajouté à ce total. Les chemins d'environnement ci-dessus sont reproduits comme commandes historiques effectivement exécutées, pas comme des commandes lancées par cet addendum.
+
+### 11.6 Résultats exacts et contrôles finaux
+
+- Passage final post-CodeQL : **1 635 passed, 7 warnings, 4.98 s** sur les douze fichiers explicitement listés ; ce n'est pas une déclaration de succès de tous les tests possibles du dépôt.
+- Passage API individuel : **2 passed, 7 warnings, 1.50 s**. La réserve initiale « deux comportements API non validés » est levée pour ces tests et cet environnement restauré.
+- Les **sept warnings** sont des dépréciations existantes concernant `multipart`, `crypt`, la configuration Pydantic par classe et `FastAPI.on_event`. Ce ne sont ni sept échecs ni sept alertes CodeQL.
+- Flake8 existant, sélection de correction **`E9,F63,F7,F82`**, sur les **trois fichiers Python changés depuis l'audit** : propre.
+- `git diff --check` : propre. Scan de secrets : aucun finding.
+- CodeQL, après le commit de code : **0 alerte**.
+- Revue indépendante : **aucun problème significatif restant** après correction et tests du cas « durées seules ».
+- Comparaison réelle avant/après : **22/22 catalogues de faits et limites, sélections d'IDs, objets de conseil et `advice_reason` identiques**. Seule la prose change pour **5/22** cas ; **17/22 sont strictement inchangés**.
+
+Ces résultats sont ceux de l'implémentation finale et des contrôles déjà exécutés ; l'édition documentaire présente n'a lancé aucune validation de code supplémentaire.
+
+### 11.7 Sorties complètes : les 22 cas avant/après
+
+**Méthode de lecture.** Chaque bloc « avant » et « après » ci-dessous reproduit intégralement le commentaire réel du JSON, sans correction éditoriale, même quand il est inchangé. Les faits listés, limites, IDs sélectionnés et conseils sont **identiques avant et après pour chaque cas**. Les valeurs numériques et les scopes ne sont pas recalculés ici. Les appréciations de naturalité sont **subjectives**, pas des mesures de satisfaction.
+
+Pour éviter toute ambiguïté avec les codes des sections historiques, les codes **R1 à R12** ci-dessous sont locaux à cet addendum ; ils désignent les listes exactes de limites conservées :
+
+```text
+R1 = ["no_physiological_zone","average_not_whole_effort"]
+R2 = ["recorded_order_not_verified_absolute_chronology","no_regularity_or_fatigue","no_progress_or_physiological_inference","no_prescription_compliance"]
+R3 = ["recorded_comparable_efforts_only","not_physiological_stability","no_fatigue_progression_or_cause","descriptive_not_good_or_bad"]
+R4 = ["recorded_comparable_efforts_only","no_physiological_progression","no_causal_inference"]
+R5 = ["no_repetition_durations","regularity_verdict_unavailable"]
+R6 = ["probable_not_certain"]
+R7 = ["equal_distance_halves_only","no_fatigue_or_endurance_inference","no_causal_inference","terrain_weather_not_controlled"]
+R8 = ["probable_not_certain","duration_not_effort"]
+R9 = ["average_not_whole_effort","no_time_in_zones","no_physiological_cause","no_progression_from_average"]
+R10 = ["unknown_not_easy","threshold_interpretation_unavailable"]
+R11 = ["not_proof_of_fitness","no_cause","terrain_weather_not_controlled"]
+R12 = ["unknown_not_easy","missing_average_hr"]
+```
+
+Lorsqu'un conseil est admis, son texte exact est déjà la dernière phrase des deux commentaires reproduits ; son ID et sa raison figurent également sous le cas. `advice = null` signifie une abstention réelle, non un conseil implicite. L'égalité vérifiée des objets de conseil comprend aussi leurs références, conclusions et limites structurées, pas seulement leur phrase.
+
+#### 11.7.1 `homogeneous` — FR — inchangé
+
+Faits et limites identiques :
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"homogeneous","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+```
+
+Sélection aux deux versions : `["interval.regularity"]`. Conseil : `advice.keep_consistency` ; raison : `advice_admitted`.
+
+**Avant intégral**
+```text
+Sur tes 4 répétitions comparables, tu as couru à des allures proches. Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables.
+```
+**Après intégral**
+```text
+Sur tes 4 répétitions comparables, tu as couru à des allures proches. Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables.
+```
+
+Appréciation : **aucun gain nouveau revendiqué** ; le ton direct était déjà présent. Mécanique restante : répétition de « comparables » et conseil fermé générique. Aucune perte d'information liée aux corrections ; « proches » ne prouve ni stabilité physiologique ni progression.
+
+#### 11.7.2 `irregular` — FR — inchangé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":325.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"variable","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+```
+
+Sélection : `["interval.regularity"]`. Conseil : `advice.stabilize_paces` ; raison : `advice_admitted`, identiques avant/après.
+
+**Avant intégral**
+```text
+Tes 4 répétitions comparables présentent des variations d'allure importantes. Sur une prochaine séance comparable où tu recherches la régularité, essaie de stabiliser davantage tes allures.
+```
+**Après intégral**
+```text
+Tes 4 répétitions comparables présentent des variations d'allure importantes. Sur une prochaine séance comparable où tu recherches la régularité, essaie de stabiliser davantage tes allures.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; formulation toujours assez institutionnelle (« présentent ») et conseil conditionnel long. Pas de perte nouvelle ; variabilité descriptive, sans jugement de faute ni cause de fatigue supposée.
+
+#### 11.7.3 `faster` — FR — changé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":330.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"noticeable","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+interval.pace_direction = {"direction":"faster","scope":"equal_count_endpoint_groups_middle_excluded","pace_change_sec_per_km":-20.0,"comparability_basis":"duration","source":"workout_analysis_v2","efforts":4,"group_size":2} — R4
+```
+
+Sélection : `["interval.pace_direction","effort.first","effort.last"]`. `advice = null` ; raison : `condition_unmet:verified_steady_pacing_intent`, identiques avant/après.
+
+**Avant intégral**
+```text
+Les 2 dernières répétitions comparables sont 20 s/km en moyenne plus rapides que les 2 premières. Dans l'ordre enregistré, ton premier effort est à 5'30/km. Ton dernier effort est à 5'00/km.
+```
+**Après intégral**
+```text
+Tes 2 dernières répétitions comparables sont en moyenne 20 s/km plus rapides que les 2 premières. Parmi les efforts enregistrés, le premier était à 5'30/km et le dernier à 5'00/km.
+```
+
+Appréciation : gain subjectif de fluidité et d'adresse directe ; deux endpoints deviennent une phrase, **190 → 180 caractères**. Mécanique restante : « Parmi les efforts enregistrés » reste une qualification technique utile. Pas de perte nouvelle ; la moyenne de groupes reste distincte du passage individuel 5'30 → 5'00, et l'intention d'allure stable n'est pas inventée.
+
+#### 11.7.4 `slower` — FR — changé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":330.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"noticeable","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+interval.pace_direction = {"direction":"slower","scope":"equal_count_endpoint_groups_middle_excluded","pace_change_sec_per_km":20.0,"comparability_basis":"duration","source":"workout_analysis_v2","efforts":4,"group_size":2} — R4
+```
+
+Sélection : `["interval.pace_direction","effort.first","effort.last"]`. `advice = null` ; raison : `condition_unmet:verified_steady_pacing_intent`, identiques avant/après.
+
+**Avant intégral**
+```text
+Les 2 dernières répétitions comparables sont 20 s/km en moyenne plus lentes que les 2 premières. Dans l'ordre enregistré, ton premier effort est à 5'00/km. Ton dernier effort est à 5'30/km.
+```
+**Après intégral**
+```text
+Tes 2 dernières répétitions comparables sont en moyenne 20 s/km plus lentes que les 2 premières. Parmi les efforts enregistrés, le premier était à 5'00/km et le dernier à 5'30/km.
+```
+
+Appréciation : gain subjectif analogue de continuité, **189 → 179 caractères**, sans transformer le ralentissement en reproche. Qualification enregistrée encore mécanique mais nécessaire ; pas de perte nouvelle, ni explication de fatigue, ni conseil non autorisé.
+
+#### 11.7.5 `non_comparable` — FR — changé
+
+```text
+interval.count = {"efforts":3,"recoveries":3} — R5
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":60.0} — R2
+effort.last = {"effort_number":3,"recorded_pace":300.0,"recorded_duration":600.0} — R2
+effort.coverage = {"recorded_total":3,"pace_count":3,"duration_count":3,"both_count":3} — R2
+```
+
+Sélection : `["effort.first"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Dans l'ordre enregistré, ton premier effort a duré 1 min, à 5'00/km.
+```
+**Après intégral**
+```text
+Ton premier effort enregistré a duré 1 min, à 5'00/km.
+```
+
+Appréciation : attaque subjectivement plus naturelle, **68 → 54 caractères**. « Enregistré » maintient la réserve d'ordre sans préambule séparé ; constat toujours peu riche, limité au premier effort. Aucune perte nouvelle : durée et allure restent explicites ; aucune comparaison de régularité n'est créée malgré les endpoints présents.
+
+#### 11.7.6 `easy` — FR — inchangé
+
+```text
+session.kind = {"classification":"easy_run_probable"} — R6
+intensity.hr = {"average_hr":145.0} — R1
+```
+
+Sélection : `["intensity.hr"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta fréquence cardiaque moyenne est de 145 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+**Après intégral**
+```text
+Ta fréquence cardiaque moyenne est de 145 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+
+Appréciation : **aucun gain nouveau**, réserve encore administrative et peu « coach ». Pas de perte liée aux corrections ; le nom du cas et le type probable ne constituent toujours pas une preuve d'intensité facile.
+
+#### 11.7.7 `variable_easy` — FR — inchangé
+
+```text
+session.kind = {"classification":"easy_run_probable"} — R6
+intensity.hr = {"average_hr":145.0} — R1
+continuous.pace_halves = {"direction":"slower","scope":"equal_distance_halves","pace_change_sec_per_km":30.0,"coverage":"whole_session","source":"workout_analysis_v2"} — R7
+```
+
+Sélection : `["continuous.pace_halves"]`. Conseil : `advice.continuous_pacing` ; raison : `advice_admitted`, identiques avant/après.
+
+**Avant intégral**
+```text
+La seconde moitié en distance de ta séance est 30 s/km plus lente que la première. Sur une prochaine sortie comparable où tu vises une allure régulière, essaie de répartir ton allure plus également entre les deux moitiés.
+```
+**Après intégral**
+```text
+La seconde moitié en distance de ta séance est 30 s/km plus lente que la première. Sur une prochaine sortie comparable où tu vises une allure régulière, essaie de répartir ton allure plus également entre les deux moitiés.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; « moitié en distance » et conseil long restent mécaniques. Pas de perte nouvelle ; périmètre en distance et intention conditionnelle restent nécessaires, sans conclure à la fatigue ni neutraliser terrain/météo.
+
+#### 11.7.8 `long` — FR — inchangé
+
+```text
+session.long = {"duration":100.0,"usual_duration":50.0} — R8
+intensity.position = {"average_hr":140.0,"lt1":150.0,"lt2":170.0,"position":"below_LT1"} — R9
+```
+
+Sélection : `["session.long","intensity.position"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta sortie est probablement longue : 100 min, contre 50 min habituellement. Ta FC moyenne est de 140 bpm, sous ton premier seuil de 150 bpm. Cette moyenne ne décrit ni chaque phase ni le temps en zones.
+```
+**Après intégral**
+```text
+Ta sortie est probablement longue : 100 min, contre 50 min habituellement. Ta FC moyenne est de 140 bpm, sous ton premier seuil de 150 bpm. Cette moyenne ne décrit ni chaque phase ni le temps en zones.
+```
+
+Appréciation : **aucun gain nouveau** ; juxtaposition de trois phrases et caveat final encore visibles. Aucune perte nouvelle ; durée habituelle et seuil restent explicites, sans assimiler durée à effort ou moyenne à temps en zones.
+
+#### 11.7.9 `tempo` — FR — inchangé
+
+```text
+session.kind = {"classification":"tempo_probable"} — R6
+intensity.hr = {"average_hr":145.0} — R1
+```
+
+Sélection : `["intensity.hr"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta fréquence cardiaque moyenne est de 145 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+**Après intégral**
+```text
+Ta fréquence cardiaque moyenne est de 145 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+
+Appréciation : **aucune amélioration nouvelle**, même prudence assez mécanique que `easy`. Pas de perte nouvelle ; le mot « tempo » dans le scénario n'autorise pas à inventer une zone ou une intensité physiologique.
+
+#### 11.7.10 `hr_only` — FR — inchangé
+
+```text
+intensity.hr = {"average_hr":140.0} — R1
+session.unknown = {"classification":"unknown","average_hr_available":1,"average_hr":140.0} — R10
+```
+
+Sélection : `["intensity.hr"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta fréquence cardiaque moyenne est de 140 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+**Après intégral**
+```text
+Ta fréquence cardiaque moyenne est de 140 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+
+Appréciation : **aucun gain nouveau** ; commentaire factuel et peu personnalisé au-delà de la valeur. Pas de perte nouvelle ; type inconnu et absence de repère ne sont ni convertis en séance facile ni comblés par une métrique inventée.
+
+#### 11.7.11 `no_thresholds` — FR — inchangé
+
+```text
+intensity.hr = {"average_hr":140.0} — R1
+session.unknown = {"classification":"unknown","average_hr_available":1,"average_hr":140.0} — R10
+```
+
+Sélection : `["intensity.hr"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta fréquence cardiaque moyenne est de 140 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+**Après intégral**
+```text
+Ta fréquence cardiaque moyenne est de 140 bpm, sans repère personnel validé pour interpréter cette valeur.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; réserve répétitive mais honnête. Aucune perte nouvelle ; absence de seuils personnels maintenue, sans seuil par défaut ni lecture physiologique de 140 bpm.
+
+#### 11.7.12 `history` — FR — inchangé
+
+```text
+session.kind = {"classification":"easy_run_probable"} — R6
+intensity.position = {"average_hr":140.0,"lt1":150.0,"lt2":170.0,"position":"below_LT1"} — R9
+comparison.pace = {"pace_difference":-14.4,"references":5} — R11
+comparison.hr = {"hr_difference":0.0,"references":2} — R11
+trend.probable_improvement = {"status":"probable_improvement","observations":6,"median_change":-24.0,"span":92} — R11
+```
+
+Sélection : `["trend.probable_improvement"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Sur les 6 observations de ton historique, ton allure médiane récente est 24 s/km plus rapide qu'auparavant sur 92 jours. Cela suggère une amélioration probable, sans prouver un changement de forme ; les effets du terrain et de la météo restent mêlés.
+```
+**Après intégral**
+```text
+Sur les 6 observations de ton historique, ton allure médiane récente est 24 s/km plus rapide qu'auparavant sur 92 jours. Cela suggère une amélioration probable, sans prouver un changement de forme ; les effets du terrain et de la météo restent mêlés.
+```
+
+Appréciation : **aucun gain nouveau** ; « qu'auparavant sur 92 jours » et longue réserve restent perfectibles. Pas de perte nouvelle ; la tendance admise n'est pas une preuve de forme ni une causalité, et les autres comparaisons non sélectionnées restent dans les faits.
+
+#### 11.7.13 `no_history` — FR — inchangé
+
+```text
+session.kind = {"classification":"easy_run_probable"} — R6
+intensity.position = {"average_hr":140.0,"lt1":150.0,"lt2":170.0,"position":"below_LT1"} — R9
+```
+
+Sélection : `["intensity.position"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta FC moyenne est de 140 bpm, sous ton premier seuil de 150 bpm. Cette moyenne ne décrit ni chaque phase ni le temps en zones.
+```
+**Après intégral**
+```text
+Ta FC moyenne est de 140 bpm, sous ton premier seuil de 150 bpm. Cette moyenne ne décrit ni chaque phase ni le temps en zones.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; phrase de réserve toujours didactique. Aucune perte nouvelle ; seuil personnel explicite, pas d'historique inventé ni d'affirmation sur toutes les phases.
+
+#### 11.7.14 `partial` — FR — inchangé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"homogeneous","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+```
+
+Sélection : `["interval.regularity"]`. Conseil : `advice.keep_consistency` ; raison : `advice_admitted`, identiques avant/après.
+
+**Avant intégral**
+```text
+Sur tes 4 répétitions comparables, tu as couru à des allures proches. Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables.
+```
+**Après intégral**
+```text
+Sur tes 4 répétitions comparables, tu as couru à des allures proches. Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables.
+```
+
+Appréciation : **aucun gain nouveau**, même mécanique que `homogeneous`, sans perte nouvelle. Le cas partiel concerne le bloc d'allures V3 désactivé, pas une nouvelle conclusion scientifique : le jugement V2 conserve sa couverture complète admise. Ne pas lire le nom du cas comme une permission de généraliser des données partielles.
+
+#### 11.7.15 `insufficient` — FR — inchangé
+
+```text
+session.unknown = {"classification":"unknown","average_hr_available":0} — R12
+```
+
+Sélection : `["session.unknown"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Le type de ta séance reste incertain ; aucune FC moyenne n'est disponible.
+```
+**Après intégral**
+```text
+Le type de ta séance reste incertain ; aucune FC moyenne n'est disponible.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; ton de constat de manque, utilité limitée mais honnête. Pas de perte nouvelle ; absence de FC ne signifie pas FC nulle, et aucun faux conseil ou fait de récupération n'est ajouté.
+
+#### 11.7.16 `v2_v3_missing` — FR — inchangé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"homogeneous","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+```
+
+Sélection : `["interval.regularity"]`. Conseil : `advice.keep_consistency` ; raison : `advice_admitted`, identiques avant/après.
+
+**Avant intégral**
+```text
+Sur tes 4 répétitions comparables, tu as couru à des allures proches. Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables.
+```
+**Après intégral**
+```text
+Sur tes 4 répétitions comparables, tu as couru à des allures proches. Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables.
+```
+
+Appréciation : **aucun gain nouveau**, répétition et conseil générique subsistent ; aucune perte nouvelle. L'entrée manquante de V3 reste l'explication du désaccord apparent documenté plus haut, pas la démonstration d'un verdict scientifique opposé ni sa correction par la prose.
+
+#### 11.7.17 `faster_odd` — FR — changé
+
+```text
+interval.count = {"efforts":5,"recoveries":5} — R5
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":340.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":5,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":5,"pace_count":5,"duration_count":5,"both_count":5} — R2
+```
+
+Sélection : `["effort.first"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Dans l'ordre enregistré, ton premier effort a duré 4 min, à 5'40/km.
+```
+**Après intégral**
+```text
+Ton premier effort enregistré a duré 4 min, à 5'40/km.
+```
+
+Appréciation : gain subjectif d'entrée plus directe, **68 → 54 caractères** ; observation encore minimale. Aucune perte nouvelle, durée/allure conservées. Malgré son nom, le cas **s'abstient sur la direction** : ni « plus rapide » ni comparaison de groupes impairs n'est ajoutée.
+
+#### 11.7.18 `three_slower` — FR — inchangé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":3,"recorded_pace":330.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":3,"pace_count":3,"duration_count":3,"both_count":3} — R2
+interval.regularity = {"regularity_band":"noticeable","source":"workout_analysis_v2","status":"available","efforts":3,"comparability_basis":"duration"} — R3
+interval.pace_direction = {"direction":"slower","scope":"first_last_of_three_efforts","pace_change_sec_per_km":30.0,"comparability_basis":"duration","source":"workout_analysis_v2","efforts":3} — R4
+```
+
+Sélection : `["interval.pace_direction","interval.regularity"]`. `advice = null` ; raison : `condition_unmet:verified_steady_pacing_intent`, identiques avant/après.
+
+**Avant intégral**
+```text
+La dernière répétition comparable est 30 s/km plus lente que la première. Tes 3 répétitions comparables présentent des variations d'allure perceptibles.
+```
+**Après intégral**
+```text
+La dernière répétition comparable est 30 s/km plus lente que la première. Tes 3 répétitions comparables présentent des variations d'allure perceptibles.
+```
+
+Appréciation : **aucun gain nouveau** ; deux constats assez mécaniques. Pas de perte nouvelle ni d'endpoints redondants ajoutés ; scope premier/dernier de trois efforts, distinct d'une moyenne de groupes. Pas de cause ni de conseil d'allure stable sans intention vérifiée.
+
+#### 11.7.19 `long_history` — FR — inchangé
+
+```text
+session.long = {"duration":100.0,"usual_duration":50.0} — R8
+intensity.position = {"average_hr":140.0,"lt1":150.0,"lt2":170.0,"position":"below_LT1"} — R9
+comparison.pace = {"pace_difference":-14.4,"references":5} — R11
+comparison.hr = {"hr_difference":0.0,"references":2} — R11
+```
+
+Sélection : `["session.long","intensity.position"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Ta sortie est probablement longue : 100 min, contre 50 min habituellement. Ta FC moyenne est de 140 bpm, sous ton premier seuil de 150 bpm. Cette moyenne ne décrit ni chaque phase ni le temps en zones.
+```
+**Après intégral**
+```text
+Ta sortie est probablement longue : 100 min, contre 50 min habituellement. Ta FC moyenne est de 140 bpm, sous ton premier seuil de 150 bpm. Cette moyenne ne décrit ni chaque phase ni le temps en zones.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; caveat et assemblage identiques à `long`. Pas de perte nouvelle : le **second historique reste volontairement exclu** de la présentation, car `session.long` apporte déjà une comparaison habituelle ; ses faits ne disparaissent pas du catalogue.
+
+#### 11.7.20 `zero_history` — FR — inchangé
+
+```text
+session.kind = {"classification":"easy_run_probable"} — R6
+intensity.position = {"average_hr":140.0,"lt1":150.0,"lt2":170.0,"position":"below_LT1"} — R9
+comparison.pace = {"pace_difference":0,"references":5} — R11
+comparison.hr = {"hr_difference":0,"references":2} — R11
+trend.probable_improvement = {"status":"probable_improvement","observations":6,"median_change":-24.0,"span":92} — R11
+```
+
+Sélection : `["trend.probable_improvement"]`. `advice = null` ; raison : `no_advice_for_primary`, identiques avant/après.
+
+**Avant intégral**
+```text
+Sur les 6 observations de ton historique, ton allure médiane récente est 24 s/km plus rapide qu'auparavant sur 92 jours. Cela suggère une amélioration probable, sans prouver un changement de forme ; les effets du terrain et de la météo restent mêlés.
+```
+**Après intégral**
+```text
+Sur les 6 observations de ton historique, ton allure médiane récente est 24 s/km plus rapide qu'auparavant sur 92 jours. Cela suggère une amélioration probable, sans prouver un changement de forme ; les effets du terrain et de la météo restent mêlés.
+```
+
+Appréciation : **aucun gain nouveau**, mêmes lourdeurs que `history`. Pas de perte nouvelle ; comparaisons nulles conservées comme faits mais non promues dans le texte, tendance distincte inchangée. Zéro n'est pas absence de donnée, et cette tendance n'est toujours pas une preuve de forme.
+
+#### 11.7.21 `variable_easy_en` — EN — inchangé
+
+```text
+session.kind = {"classification":"easy_run_probable"} — R6
+intensity.hr = {"average_hr":145.0} — R1
+continuous.pace_halves = {"direction":"slower","scope":"equal_distance_halves","pace_change_sec_per_km":30.0,"coverage":"whole_session","source":"workout_analysis_v2"} — R7
+```
+
+Sélection : `["continuous.pace_halves"]`. Conseil : `advice.continuous_pacing` ; raison : `advice_admitted`, identiques avant/après.
+
+**Avant intégral**
+```text
+The second distance half of your session is 30 s/km slower than the first. On a future comparable run where you aim for an even pace, try to spread your pace more evenly across both halves.
+```
+**Après intégral**
+```text
+The second distance half of your session is 30 s/km slower than the first. On a future comparable run where you aim for an even pace, try to spread your pace more evenly across both halves.
+```
+
+Appréciation : **aucune amélioration nouvelle** ; « second distance half » et « spread your pace » restent à revoir humainement en anglais, sans correction silencieuse ici. Pas de perte nouvelle ; distance, condition d'objectif et absence de cause physiologique restent respectées.
+
+#### 11.7.22 `faster_es` — ES — changé
+
+```text
+intensity.hr = {"average_hr":145.0} — R1
+effort.first = {"effort_number":1,"recorded_pace":330.0,"recorded_duration":240.0} — R2
+effort.last = {"effort_number":4,"recorded_pace":300.0,"recorded_duration":240.0} — R2
+effort.coverage = {"recorded_total":4,"pace_count":4,"duration_count":4,"both_count":4} — R2
+interval.regularity = {"regularity_band":"noticeable","source":"workout_analysis_v2","status":"available","efforts":4,"comparability_basis":"duration"} — R3
+interval.pace_direction = {"direction":"faster","scope":"equal_count_endpoint_groups_middle_excluded","pace_change_sec_per_km":-20.0,"comparability_basis":"duration","source":"workout_analysis_v2","efforts":4,"group_size":2} — R4
+```
+
+Sélection : `["interval.pace_direction","effort.first","effort.last"]`. `advice = null` ; raison : `condition_unmet:verified_steady_pacing_intent`, identiques avant/après.
+
+**Avant intégral**
+```text
+Las 2 últimas repeticiones comparables son 20 s/km de media más rápidas que las 2 primeras. En el orden registrado, tu primer esfuerzo fue a 5:30/km. Tu último esfuerzo fue a 5:00/km.
+```
+**Après intégral**
+```text
+Tus 2 últimas repeticiones comparables fueron de media 20 s/km más rápidas que las 2 primeras. Entre los esfuerzos registrados, el primero fue a 5:30/km y el último a 5:00/km.
+```
+
+Appréciation : gain subjectif d'adresse et de liaison, **183 → 175 caractères** ; « Entre los esfuerzos registrados » demeure une qualification un peu technique. Aucune perte nouvelle : moyenne de groupes, deux allures et périmètre enregistré conservés, sans progrès physiologique implicite ni conseil ajouté. La qualité idiomatique reste soumise à revue humaine hispanophone.
+
+### 11.8 Résidus, réserves et absence de surpromesse
+
+Les **cinq** commentaires changés sont plus courts, sans objectif artificiel de longueur : `faster` 190 → 180, `slower` 189 → 179, `non_comparable` 68 → 54, `faster_odd` 68 → 54, `faster_es` 183 → 175 caractères. Ce sont des longueurs de chaînes, pas des scores de qualité. Les **17 autres commentaires restent verbatim identiques** : les caveats FC, historique et sortie longue ne bénéficient d'aucune amélioration nouvelle revendiquée.
+
+La paire est une phrase de présentation, non une fusion des preuves. Les limites structurées restent conservées même quand elles ne sont pas toutes récitées. Les durées différentes, décimales et cas sans allure ont leurs tests propres ; on ne déduit pas leur couverture de la seule lecture des cinq sorties changées. Dans le corpus, aucune sélection, aucun conseil, aucun fait et aucune limite ne change. Les limites propres à `partial`, `faster_odd`, `long_history` et aux cas sans seuils subsistent explicitement.
+
+Les tests API utilisent les mocks existants : ils valident le contrat testé, pas une connexion à une infrastructure réelle ni l'exhaustivité d'une installation de production. Les paquets privés indisponibles demeurent une limite de l'environnement restauré, sans workaround dans le code de production.
+
+Les choix LLM bruts historiques sont toujours absents : **pas de replay exact des mêmes choix**, pas de nouvel appel LLM réel. Les nombres de l'expérience historique cités en section 8 restent des déclarations historiques, pas une mesure actuelle. Aucun score de satisfaction, bénéfice utilisateur, taux de préférence, latence ou coût nouveau n'est fabriqué. La naturalité perçue dans cinq cas n'établit pas une amélioration universelle ni un nouveau résultat scientifique.
+
+### 11.9 Verdict et gouvernance
+
+**GO technique recommandé pour les trois corrections A/B/C** : réalisation appariée corrigée, indépendance aux IDs démontrée dans le périmètre testé, dépendances serveur nécessaires restaurées et deux tests API réellement exécutés avec succès. La vérification finale post-CodeQL comporte **1 635 tests réussis**, sans problème significatif restant signalé par la revue indépendante.
+
+**HOLD intégration maintenu** jusqu'à la **validation explicite de l'owner** et la **revue éditoriale humaine FR/EN/ES** requise. Ce GO technique ne vaut ni approbation humaine, ni autorisation de merge, ni validation de production ; il ne lève pas l'absence de replay LLM historique exact. Aucun merge, déploiement ou nouvelle PR : uniquement la même PR 374 sur `copilot/c379-human-coach-realization`, avec cet addendum documentaire et les corrections déjà testées.
