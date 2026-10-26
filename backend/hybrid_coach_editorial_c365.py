@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from decimal import Decimal
 from typing import Literal, TYPE_CHECKING
@@ -75,6 +76,7 @@ def fact_category(fact: AdmissibleFact) -> str:
         return "classification"
     if fact.id.startswith("trend.") or fact.id in {
         "prescription.review", "interval.regularity", "interval.pace_direction",
+        "continuous.pace_halves",
     }:
         return "conclusion"
     return "observation"
@@ -105,20 +107,35 @@ def allowed_forms(fact: AdmissibleFact, language: str) -> list[str]:
     return forms
 
 
+# C378: the Coach comments on the performed session, never on plan conformity.
+# The prescription fact stays admitted by C359 for other consumers, but it is
+# outside every Coach editorial path (candidates, support, LLM, closed options).
+EDITORIAL_EXCLUDED_FACTS = frozenset({"prescription.review"})
+
+
+def editorial_scope(facts: tuple[AdmissibleFact, ...]) -> tuple[AdmissibleFact, ...]:
+    return tuple(fact for fact in facts if fact.id not in EDITORIAL_EXCLUDED_FACTS)
+
+
 def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...]:
-    """Return a bounded shortlist of comparable main facts for this session."""
+    """Return a bounded, ordered shortlist of comparable main facts for this session.
+
+    Order reflects informative value, scope and support, never mere metric presence:
+    a V2 verdict on all comparable efforts (or on both measured halves) outranks
+    recorded endpoints, counts or a session average.
+    """
+    facts = editorial_scope(facts)
     index = {fact.id: fact for fact in facts}
-    review = index.get("prescription.review")
     intensity = index.get("intensity.position")
     above_lt2 = (
         intensity is not None
         and dict(intensity.values).get("position") == "above_LT2"
     )
-    deviation = (
-        review is not None and dict(review.values).get("status") == "deviation"
-    )
     history = tuple(fact.id for fact in facts if fact.id.startswith("trend."))
     history += tuple(fact.id for fact in facts if fact.id.startswith("comparison."))
+    regularity = index.get("interval.regularity")
+    band = dict(regularity.values).get("regularity_band") if regularity is not None else None
+    halves = "continuous.pace_halves" in index
     repeated = tuple(
         fact_id for fact_id in (
             "interval.pace_direction", "interval.regularity", "interval.count",
@@ -126,26 +143,27 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
     )
 
     if "interval.pace_direction" in index:
-        candidates = ["interval.pace_direction"]
-        if deviation:
-            candidates.append("prescription.review")
+        # An endpoint-scoped direction is not automatically more informative than a
+        # homogeneous verdict covering every comparable effort.
+        candidates = (
+            ["interval.regularity", "interval.pace_direction"] if band == "homogeneous"
+            else ["interval.pace_direction"]
+        )
         if "session.long" in index:
             candidates.append("session.long")
         candidates.extend(history[:1])
         return tuple(candidates)
     if "session.long" in index:
         candidates = ["session.long"]
+        if halves:
+            candidates.append("continuous.pace_halves")
         if above_lt2:
             candidates.append("intensity.position")
-        if deviation:
-            candidates.append("prescription.review")
         return tuple(candidates)
-    if "interval.regularity" in index:
+    if regularity is not None:
         candidates = ["interval.regularity"]
         if "intensity.position" in index:
             candidates.append("intensity.position")
-        if deviation:
-            candidates.append("prescription.review")
         return tuple(candidates)
     if repeated:
         repeated_observation = next(
@@ -153,11 +171,15 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
              if fact_id in index),
             repeated[0],
         )
-        if deviation:
-            return ("prescription.review",)
         candidates = [repeated_observation]
         if "intensity.position" in index:
             candidates.append("intensity.position")
+        return tuple(candidates)
+    if halves:
+        candidates = ["continuous.pace_halves"]
+        if "intensity.position" in index:
+            candidates.append("intensity.position")
+        candidates.extend(history[:1])
         return tuple(candidates)
 
     session_kind = index.get("session.kind")
@@ -171,6 +193,9 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
     trusted_type = (
         session_kind is not None and session_kind.confidence in {"medium", "high"}
     )
+    if continuous_type and trusted_type and "intensity.position" in index:
+        # Reliable personal-threshold position first, admissible history next.
+        return ("intensity.position", *history, "session.kind")
     if continuous_type and trusted_type and history:
         return history
     if history and all(
@@ -182,18 +207,153 @@ def primary_fact_candidates(facts: tuple[AdmissibleFact, ...]) -> tuple[str, ...
         return ("effort.first",)
     if "effort.last" in index:
         return ("effort.last",)
-    if above_lt2:
-        return ("intensity.position",)
-    if "intensity.position" in index and continuous_type and trusted_type:
-        return ("intensity.position", "session.kind")
     if "intensity.position" in index:
         return ("intensity.position",)
-    for fact_id in ("intensity.hr", "session.kind", "prescription.review"):
+    for fact_id in ("intensity.hr", "session.kind"):
         if fact_id in index:
             return (fact_id,)
     if "session.unknown" in index:
         return ("session.unknown",)
     return ()
+
+
+@dataclass(frozen=True)
+class AdviceRule:
+    """Closed registry entry: a conditional coaching suggestion tied to one fact."""
+
+    id: str
+    trigger_fact: str
+    conditions: tuple[str, ...]
+    contraindications: tuple[str, ...]
+    texts: tuple[tuple[str, str], ...]
+    provenance: str = "runindex.coach_editorial_c378.advice_registry"
+
+
+@dataclass(frozen=True)
+class AdviceDecision:
+    """Either one admitted advice or an explicit, fixed abstention reason."""
+
+    reason: str
+    advice_id: str | None = None
+    trigger_fact: str | None = None
+    conditions: tuple[str, ...] = ()
+    provenance: str | None = None
+    source_paths: tuple[str, ...] = ()
+    text: str = ""
+    rejections: tuple[tuple[str, str], ...] = ()
+
+
+ADVICE_REGISTRY: tuple[AdviceRule, ...] = (
+    AdviceRule(
+        "advice.stabilize_paces", "interval.regularity",
+        ("v2_regularity_band_variable", "all_comparable_recorded_efforts"),
+        ("v2_directional_progression_admitted",),
+        (("fr", "Sur une prochaine séance comparable où tu recherches la régularité, essaie de stabiliser davantage tes allures."),
+         ("en", "On a future comparable session where you aim for regularity, try to keep your paces steadier."),
+         ("es", "En una próxima sesión comparable en la que busques regularidad, intenta estabilizar más tus ritmos.")),
+    ),
+    AdviceRule(
+        "advice.keep_consistency", "interval.regularity",
+        ("v2_regularity_band_homogeneous", "all_comparable_recorded_efforts"),
+        ("v2_directional_progression_admitted",),
+        (("fr", "Cette constance est un bon repère à retrouver lors de tes prochaines séries comparables."),
+         ("en", "This consistency is a useful reference for your next comparable sets."),
+         ("es", "Esta constancia es una buena referencia para tus próximas series comparables.")),
+    ),
+    AdviceRule(
+        "advice.effort_distribution", "interval.pace_direction",
+        # A pace progression is not by itself a distribution error: this advice
+        # requires a verified steady-pacing intent, which no admitted fact carries
+        # today (prescription is outside Coach scope), so it always abstains.
+        ("verified_steady_pacing_intent", "v2_explicit_pace_direction",
+         "v2_comparable_recorded_efforts"),
+        ("v2_regularity_band_homogeneous",),
+        (("fr", "Pour une prochaine séance où tu recherches une allure stable, essaie de trouver ton rythme dès les premières répétitions."),
+         ("en", "For a future session where you aim for a steady pace, try to settle into your rhythm from the first repetitions."),
+         ("es", "Para una próxima sesión en la que busques un ritmo estable, intenta encontrar tu ritmo desde las primeras repeticiones.")),
+    ),
+    AdviceRule(
+        "advice.continuous_pacing", "continuous.pace_halves",
+        ("v2_slower_second_half", "whole_session_measured", "trusted_easy_or_steady_type"),
+        ("long_session",),
+        (("fr", "Sur une prochaine sortie comparable où tu vises une allure régulière, essaie de répartir ton allure plus également entre les deux moitiés."),
+         ("en", "On a future comparable run where you aim for an even pace, try to spread your pace more evenly across both halves."),
+         ("es", "En una próxima salida comparable en la que busques un ritmo regular, intenta repartir tu ritmo de forma más uniforme entre las dos mitades.")),
+    ),
+)
+
+
+def _advice_predicate(name: str, index: dict) -> bool:
+    """Closed vocabulary; an unknown name is never satisfied (fail closed)."""
+    def value(fact_id, key):
+        fact = index.get(fact_id)
+        return dict(fact.values).get(key) if fact is not None else None
+
+    def condition(fact_id, usage):
+        fact = index.get(fact_id)
+        return fact is not None and usage in fact.usage_conditions
+
+    kind = index.get("session.kind")
+    return {
+        "v2_regularity_band_variable":
+            value("interval.regularity", "regularity_band") == "variable",
+        "v2_regularity_band_homogeneous":
+            value("interval.regularity", "regularity_band") == "homogeneous",
+        "all_comparable_recorded_efforts":
+            condition("interval.regularity", "all_comparable_recorded_efforts"),
+        "v2_directional_progression_admitted": "interval.pace_direction" in index,
+        "v2_explicit_pace_direction":
+            condition("interval.pace_direction", "explicit_v2_faster_or_slower")
+            and value("interval.pace_direction", "direction") in {"faster", "slower"},
+        "v2_comparable_recorded_efforts":
+            condition("interval.pace_direction", "v2_comparable_recorded_efforts"),
+        "v2_slower_second_half":
+            condition("continuous.pace_halves", "explicit_v2_faster_or_slower")
+            and value("continuous.pace_halves", "direction") == "slower",
+        "whole_session_measured":
+            condition("continuous.pace_halves", "whole_session_measured")
+            and value("continuous.pace_halves", "coverage") == "whole_session",
+        "trusted_easy_or_steady_type":
+            kind is not None and kind.confidence in {"medium", "high"}
+            and value("session.kind", "classification") in {
+                "easy_run_probable", "steady_run_probable",
+            },
+        "long_session": "session.long" in index,
+        # No admitted fact establishes the runner's pacing intent; the planned
+        # prescription must not be used to guess it. Fail closed until one does.
+        "verified_steady_pacing_intent": False,
+    }.get(name, False)
+
+
+def select_advice(
+    primary_id: str | None, facts: tuple[AdmissibleFact, ...], language: str,
+) -> AdviceDecision:
+    """At most one advice, attached to the primary fact; abstain unless fully justified."""
+    facts = editorial_scope(facts)
+    index = {fact.id: fact for fact in facts}
+    if primary_id is None or primary_id not in index:
+        return AdviceDecision("no_primary_fact")
+    rules = [rule for rule in ADVICE_REGISTRY if rule.trigger_fact == primary_id]
+    if not rules:
+        return AdviceDecision("no_advice_for_primary")
+    rejections = []
+    for rule in rules:
+        unmet = next((c for c in rule.conditions if not _advice_predicate(c, index)), None)
+        if unmet is not None:
+            rejections.append((rule.id, f"condition_unmet:{unmet}"))
+            continue
+        blocked = next((c for c in rule.contraindications if _advice_predicate(c, index)), None)
+        if blocked is not None:
+            rejections.append((rule.id, f"contraindicated:{blocked}"))
+            continue
+        return AdviceDecision(
+            "advice_admitted", rule.id, primary_id, rule.conditions, rule.provenance,
+            index[primary_id].source_paths, dict(rule.texts)[language],
+        )
+    # A met-but-contraindicated rule is the most informative abstention reason.
+    reason = next((r for _, r in rejections if r.startswith("contraindicated:")),
+                  rejections[0][1])
+    return AdviceDecision(reason, rejections=tuple(rejections))
 
 
 def _unique_object(pairs):
@@ -217,6 +377,8 @@ def validate_editorial_selection(
     ids = [clause.fact_id for clause in clauses]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate_fact")
+    if set(ids) & EDITORIAL_EXCLUDED_FACTS:
+        raise ValueError("prescription_outside_coach_scope")
     for clause in clauses:
         if clause.fact_id not in index:
             raise ValueError("unknown_or_unauthorized_fact")
@@ -257,6 +419,12 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
                 "fr": " Ce verdict V2 décrit uniquement les allures, pas une stabilité physiologique.",
                 "en": " This V2 verdict describes paces only, not physiological stability.",
                 "es": " Este veredicto V2 describe solo los ritmos, no una estabilidad fisiológica.",
+            }[language]
+        if fact.id == "continuous.pace_halves":
+            return fact.assertion + {
+                "fr": " Cette comparaison porte uniquement sur les deux moitiés en distance enregistrées.",
+                "en": " This comparison concerns the two recorded distance halves only.",
+                "es": " Esta comparación se refiere únicamente a las dos mitades en distancia registradas.",
             }[language]
         if fact.id == "interval.pace_direction":
             return fact.assertion + {
@@ -315,6 +483,17 @@ def realize_clause(fact: AdmissibleFact, form: str, language: str) -> str:
         return (
             f"The final comparable repetition is {change} s/km "
             f"{'faster' if direction == 'faster' else 'slower'} than the first."
+        )
+    if fact.id == "continuous.pace_halves":
+        change = format_evidence_number(abs(values["pace_change_sec_per_km"]), language)
+        slower = values["direction"] == "slower"
+        return tr(
+            f"La seconde moitié en distance de ta séance est {change} s/km plus "
+            f"{'lente' if slower else 'rapide'} que la première.",
+            f"The second distance half of your session is {change} s/km "
+            f"{'slower' if slower else 'faster'} than the first.",
+            f"La segunda mitad en distancia de tu sesión es {change} s/km más "
+            f"{'lenta' if slower else 'rápida'} que la primera.",
         )
     if fact.id in {"effort.first", "effort.last"}:
         label = tr("premier", "first", "primer") if fact.id == "effort.first" else tr(

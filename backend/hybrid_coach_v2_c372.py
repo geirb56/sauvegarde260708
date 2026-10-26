@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import math
 
+from coach_language import MEASUREMENT_RECONCILIATION_REL_TOL, PACE_DISPLAY_CHANGE_SEC_KM
 from narrative_coach_v3 import _approved_repetition_judgment
 from workout_analysis_v2 import WorkoutAnalysisV2Response
 
@@ -152,5 +153,99 @@ def approved_v2_pace_direction(
                 "pace_change_sec_per_km": change,
             }
         return None
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+# Half of the 0.001 min/km display precision of V2 ``pacing`` fields, in s/km.
+_PACING_ROUNDING_SEC_KM = 0.03
+
+
+def _within_pacing_reference(analysis: WorkoutAnalysisV2Response, first, second) -> bool:
+    """Cross-check the halves against V2 session pacing fields outside the conclusion.
+
+    No pace is recomputed. Two identities of equal-distance halves are checked:
+    each half average lies between the fastest and slowest recorded split, and
+    the mean of the two halves equals the session average pace. References are
+    the split extremes and session average already published in
+    ``analysis.pacing``; when any is missing the validation is impossible and
+    the conclusion is not admitted. Tolerances only absorb V2 display rounding
+    and the existing V2 measurement reconciliation tolerance.
+    """
+    pacing = analysis.pacing
+    references = (pacing.fastest_split_min_km, pacing.slowest_split_min_km,
+                  pacing.average_pace_min_km)
+    if pacing.available is not True or not all(_finite_positive(v) for v in references):
+        return False
+    fastest, slowest, average = (value * 60 for value in references)
+    if fastest > slowest:
+        return False
+
+    def tolerance(reference):
+        return reference * MEASUREMENT_RECONCILIATION_REL_TOL + _PACING_ROUNDING_SEC_KM
+
+    within_range = all(
+        fastest - tolerance(fastest) <= half <= slowest + tolerance(slowest)
+        for half in (first, second)
+    )
+    return within_range and abs((first + second) / 2 - average) <= tolerance(average)
+
+
+def approved_v2_continuous_pacing(
+    evidence: ScopedV2Evidence | None, *, user_id: str, workout_id: str,
+) -> dict | None:
+    """C378: admit only V2's own significant equal-distance-halves pace conclusion.
+
+    No new comparison is computed: the direction and change are V2's. Their
+    internal coherence (sign, difference, V2 display threshold, whole measured
+    coverage, continuous structure) is checked, then the half paces are
+    cross-checked against the independent session pacing references of the same
+    V2 response (``_within_pacing_reference``). This is a consistency check of
+    the V2 response, not a re-validation of Garmin source splits, which the
+    response does not carry.
+    """
+    if (type(evidence) is not ScopedV2Evidence or not user_id or not workout_id
+            or evidence.user_id != user_id or evidence.source != "workout_analysis_v2"
+            or type(evidence.analysis) is not WorkoutAnalysisV2Response):
+        return None
+    analysis = evidence.analysis
+    try:
+        structure = analysis.signals.session_structure
+        if (analysis.version != "v2" or analysis.workout.id != workout_id
+                or structure.available is not True or structure.code != "continuous"
+                or analysis.coach_language is None
+                or analysis.phase_analysis.efforts and len(analysis.phase_analysis.phases) != 1):
+            return None
+        conclusions = analysis.coach_language.conclusions
+        eligible = [
+            item for item in conclusions
+            if item.code in {"coach.pacing", "coach.execution.pace_hr"}
+        ]
+        if len(eligible) != 1:
+            return None
+        item = eligible[0]
+        metadata, proof = item.metadata, item.evidence
+        direction = metadata.get("direction")
+        first = proof.get("first_half_pace_sec_per_km")
+        second = proof.get("second_half_pace_sec_per_km")
+        change = proof.get("second_half_pace_change_sec_per_km")
+        if (item.available is not True or item.kind != "conclusion"
+                or metadata.get("comparison_scope") != "equal_distance_halves"
+                or metadata.get("coverage") != "whole_session"
+                or direction not in {"faster", "slower"}
+                or not all(_finite_positive(value) for value in (first, second))
+                or not _finite_number(change)
+                or not math.isclose(change, second - first, rel_tol=0, abs_tol=1e-8)
+                or abs(change) < PACE_DISPLAY_CHANGE_SEC_KM
+                or (direction == "faster" and change >= 0)
+                or (direction == "slower" and change <= 0)
+                or not _within_pacing_reference(analysis, first, second)):
+            return None
+        return {
+            "direction": direction, "scope": "equal_distance_halves",
+            "pace_change_sec_per_km": change, "coverage": "whole_session",
+            "code": item.code, "index": conclusions.index(item),
+            "reference_check": "v2_pacing_split_range_and_session_average",
+        }
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         return None

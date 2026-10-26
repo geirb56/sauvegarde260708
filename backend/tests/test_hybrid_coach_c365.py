@@ -122,7 +122,8 @@ def test_contextual_primary_policy_for_session_types(name, expected):
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
-def test_documented_type_level_prescription_deviation_is_primary(language):
+def test_documented_prescription_deviation_stays_admitted_but_outside_coach_comment(language):
+    # C378: C359 still admits the authorized review; the Coach never comments on the plan.
     v3 = synthetic_case("intervals_4x4")
     v3.prescription_assessment.status = "deviation"
     facts = _facts(
@@ -130,8 +131,13 @@ def test_documented_type_level_prescription_deviation_is_primary(language):
     )
     review = next(fact for fact in facts if fact.id == "prescription.review")
     assert dict(review.values) == {"status": "deviation"}
-    assert hybrid.primary_fact_candidates(facts) == ("prescription.review",)
-    assert hybrid.select_deterministic_synthesis(facts)[0].id == "prescription.review"
+    assert hybrid.primary_fact_candidates(facts) == ("interval.count", "intensity.position")
+    claims = hybrid.select_deterministic_synthesis(facts)
+    assert "prescription.review" not in {claim.id for claim in claims}
+    with pytest.raises(ValueError, match="prescription_outside_coach_scope"):
+        hybrid.validate_editorial_selection(json.dumps(_selection(
+            "prescription.review", intent="review_prescription",
+        )), facts, language)
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
@@ -179,38 +185,38 @@ def test_distinctive_long_run_can_lead_a_supported_high_average_hr(language):
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
-def test_corroborated_history_leads_for_a_reliably_classified_continuous_session(language):
+def test_reliable_continuous_session_ranks_threshold_then_corroborated_history(language):
+    # C378 continuous priorities: threshold position (3) before admissible history (4);
+    # history stays a selectable candidate and the fallback's single support.
     v3 = synthetic_case("comparable_history")
     permissions = hybrid.HybridPermissions(history=True)
     facts = _facts(v3, permissions=permissions, language=language)
     candidates = hybrid.primary_fact_candidates(facts)
-    assert candidates and all(
-        fact_id.startswith(("trend.", "comparison.")) for fact_id in candidates
-    )
-    assert hybrid.select_deterministic_synthesis(facts)[0].id == candidates[0]
+    history = [f.id for f in facts if f.id.startswith("trend.")]
+    history += [f.id for f in facts if f.id.startswith("comparison.")]
+    assert candidates == ("intensity.position", *history, "session.kind")
+    fallback_ids = [c.id for c in hybrid.select_deterministic_synthesis(facts)]
+    assert fallback_ids == ["intensity.position", history[0]]
     packet = _context(v3, permissions=permissions, language=language)
     assert packet["primary_fact_candidates"] == list(candidates)
-    primary = next(fact for fact in facts if fact.id == candidates[0])
+    primary = next(fact for fact in facts if fact.id == history[0])
     valid = json.dumps(_selection(
-        candidates[0], form="explain", intent="compare_history",
+        history[0], form="explain", intent="compare_history",
     ))
     selected = _run(
         v3, permissions=permissions, language=language,
         transport=_provider(lambda *_: valid),
     )
     assert selected.mode == "editorial_realization"
-    assert selected.claims[0].id == candidates[0]
+    assert selected.claims[0].id == history[0]
     assert selected.claims[0].text == hybrid.realize_clause(primary, "explain", language)
-    intensity = next((fact for fact in facts if fact.id == "intensity.position"), None)
-    if intensity is not None:
-        invalid = json.dumps(_selection("intensity.position", intent="describe_session"))
-        result = _run(
-            v3, permissions=permissions, language=language,
-            transport=_provider(lambda *_: invalid),
-        )
-        assert result.mode == "deterministic_fallback"
-        assert result.claims[0].id == candidates[0]
-        assert result.claims[0].text == next(f.assertion for f in facts if f.id == candidates[0])
+    invalid = json.dumps(_selection("intensity.position", intent="compare_history"))
+    result = _run(
+        v3, permissions=permissions, language=language,
+        transport=_provider(lambda *_: invalid),
+    )
+    assert result.mode == "deterministic_fallback"
+    assert [c.id for c in result.claims] == fallback_ids
     assert all(fact.source_paths for fact in facts if fact.id in candidates)
 
 
@@ -420,10 +426,13 @@ def test_history_and_prescription_are_filtered_before_prompt_and_selection():
         result = _run(v3, transport=_provider(lambda *_: json.dumps(_selection(fact_id, intent=intent))))
         assert result.mode == "deterministic_fallback"
         assert fact_id not in {c.id for c in result.claims}
-    packet = _context(v3, permissions=hybrid.HybridPermissions(history=True, prescription=True))
+    permissions = hybrid.HybridPermissions(history=True, prescription=True)
+    packet = _context(v3, permissions=permissions)
     by_id = {f["evidence_id"]: f for f in packet["facts"]}
     assert by_id["trend.probable_improvement"]["required_permissions"] == ["history"]
-    assert by_id["prescription.review"]["required_permissions"] == ["prescription"]
+    # C378: still admitted by C359, but never sent to the Coach editorial selector.
+    assert "prescription.review" in {f.id for f in _facts(v3, permissions=permissions)}
+    assert "prescription.review" not in by_id
 
 
 def test_permission_values_must_be_true_not_truthy():

@@ -137,14 +137,21 @@ def test_real_v2_regularity_direction_and_recorded_endpoints(paces, language):
         if claim.id == "interval.regularity"
     ]
     assert regularity_claims
+    # C378: descriptive pace clauses no longer repeat disclaimers in the text; the
+    # limits remain attached to the claim and to the admitted fact.
+    assert all("not_physiological_stability" in c.limits for c in regularity_claims)
     assert all({"fr": "stabilité physiologique", "en": "physiological stability",
-                "es": "estabilidad fisiológica"}[language] in c.text for c in regularity_claims)
+                "es": "estabilidad fisiológica"}[language] not in c.text
+               for c in regularity_claims)
     if len(set(paces)) > 1:
         assert "interval.pace_direction" in ids
         combined = choices[0]
         assert combined.primary == "interval.pace_direction"
         assert "interval.regularity" in combined.supporting
-        assert "fatigue" in combined.text if language != "es" else "fatiga" in combined.text
+        assert {"no_physiological_progression", "no_causal_inference"} <= set(
+            combined.claims[0].limits,
+        )
+        assert ("fatigue" if language != "es" else "fatiga") not in combined.text.lower()
     for option in choices:
         result = run(
             v3, access=ACCESS, v2_evidence=evidence, language=language,
@@ -256,10 +263,9 @@ def test_prescription_only_from_authority(status, authorized, language):
     assert any(f.id == "prescription.review" for f in facts) is (
         authorized and status != "unavailable"
     )
-    if authorized and status == "deviation":
-        assert choices[0].primary == "prescription.review"
-        assert {"fr": "pas sur la conformité complète", "en": "not full compliance",
-                "es": "no del cumplimiento completo"}[language] in choices[0].text
+    # C378: admitted for other consumers, never part of a Coach editorial option.
+    assert all("prescription.review" not in (o.primary, *o.supporting) for o in choices)
+    assert choices[0].primary == "interval.count"
 
 
 @pytest.mark.parametrize("response,reason", [
