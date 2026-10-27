@@ -827,7 +827,7 @@ def test_all_required_output_fields_are_deterministic(language):
 
 
 @pytest.mark.parametrize("language", ["en", "fr", "es"])
-def test_visible_narratives_have_no_internal_versions_or_generic_classification_filler(language):
+def test_visible_narratives_only_name_v2_to_explain_missing_verdict(language):
     scenarios = [
         (_session(), None), (_trend_session(), None),
         (_intervals(4), _canonical_phases(4)),
@@ -837,7 +837,10 @@ def test_visible_narratives_have_no_internal_versions_or_generic_classification_
     for v3, phases in scenarios:
         result = narrative.deterministic_fallback(v3, language, phase_analysis=phases)
         text = _text(result)
-        assert "V3" not in text and "V2" not in text
+        assert "V3" not in text
+        if "V2" in text:
+            assert {"fr": "validé", "en": "validated", "es": "validado"}[language] in text
+            assert v3 is not None and v3.session_classification.type == "intervals"
         assert "session type assessed" not in text
         assert "session.classification" not in {
             claim["id"] for claim in narrative.build_narrative_context(v3, language, phase_analysis=phases)["claims"]

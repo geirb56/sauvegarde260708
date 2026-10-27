@@ -179,8 +179,9 @@ def test_c364_scientific_contract_specification(name, text, supported, monkeypat
     result = _run(
         v3, permissions=permissions, transport=_provider(lambda *_: text),
     )
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization"
+    assert result.reason == "deterministic_selection_validated"
+    assert not result.provider_attempted
     expected_claims = hybrid.select_deterministic_synthesis(facts)
     assert result.claims == expected_claims
     assert result.text == " ".join(claim.text for claim in expected_claims)
@@ -192,8 +193,8 @@ def test_c364_scientific_contract_specification(name, text, supported, monkeypat
             "supporting": [],
             "editorial_intent": "compare_history" if fact_id.startswith("comparison.") else "describe_session",
         })
-        realized = _run(v3, permissions=permissions, transport=_provider(lambda *_: selection))
-        assert realized.mode == "editorial_realization"
-        assert fragment in realized.text
-        assert realized.claims[0].evidence_ids == [fact_id]
-        assert realized.claims[0].evidence_refs
+        chosen = hybrid.validate_editorial_selection(selection, facts, "fr")
+        realized_claims = hybrid.realize_editorial_selection(chosen, facts, "fr")
+        assert any(fragment in claim.text for claim in realized_claims)
+        assert realized_claims[0].evidence_ids == [fact_id]
+        assert realized_claims[0].evidence_refs

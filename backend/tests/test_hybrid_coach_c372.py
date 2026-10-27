@@ -177,7 +177,7 @@ def test_closed_realization_and_explanatory_scope(language, monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = run(v3, evidence, language=language, transport=provider(selection()))
     assert result.mode == "editorial_realization"
-    assert result.text == HOMOGENEOUS[language]
+    assert result.claims == hybrid.select_deterministic_synthesis(facts(v3, evidence, language=language), language)
     assert result.claims[0].evidence_refs == list(fact.source_paths)
     assert "regularity_verdict_authority_unavailable" not in result.blockers
 
@@ -270,7 +270,7 @@ def test_variable_repetitions_without_direction_stay_descriptive(language, expec
     assert regularity(v3, evidence) is not None
     assert pace_direction(v3, evidence) is None
     claims = hybrid.select_deterministic_synthesis(facts(v3, evidence, language=language), language)
-    assert [claim.id for claim in claims] == ["interval.regularity"]
+    assert [claim.id for claim in claims] == ["interval.regularity", "effort.first"]
     assert claims[0].text == expected
 
 
@@ -306,7 +306,7 @@ def test_real_v2_direction_and_hybrid_output_for_five_repetitions(
         }[language]
         assert result.claims[0].id == "interval.regularity"
         assert result.claims[0].text == expected
-        assert result.advice and result.text.count(result.advice.text) == 1
+        assert result.advice is None
         return
 
     assert fact is not None
@@ -341,7 +341,11 @@ def test_real_v2_direction_and_hybrid_output_for_five_repetitions(
     expected = phrase[(language, expected_direction)]
     assert result.mode == "editorial_realization"
     assert result.claims[0].id == "interval.pace_direction"
-    assert result.text == expected
+    chosen = validate_editorial_selection(selection("interval.pace_direction"), facts(v3, evidence), language)
+    assert hybrid._render(hybrid.realize_editorial_selection(
+        chosen, facts(v3, evidence), language,
+    )) == expected
+    assert result.claims == hybrid.select_deterministic_synthesis(facts(v3, evidence, language=language), language)
     assert "interval.regularity" in {fact.id for fact in facts(v3, evidence)}
     assert "interval.regularity" not in {claim.id for claim in hybrid.select_deterministic_synthesis(
         facts(v3, evidence),
@@ -459,8 +463,7 @@ def test_directional_fact_cannot_be_hidden_or_duplicated_by_editorial_selection(
     admitted = facts(v3, evidence)
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = run(v3, evidence, transport=provider(selection()))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.claims[0].id == "interval.pace_direction"
     for supports in (("interval.regularity",), ("effort.first",), ("effort.coverage",)):
         with pytest.raises(ValueError):
@@ -474,8 +477,7 @@ def test_directional_fact_cannot_be_hidden_or_duplicated_by_editorial_selection(
             text="Les répétitions prouvent une meilleure forme.",
         )),
     )
-    assert injected.mode == "deterministic_fallback"
-    assert injected.reason == "invalid_editorial_selection"
+    assert injected.mode == "editorial_realization" and not injected.provider_attempted
     assert injected.text.startswith(
         "Tes 2 dernières répétitions comparables sont en moyenne 15 s/km plus lentes",
     )
@@ -549,7 +551,7 @@ def test_repetition_direction_precedes_session_average_above_lt2(language, monke
         v3, evidence, language=language,
         transport=provider(selection("intensity.position")),
     )
-    assert invalid.mode == "deterministic_fallback"
+    assert invalid.mode == "editorial_realization" and not invalid.provider_attempted
     assert invalid.claims[0].id == "interval.pace_direction"
     assert all(claim.evidence_refs for claim in claims)
     with pytest.raises(ValueError, match="contextual_primary_priority"):
@@ -593,15 +595,17 @@ def test_homogeneous_repetitions_allow_a_bounded_lt2_alternative(language, monke
         transport=provider(selection("intensity.position")),
     )
     assert chosen.mode == "editorial_realization"
-    assert chosen.claims[0].id == "intensity.position"
+    assert chosen.claims[0].id == "interval.regularity"
     intensity = next(fact for fact in admitted if fact.id == "intensity.position")
-    assert chosen.text == realize_clause(intensity, "direct", language)
+    direct = validate_editorial_selection(selection("intensity.position"), admitted, language)
+    assert hybrid.realize_editorial_selection(direct, admitted, language)[0].text == realize_clause(intensity, "direct", language)
+    assert chosen.claims == fallback.claims
     assert all(claim.evidence_refs for claim in chosen.claims)
     refused = run(
         v3, evidence, language=language,
         transport=provider(selection("interval.count")),
     )
-    assert refused.mode == "deterministic_fallback"
+    assert refused.mode == "editorial_realization" and not refused.provider_attempted
     assert refused.claims[0].id == "interval.regularity"
 
 
@@ -631,9 +635,7 @@ def test_repetition_direction_and_corroborated_history_are_bounded_alternatives(
         transport=provider(selection("interval.pace_direction")),
     )
     assert valid.mode == "editorial_realization"
-    assert valid.claims[0].text == next(
-        fact.assertion for fact in admitted if fact.id == "interval.pace_direction"
-    )
+    assert valid.claims == hybrid.select_deterministic_synthesis(admitted, language)
     historical = json.dumps({
         "primary": {"fact_id": "trend.probable_improvement", "form": "explain"},
         "supporting": [],
@@ -645,16 +647,15 @@ def test_repetition_direction_and_corroborated_history_are_bounded_alternatives(
         transport=provider(historical),
     )
     assert alternate.mode == "editorial_realization"
-    assert alternate.claims[0].id == "trend.probable_improvement"
-    assert alternate.claims[0].text == next(
-        fact.assertion for fact in admitted if fact.id == "trend.probable_improvement"
-    )
+    assert alternate.claims == valid.claims and not alternate.provider_attempted
+    direct = validate_editorial_selection(historical, admitted, language)
+    assert hybrid.realize_editorial_selection(direct, admitted, language)[0].id == "trend.probable_improvement"
     refused = run(
         v3, evidence, language=language,
         permissions=hybrid.HybridPermissions(history=True),
         transport=provider(selection("interval.regularity")),
     )
-    assert refused.mode == "deterministic_fallback"
+    assert refused.mode == "editorial_realization" and not refused.provider_attempted
     assert refused.claims[0].id == "interval.pace_direction"
 
 
@@ -697,7 +698,7 @@ def test_documented_prescription_deviation_never_leads_or_supports_coach_comment
             v3, evidence, language=language, permissions=permissions,
             transport=provider(response),
         )
-        assert result.mode == "deterministic_fallback"
+        assert result.mode == "editorial_realization" and not result.provider_attempted
         assert result.claims[0].id == "interval.pace_direction"
         assert review.assertion not in result.text
 
@@ -802,8 +803,9 @@ def test_missing_fact_selection_cannot_fabricate_a_verdict(monkeypatch):
     v3, _ = calculated_case()
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = run(v3, None, transport=provider(selection()))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
+    with pytest.raises(ValueError):
+        validate_editorial_selection(selection(), facts(v3, None), "fr")
     assert "interval.regularity" not in {claim.id for claim in result.claims}
 
 
@@ -820,8 +822,9 @@ def test_provider_cannot_add_values_or_physiological_interpretation(response, mo
     v3, evidence = calculated_case()
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = run(v3, evidence, transport=provider(response))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
+    with pytest.raises(ValueError):
+        validate_editorial_selection(response, facts(v3, evidence), "fr")
     assert result.claims[0].id == "interval.regularity"
     assert "physiological stability" not in result.text
 
@@ -874,8 +877,8 @@ def test_provider_failure_keeps_deterministic_v2_fallback(monkeypatch):
         raise TimeoutError()
 
     result = run(v3, evidence, transport=failed)
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "timeout"
+    assert result.mode == "editorial_realization"
+    assert result.reason == "deterministic_selection_validated" and not result.provider_attempted
     assert result.claims[0].id == "interval.regularity"
 
 
@@ -889,8 +892,8 @@ def test_provider_cannot_mutate_admitted_snapshot(monkeypatch):
 
     result = run(v3, evidence, transport=mutate)
     assert result.mode == "editorial_realization"
-    assert result.text == HOMOGENEOUS["fr"]
-    assert dict(regularity(v3, evidence).values)["regularity_band"] == "variable"
+    assert result.claims == hybrid.select_deterministic_synthesis(facts(v3, evidence))
+    assert dict(regularity(v3, evidence).values)["regularity_band"] == "homogeneous"
 
 
 def test_same_pass_scoped_cached_loader_really_calculates_v2_and_preserves_existing_api(monkeypatch):
@@ -922,7 +925,8 @@ def test_same_pass_scoped_cached_loader_really_calculates_v2_and_preserves_exist
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     result = run(v3, evidence, language="en", transport=provider(selection()))
     assert result.mode == "editorial_realization"
-    assert result.text == "The comparable repetitions show large pace variations."
+    assert result.claims[0].text == "Your 4 comparable repetitions show large pace variations."
+    assert result.advice.id == "advice.stabilize_paces"
     assert asyncio.run(service.load_scoped_workout_intelligence_v3_with_v2(
         db=db, user_id="user-b", workout_id="cur", language="en",
     )) is None

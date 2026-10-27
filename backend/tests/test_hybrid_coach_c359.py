@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import sys
 from types import ModuleType
+from unittest.mock import Mock
 
 import pytest
 
@@ -321,10 +322,10 @@ def test_seven_synthetic_fixtures_realize_editorial_selections(name, monkeypatch
     permissions = hybrid.HybridPermissions(history=True, prescription=True)
     result = _run(v3, permissions=permissions, transport=_provider(permissions=permissions))
     assert result.mode == "editorial_realization" and result.verdict == "HOLD"
-    assert result.reason == "editorial_selection_validated"
+    assert result.reason == "deterministic_selection_validated"
     assert result.verification_scope == "closed_realization"
-    assert result.provider_attempted and result.transport_kind == "injected"
-    assert result.claims and result.checks and result.editorial_selection
+    assert not result.provider_attempted and result.transport_kind == "none"
+    assert result.claims and result.checks and result.editorial_selection is None
     assert result.provider_duration_sec is None and result.cost is None
     assert result.elapsed_ms >= 0 and v3.model_dump() == before
     assert result.text and 8 <= len(result.text.split()) <= 150
@@ -332,7 +333,7 @@ def test_seven_synthetic_fixtures_realize_editorial_selections(name, monkeypatch
         assert "4 phases d'effort et 3 phases de récupération" in result.text
         assert "régularité" not in result.text
     if name == "comparable_history":
-        assert "pas une preuve" in result.text
+        assert "sans prouver un changement de forme" in result.text
 
 
 def test_seven_fixture_comparison_records_full_contract(monkeypatch):
@@ -397,7 +398,7 @@ def test_adversarial_invented_numbers_and_physiology_fall_back(text, reason, mon
     v3 = synthetic_case("no_physiology")
     result = _run(v3, transport=_provider(lambda *_: text))
     assert hybrid.validate_generated_narrative(text, _facts(v3))[1] == reason
-    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
 
 
 @pytest.mark.parametrize("text,reason", [
@@ -411,7 +412,7 @@ def test_adversarial_regularite_progression_cause_and_prescription(text, reason,
     v3 = synthetic_case("intervals_4x4") if "répétitions" in text else synthetic_case()
     result = _run(v3, transport=_provider(lambda *_: text))
     assert hybrid.validate_generated_narrative(text, _facts(v3))[1] == reason
-    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
 
 
 @pytest.mark.parametrize("name,text,reason", [
@@ -426,7 +427,7 @@ def test_omitted_essential_qualification_falls_back(name, text, reason, monkeypa
     assert hybrid.validate_generated_narrative(
         text, _facts(synthetic_case(name), permissions=hybrid.HybridPermissions(history=True)),
     )[1] == reason
-    assert result.mode == "deterministic_fallback" and result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
 
 
 def test_permission_filtered_history_cannot_be_laundered_into_response(monkeypatch):
@@ -436,8 +437,9 @@ def test_permission_filtered_history_cannot_be_laundered_into_response(monkeypat
         "Ton historique montre une amélioration probable qui confirme ta progression récente, un signe utile."
     ))
     assert not any(f.id.startswith("trend.") for f in _facts(v3))
-    assert result.mode == "deterministic_fallback"
-    assert result.reason == "invalid_editorial_selection"
+    assert result.mode == "editorial_realization"
+    assert not result.provider_attempted
+    assert not any(c.id.startswith(("trend.", "comparison.")) for c in result.claims)
 
 
 @pytest.mark.parametrize("language,text", [
@@ -548,7 +550,8 @@ def test_provider_unavailable_timeout_bad_format_and_overlength_keep_fallback(mo
         (long, "transport_response_limit"),
     ]:
         result = _run(transport=provider)
-        assert result.mode == "deterministic_fallback" and result.reason == reason
+        assert result.mode == "editorial_realization" and not result.provider_attempted
+        assert result.reason == "deterministic_selection_validated"
         assert result.text == hybrid._render(hybrid.select_deterministic_synthesis(_facts()))
         if provider is unavailable:
             assert result.provider_duration_sec is None
@@ -566,7 +569,7 @@ def test_default_adapter_uses_c360_limit_without_changing_chat_default(monkeypat
     monkeypatch.setattr(llm_coach, "_call_gpt", adapter)
     result = _run()
     assert result.mode == "editorial_realization"
-    assert calls == [{"sanitize_errors": True, "response_max_chars": 2400}]
+    assert calls == []
     assert llm_coach._clean_response("x" * 800) == "x" * 700
     assert llm_coach._clean_response("x" * 800, max_chars=2400) == "x" * 800
 
@@ -611,7 +614,7 @@ def test_default_adapter_missing_key_has_no_placeholder_latency(monkeypatch):
     import llm_coach
     monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "")
     result = _run()
-    assert result.mode == "deterministic_fallback"
+    assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.provider_duration_sec is None
 
 
@@ -624,6 +627,7 @@ def test_default_adapter_sanitizes_provider_exception_logs(monkeypatch, caplog):
     llm = ModuleType("emergentintegrations.llm")
     llm.__path__ = []
     chat = ModuleType("emergentintegrations.llm.chat")
+    calls = []
 
     class FailingChat:
         def __init__(self, **kwargs):
@@ -633,6 +637,7 @@ def test_default_adapter_sanitizes_provider_exception_logs(monkeypatch, caplog):
             return self
 
         async def send_message(self, message):
+            calls.append(message)
             raise RuntimeError("private-request-response-sentinel")
 
     chat.LlmChat = FailingChat
@@ -641,19 +646,47 @@ def test_default_adapter_sanitizes_provider_exception_logs(monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "emergentintegrations.llm", llm)
     monkeypatch.setitem(sys.modules, "emergentintegrations.llm.chat", chat)
     with caplog.at_level(logging.ERROR, logger="llm_coach"):
-        result = _run()
-    assert result.reason == "provider_unavailable"
+        text, success, metadata = asyncio.run(hybrid._transport(
+            "system", "prompt", "anonymous", "c359_hybrid",
+        ))
+    assert len(calls) == 1 and text is None and success is False
+    assert metadata["duration_sec"] >= 0
+    assert "private-request-response-sentinel" not in str(metadata)
     assert "private-request-response-sentinel" not in caplog.text
     assert "[LLM] Provider error" in caplog.text
 
 
+def test_generation_never_invokes_default_or_injected_provider_adapters(monkeypatch):
+    monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    import llm_coach
+    forbidden = Mock(side_effect=AssertionError("No provider selection"))
+    monkeypatch.setattr(hybrid, "_transport", forbidden)
+    monkeypatch.setattr(llm_coach, "_call_gpt", forbidden)
+    for transport in (None, forbidden):
+        result = _run(transport=transport)
+        assert result.reason == "deterministic_selection_validated"
+        assert not result.provider_attempted and result.transport_kind == "none"
+        assert result.provider_duration_sec is None
+    forbidden.assert_not_called()
+
+
 def test_successful_zero_duration_is_preserved(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
+    import llm_coach
+    calls = []
 
-    async def provider(*args):
-        return _writer_text(json.loads(args[1])), True, {"duration_sec": 0}
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        return "", True, {"duration_sec": 0}
 
-    assert _run(transport=provider).provider_duration_sec == 0
+    monkeypatch.setattr(llm_coach, "_call_gpt", provider)
+    _, success, metadata = asyncio.run(hybrid._transport(
+        "system", "prompt", "anonymous", "c359_hybrid",
+    ))
+    assert success is True and metadata["duration_sec"] == 0
+    assert calls == [{"sanitize_errors": True, "response_max_chars": hybrid.MAX_RESPONSE_CHARS}]
+    assert _run().provider_duration_sec is None
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es", "FR-fr", "de"])

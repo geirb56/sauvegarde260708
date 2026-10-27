@@ -1,8 +1,7 @@
-"""C365 offline prototype: V3 authority, LLM editing, closed realization."""
+"""V3 authority and deterministic, evidence-bound editorial realization."""
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 import json
 import math
@@ -157,7 +156,7 @@ class HybridResult(BaseModel):
     reason: str
     verification_scope: Literal["none", "closed_realization"] = "none"
     blockers: list[str] = Field(default_factory=lambda: [
-        "real_llm_editorial_quality_not_evaluated",
+        "production_wiring_not_validated",
     ])
     text: str = ""
     claims: list[HybridClaim] = Field(default_factory=list)
@@ -868,12 +867,18 @@ def select_deterministic_synthesis(
     primary and two distinct supports, never two facts restating one observation.
     """
     # Reuse C374's closed options and realizer; no second template system or I/O.
-    from hybrid_coach_closed_c374 import build_editorial_options, select_deterministic_option
+    from hybrid_coach_closed_c374 import (
+        build_editorial_options, select_deterministic_option, validate_option,
+    )
 
     displayable = tuple(f for f in facts if len(f.assertion) <= MAX_COACH_TEXT_CHARS)
     options = build_editorial_options(displayable, _language(language))
     if options:
-        return list(select_deterministic_option(options).claims)
+        for option in options:
+            validate_option(option, displayable, _language(language))
+        selected = select_deterministic_option(options)
+        validate_option(selected, displayable, _language(language))
+        return list(selected.claims)
     return []
 
 
@@ -1317,21 +1322,34 @@ async def generate_hybrid_coach(
     transport: Optional[Transport] = None,
     v2_evidence: Optional[ScopedV2Evidence] = None,
 ) -> HybridResult:
-    """Ask for editorial decisions only; no provider prose reaches the result."""
+    """Realize validated editorial evidence without invoking any transport."""
     start = perf_counter()
     if not _authorized(access):
         return HybridResult(mode="denied", reason="workout_analysis_not_authorized")
     if os.getenv(FEATURE_FLAG, "").lower() not in {"1", "true", "yes"}:
         return HybridResult(mode="disabled", reason="flag_off")
-    facts = build_admissible_facts(
-        intelligence, access=access, permissions=permissions, language=language,
-        v2_evidence=v2_evidence,
-    )
     lang = _language(language)
-    claims = select_deterministic_synthesis(facts, lang)
-    advice, advice_reason = admissible_advice(claims, facts, lang)
+    from hybrid_coach_closed_c374 import SelectionFailure
+
+    try:
+        facts = build_admissible_facts(
+            intelligence, access=access, permissions=permissions, language=language,
+            v2_evidence=v2_evidence,
+        )
+        claims = select_deterministic_synthesis(facts, lang)
+        advice, advice_reason = admissible_advice(claims, facts, lang)
+    except SelectionFailure as exc:
+        return HybridResult(
+            mode="deterministic_fallback", reason=str(exc), language=lang,
+            elapsed_ms=(perf_counter() - start) * 1000,
+        )
+    except Exception:
+        return HybridResult(
+            mode="deterministic_fallback", reason="option_not_admissible", language=lang,
+            elapsed_ms=(perf_counter() - start) * 1000,
+        )
     result = HybridResult(
-        mode="deterministic_fallback", reason="provider_unavailable",
+        mode="deterministic_fallback", reason="option_not_admissible",
         text=_render([*claims, *([advice] if advice else [])]),
         claims=claims, verification_scope="closed_realization",
         language=lang, advice=advice, advice_reason=advice_reason,
@@ -1343,77 +1361,14 @@ async def generate_hybrid_coach(
         result.reason = "no_authorized_facts" if not facts else "llm_access_not_authorized"
         result.elapsed_ms = (perf_counter() - start) * 1000
         return result
-    context = build_hybrid_context(
-        intelligence, access=access, permissions=permissions, language=language,
-        v2_evidence=v2_evidence,
-    )
-    prompt = json.dumps(context, ensure_ascii=False, allow_nan=False)
-    if len(prompt) > MAX_CONTEXT_CHARS:
-        result.reason = "context_size_limit"
+    if not claims:
+        result.reason = "option_not_admissible"
         result.elapsed_ms = (perf_counter() - start) * 1000
         return result
-    system = (
-        "You are the editorial selector for a running coach, not a scientific author. "
-        "Return only JSON matching selection_schema, with primary, supporting and editorial_intent. "
-        "Each clause has only fact_id and form from its allowed_forms. Never return prose, values, "
-        "transitions or extra fields. Select the distinctive observation first, but only from the "
-        "primary_fact_candidates contextual shortlist in the contract. It is not permission to select "
-        "any admitted fact. "
-        "Comment on the performed session only: never judge conformity to a plan or prescription. "
-        "For repeated sessions, V2 pace direction is the lead fact when admitted, unless V2 rates all "
-        "comparable efforts homogeneous. Do not promote session-average HR above LT2 over an admitted V2 direction. With V2 "
-        "regularity but no direction, choose the more useful of that verdict and an independently "
-        "admitted threshold observation. For continuous sessions, a supported long-duration comparison "
-        "or corroborated history can lead; historical evidence is not automatically more important "
-        "than a distinctive fact about today's session. Use session.kind only as its admitted probable "
-        "classification; do not classify an ambiguous session. "
-        "Do not repeat direction with regularity or endpoints, or combine a repetition count with its "
-        "coverage. "
-        "Select zero to two useful, genuinely distinct supports; fewer is better than padding. "
-        "Omit banal or redundant facts; length follows evidence, not a word quota. "
-        "Do not pair session.kind with intensity.position, session.unknown with intensity facts, "
-        "or multiple historical comparison facts, including session.long. Use each fact once. "
-        "Intent must match the primary fact's editorial_intent. direct is concise; explain retains "
-        "interpretation limits; rounded marks "
-        "an approximate comparison; threshold_label spells out lactate thresholds; count_words "
-        "spells phase counts; scope explains why an average alone cannot establish progress. "
-        "There are no causal relationships between clauses. Scientific relations are internal to "
-        "each admitted fact only. Backend realization supplies all scientific assertions."
-    )
-    result.provider_attempted = True
-    result.transport_kind = "injected" if transport is not None else "runindex"
-    try:
-        text, success, metadata = await asyncio.wait_for(
-            (transport or _transport)(system, prompt, "anonymous", "c359_hybrid"),
-            timeout=TIMEOUT_SECONDS,
-        )
-        duration = metadata.get("duration_sec") if success is True and isinstance(metadata, dict) else None
-        if _finite(duration) and duration >= 0:
-            result.provider_duration_sec = duration
-        if success is True and isinstance(text, str):
-            if ((isinstance(metadata, dict) and metadata.get("response_truncated") is True)
-                    or len(text) > MAX_RESPONSE_CHARS):
-                result.reason = "transport_response_limit"
-            else:
-                try:
-                    selection = validate_editorial_selection(text, facts, _language(language))
-                    realized = realize_editorial_selection(selection, facts, language)
-                    advice, advice_reason = admissible_advice(realized, facts, lang)
-                except (ValueError, TypeError):
-                    result.reason = "invalid_editorial_selection"
-                else:
-                    result.claims = realized
-                    result.text = _render(realized)
-                    result.advice, result.advice_reason = advice, advice_reason
-                    result.editorial_selection = selection
-                    result.mode = "editorial_realization"
-                    result.reason = "editorial_selection_validated"
-                    result.checks = ["schema", "admitted_ids", "forms", "intent", "nonredundancy",
-                                     "backend_values", "closed_composition"]
-    except asyncio.TimeoutError:
-        result.reason = "timeout"
-    except Exception:
-        # Neither rejected text nor exception details enter output or logs.
-        result.reason = "invalid_response_or_provider_error"
+    # ``transport`` remains accepted for API compatibility, never invoked.
+    result.mode = "editorial_realization"
+    result.reason = "deterministic_selection_validated"
+    result.checks = ["admitted_ids", "forms", "intent", "nonredundancy",
+                     "backend_values", "closed_composition"]
     result.elapsed_ms = (perf_counter() - start) * 1000
     return result

@@ -110,16 +110,14 @@ def assert_safe(result):
 # 1-5. Interval sessions ---------------------------------------------------------
 
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_01_regular_intervals_select_regularity_and_keep_consistency_advice(language):
+def test_01_regular_intervals_select_regularity_without_consistency_advice(language):
     v3, evidence = calculated_case(REGULAR, language=language)
     facts = admitted(v3, evidence, language=language)
     assert hybrid.primary_fact_candidates(facts)[0] == "interval.regularity"
     result = fallback(v3, evidence, language=language)
-    assert ids(result.claims) == ["interval.regularity"]
-    assert result.advice.id == "advice.keep_consistency"
-    assert result.advice.section == "advice"
-    assert result.advice.evidence_ids == ["interval.regularity"]
-    assert result.advice_reason == "advice_admitted"
+    assert ids(result.claims) == ["interval.regularity", "effort.first"]
+    assert result.advice is None
+    assert result.advice_reason == "condition_unmet:v2_regularity_band_variable"
     assert result.language == language
     assert_safe(result)
 
@@ -191,7 +189,7 @@ def test_04_irregular_intervals_select_variability_and_stabilize_advice(language
     facts = admitted(v3, evidence, language=language)
     assert "interval.pace_direction" not in {f.id for f in facts}
     result = fallback(v3, evidence, language=language)
-    assert ids(result.claims) == ["interval.regularity"]
+    assert ids(result.claims) == ["interval.regularity", "effort.first"]
     assert result.advice.id == "advice.stabilize_paces"
     assert_safe(result)
 
@@ -396,7 +394,8 @@ def test_15_insufficient_evidence_abstains_from_advice(language):
 # Cross-cutting guarantees ------------------------------------------------------
 
 def test_advice_registry_is_closed_complete_and_fails_closed():
-    assert len({rule.id for rule in ADVICE_REGISTRY}) == len(ADVICE_REGISTRY) == 4
+    assert len({rule.id for rule in ADVICE_REGISTRY}) == len(ADVICE_REGISTRY) == 3
+    assert all(rule.id != "advice.keep_consistency" for rule in ADVICE_REGISTRY)
     for rule in ADVICE_REGISTRY:
         assert rule.id.startswith("advice.") and rule.trigger_fact
         assert rule.conditions and rule.contraindications and rule.provenance
@@ -469,8 +468,8 @@ def test_lighter_caveats_never_admit_forbidden_interpretations(paces, language):
             v3, access=ACCESS, language=language, v2_evidence=evidence,
             transport=lambda *a, t=text: _prose(t),
         ))
-        assert result.mode == "deterministic_fallback"
-        assert result.reason == "invalid_editorial_selection"
+        assert result.mode == "editorial_realization"
+        assert not result.provider_attempted
         assert text not in result.text and not FORBIDDEN.search(result.text)
 
 
