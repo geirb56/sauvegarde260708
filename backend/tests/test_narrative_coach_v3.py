@@ -252,8 +252,8 @@ def test_interval_counts_do_not_invent_regularity(count, regularity):
     assert f"{count} effort phases" in result.analysis
     assert f"{count - 1} recovery phases" in result.analysis
     assert "regular repetitions" not in result.analysis
-    assert "cannot establish how evenly" in result.interpretation
-    assert "does not mean they were irregular" in result.interpretation
+    assert "does not allow us to assess the consistency" in result.interpretation
+    assert "does not mean they were inconsistent" in result.interpretation
     assert "regularity" not in " ".join(result.limitations)
     _assert_refs_exist(v3, result.evidence_refs)
     alternate = _selection(v3)
@@ -372,7 +372,7 @@ def test_six_efforts_without_categorical_coach_judgment_never_inherit_four_label
     )
     assert "Homogeneous" not in result.interpretation
     assert "6 effort phases" in result.analysis
-    assert "cannot establish how evenly" in result.interpretation
+    assert "does not allow us to assess the consistency" in result.interpretation
 
 
 def test_actual_two_effort_comparison_is_not_a_whole_series_judgment():
@@ -383,7 +383,7 @@ def test_actual_two_effort_comparison_is_not_a_whole_series_judgment():
         _intervals(2), phase_analysis=v2.phase_analysis, coach_language=v2.coach_language,
     )
     assert "Homogeneous" not in result.interpretation
-    assert "does not by itself establish" in result.interpretation
+    assert "alone is not enough to determine" in result.interpretation
 
 
 def test_canonical_judgment_context_and_cache_ignore_prose_but_bind_band(monkeypatch):
@@ -451,7 +451,7 @@ def test_six_efforts_without_canonical_judgment_remain_unknown():
     result = narrative.deterministic_fallback(v3, phase_analysis=phases)
     assert "6 effort phases" in result.analysis
     assert "dispersion" not in result.analysis
-    assert "cannot establish how evenly" in result.interpretation
+    assert "does not allow us to assess the consistency" in result.interpretation
     assert "regularity" not in " ".join(result.limitations)
     assert "phase_analysis.effort_regularity.available" in result.evidence_refs
     _assert_refs_exist(v3, result.evidence_refs, phases)
@@ -468,7 +468,8 @@ def test_v2_dispersion_is_reported_verbatim_including_zero(spread):
     )
     result = narrative.deterministic_fallback(_intervals(4), phase_analysis=phases)
     assert f"{spread:g} s/km" in result.analysis
-    assert "does not by itself establish that they were regular" in result.interpretation
+    assert "alone is not enough to determine whether the repetitions were consistent" in result.interpretation
+    assert "Paces vary" not in result.interpretation
 
 
 def test_v2_partial_comparison_and_absent_metrics_are_not_full_coverage():
@@ -488,11 +489,114 @@ def test_v2_partial_comparison_and_absent_metrics_are_not_full_coverage():
     ).analysis
 
 
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+@pytest.mark.parametrize("case", [
+    "spread", "zero", "partial", "missing_pace", "analysis_unavailable",
+    "regularity_unavailable", "no_phases_unavailable", "no_phases_available",
+])
+def test_c382_editorial_branches_preserve_evidence_and_missingness(language, case, monkeypatch):
+    texts = {
+        "en": (
+            "The measure describes pace differences between the efforts analysed; this alone is not enough to determine whether the repetitions were consistent.",
+            "The available data does not allow us to assess the consistency of the repetitions; this does not mean they were inconsistent.",
+            "There is not enough data to determine whether the repetitions were consistent.",
+            "The measured pace variations alone are not enough to draw a conclusion about the consistency of the repetitions.",
+            "The available information is not enough to draw a conclusion about the consistency of the repetitions.",
+        ),
+        "fr": (
+            "La mesure porte sur les écarts d'allure entre les efforts analysés ; elle ne suffit pas à déterminer si les répétitions ont été régulières.",
+            "Les données disponibles ne permettent pas d'évaluer la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières.",
+            "Les données sont insuffisantes pour déterminer si les répétitions ont été régulières.",
+            "Les variations d'allure mesurées ne suffisent pas, à elles seules, à conclure sur la régularité des répétitions.",
+            "Les informations disponibles ne permettent pas de conclure sur la régularité des répétitions.",
+        ),
+        "es": (
+            "La medida describe las diferencias de ritmo entre los esfuerzos analizados; por sí sola no basta para determinar si las repeticiones fueron regulares.",
+            "Los datos disponibles no permiten evaluar la regularidad de las repeticiones; esto no significa que fueran irregulares.",
+            "No hay datos suficientes para determinar si las repeticiones fueron regulares.",
+            "Las variaciones de ritmo medidas no bastan, por sí solas, para concluir si las repeticiones fueron regulares.",
+            "La información disponible no permite concluir si las repeticiones fueron regulares.",
+        ),
+    }[language]
+    v3 = _intervals(4, regularity=case == "no_phases_available")
+    phases = None if case.startswith("no_phases") else WorkoutAnalysisPhaseAnalysis(
+        available=case != "analysis_unavailable",
+        effort_regularity=WorkoutAnalysisEffortRegularity(
+            available=case != "regularity_unavailable", effort_count=4,
+            comparable_effort_count=3 if case == "partial" else 4,
+            pace_sample_count=3 if case == "partial" else 4,
+            partial_comparison=case == "partial",
+            pace_dispersion_sec_per_km=None if case == "missing_pace" else 0 if case == "zero" else 5,
+        ),
+    )
+    before = v3.model_dump(), phases.model_dump() if phases else None
+    forbidden = lambda *a, **kw: pytest.fail("Editorial rendering recalculated science")
+    monkeypatch.setattr("workout_analysis_v2._effort_regularity", forbidden)
+    monkeypatch.setattr("coach_language._repetition_judgment", forbidden)
+    # The existing relevance filter omits interval.regularity and interval.partial.
+    # Observe the pre-selection catalog without changing production selection.
+    catalog = []
+
+    def capture(frame, event, arg):
+        if event == "return" and frame.f_code is narrative.build_narrative_context.__code__:
+            catalog.extend(deepcopy(frame.f_locals["claims"]))
+
+    previous = sys.getprofile()
+    try:
+        sys.setprofile(capture)
+        context = narrative.build_narrative_context(v3, language, phase_analysis=phases)
+    finally:
+        sys.setprofile(previous)
+    claims = {claim["id"]: claim for claim in catalog}
+    spread = case in {"spread", "zero", "partial"}
+    unavailable = case in {"analysis_unavailable", "regularity_unavailable", "no_phases_unavailable"}
+    execution_refs = (
+        ["phase_analysis.effort_regularity"] if spread else
+        ["session_classification.type", "session_classification.limitations"] + (
+            ["phase_analysis.available", "phase_analysis.effort_regularity.available"] if phases else []
+        )
+    )
+    regularity_refs = (
+        (["session_classification.limitations"] if phases is None else
+         ["phase_analysis.available", "phase_analysis.effort_regularity.available"]) if unavailable else
+        ["phase_analysis.effort_regularity"] if phases else
+        ["session_classification.confidence", "session_classification.limitations"]
+    )
+    assert claims["interval.execution"] == {
+        "id": "interval.execution", "section": "interpretation",
+        "variants": [texts[0 if spread else 1]], "evidence_refs": execution_refs,
+    }
+    assert claims["interval.regularity"] == {
+        "id": "interval.regularity", "section": "limitations",
+        "variants": [texts[2 if unavailable else 3 if phases else 4]],
+        "evidence_refs": regularity_refs,
+    }
+    assert "interval.judgment" not in claims
+    assert ("interval.spread" in claims) is spread
+    assert ("interval.partial" in claims) is (case == "partial")
+    if case == "partial":
+        assert {"en": "3 of 4", "fr": "3 des 4", "es": "3 de las 4"}[language] in claims["interval.spread"]["variants"][0]
+    if case == "zero":
+        assert {"en": "Paces vary", "fr": "Les allures varient", "es": "Los ritmos varían"}[language] not in claims["interval.execution"]["variants"][0]
+    for claim in catalog:
+        assert not re.search(r"\bv[23]\b|verdict|veredicto", " ".join(claim["variants"]), re.IGNORECASE)
+        _assert_refs_exist(v3, claim["evidence_refs"], phases)
+    result = narrative.deterministic_fallback(v3, language, phase_analysis=phases)
+    validated = narrative.validate_narrative_selection(
+        {"selections": [{"id": c["id"], "variant": 0} for c in context["claims"]]},
+        v3, language, phase_analysis=phases,
+    )
+    assert _text(result) == _text(validated)
+    assert result.evidence_refs == validated.evidence_refs
+    assert result.recommendation is None
+    assert before == (v3.model_dump(), phases.model_dump() if phases else None)
+
+
 def test_mismatched_phase_counts_do_not_authorize_spread_claims():
     phases = _canonical_phases(4)
     result = narrative.deterministic_fallback(_intervals(6), phase_analysis=phases)
     assert "6 effort phases" in result.analysis and "dispersion" not in result.analysis
-    assert "cannot establish how evenly" in result.interpretation
+    assert "does not allow us to assess the consistency" in result.interpretation
     assert "regularity" not in " ".join(result.limitations)
 
 
@@ -827,7 +931,7 @@ def test_all_required_output_fields_are_deterministic(language):
 
 
 @pytest.mark.parametrize("language", ["en", "fr", "es"])
-def test_visible_narratives_only_name_v2_to_explain_missing_verdict(language):
+def test_visible_narratives_never_name_internal_versions(language):
     scenarios = [
         (_session(), None), (_trend_session(), None),
         (_intervals(4), _canonical_phases(4)),
@@ -837,10 +941,7 @@ def test_visible_narratives_only_name_v2_to_explain_missing_verdict(language):
     for v3, phases in scenarios:
         result = narrative.deterministic_fallback(v3, language, phase_analysis=phases)
         text = _text(result)
-        assert "V3" not in text
-        if "V2" in text:
-            assert {"fr": "validé", "en": "validated", "es": "validado"}[language] in text
-            assert v3 is not None and v3.session_classification.type == "intervals"
+        assert not re.search(r"\bv[23]\b|verdict|veredicto", text, re.IGNORECASE)
         assert "session type assessed" not in text
         assert "session.classification" not in {
             claim["id"] for claim in narrative.build_narrative_context(v3, language, phase_analysis=phases)["claims"]
@@ -854,14 +955,14 @@ def test_interval_interpretation_explains_actual_comparison_basis(basis, expecte
     result = narrative.deterministic_fallback(_intervals(4), phase_analysis=phases)
     assert "4 of the 4 efforts were grouped" in result.interpretation
     assert expected in result.interpretation
-    assert "not by itself establish" in result.interpretation
+    assert "alone is not enough to determine" in result.interpretation
     assert "phase_analysis.effort_regularity.comparability_basis" in result.evidence_refs
     assert len(result.limitations) == 1
 
 
 def test_six_unassessed_efforts_do_not_get_a_trend_or_execution_verdict():
     result = narrative.deterministic_fallback(_intervals(6), phase_analysis=_canonical_phases(6, paced=False))
-    assert "cannot establish how evenly" in result.interpretation
+    assert "does not allow us to assess the consistency" in result.interpretation
     assert "improvement" not in result.interpretation
     assert "6 effort phases" in result.analysis
     assert "heart rate" not in result.analysis

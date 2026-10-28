@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import math
 import os
 import re
@@ -18,7 +17,7 @@ from hybrid_coach_editorial_c365 import (
     fact_category, primary_fact_candidates, format_evidence_number, select_advice,
     format_recorded_seconds, RECORDED_WHOLE_DIGITS, realize_clause, validate_editorial_selection,
 )
-from narrative_coach_v3 import Transport, format_narrative_number
+from narrative_coach_v3 import Transport
 from hybrid_coach_v2_c372 import (
     ScopedV2Evidence, approved_v2_continuous_pacing, approved_v2_pace_direction,
     approved_v2_regularity,
