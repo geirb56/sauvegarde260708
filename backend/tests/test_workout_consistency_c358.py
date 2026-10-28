@@ -107,7 +107,7 @@ def test_partial_six_efforts_never_gain_a_regularity_judgment_from_16_6(language
     )
     assert LABELS[language][1] in result.analysis.lower()
     assert f"{format_narrative_number(16.5621, language)} s/km" in result.analysis
-    assert {"fr": "sans suffire", "en": "does not by itself", "es": "no demuestra"}[language] in result.interpretation
+    assert {"fr": "elle ne suffit pas", "en": "alone is not enough", "es": "por sí sola no basta"}[language] in result.interpretation
     assert {"fr": "4 des 6", "en": "4 of 6", "es": "4 de las 6"}[language] in result.analysis
     assert "phase_analysis.effort_regularity.comparable_effort_count" in result.evidence_refs
     assert regularity.partial_comparison is True

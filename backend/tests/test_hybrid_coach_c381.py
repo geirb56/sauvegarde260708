@@ -142,7 +142,7 @@ def test_absent_v2_verdict_is_not_a_contradictory_irregularity_claim():
     v3, evidence = calculated_case((300,) * 4)
     without = build_narrative_context(v3, "fr", phase_analysis=evidence.analysis.phase_analysis)
     assert not any(c["id"] == "interval.judgment" for c in without["claims"])
-    assert "verdict" in str(without) and "validé" in str(without)
+    assert "elle ne suffit pas à déterminer" in str(without)
     without_phases = build_narrative_context(v3, "fr")
     assert "ne signifie pas" in str(without_phases)
     with_v2 = build_narrative_context(

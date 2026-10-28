@@ -259,15 +259,15 @@ def build_narrative_context(
                       f"{path}.evidence.absolute_deviation_sec_per_km"))
         elif usable_spread:
             add("interval.execution", "interpretation",
-                "Without a validated V2 verdict, the pace standard deviation describes variation within the assessed repetitions, but does not by itself establish that they were regular.",
-                "En l'absence de verdict V2 validé, l'écart-type des allures décrit les variations entre les répétitions évaluées, sans suffire à affirmer qu'elles étaient régulières.",
-                "Sin un veredicto V2 validado, la desviación estándar de los ritmos describe la variación entre las repeticiones evaluadas, pero no demuestra por sí sola que fueran regulares.",
+                "The measure describes pace differences between the efforts analysed; this alone is not enough to determine whether the repetitions were consistent.",
+                "La mesure porte sur les écarts d'allure entre les efforts analysés ; elle ne suffit pas à déterminer si les répétitions ont été régulières.",
+                "La medida describe las diferencias de ritmo entre los esfuerzos analizados; por sí sola no basta para determinar si las repeticiones fueron regulares.",
                 refs=("phase_analysis.effort_regularity",))
         else:
             add("interval.execution", "interpretation",
-                "Without a validated V2 verdict, the supplied comparison cannot establish how evenly the repetitions were executed; this does not mean they were irregular.",
-                "En l'absence de verdict V2 validé, la comparaison disponible ne permet pas d'établir la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières.",
-                "Sin un veredicto V2 validado, la comparación disponible no permite establecer la regularidad de las repeticiones; esto no significa que fueran irregulares.",
+                "The available data does not allow us to assess the consistency of the repetitions; this does not mean they were inconsistent.",
+                "Les données disponibles ne permettent pas d'évaluer la régularité des répétitions ; cela ne signifie pas qu'elles étaient irrégulières.",
+                "Los datos disponibles no permiten evaluar la regularidad de las repeticiones; esto no significa que fueran irregulares.",
                 refs=("session_classification.type", "session_classification.limitations") + (
                     ("phase_analysis.available", "phase_analysis.effort_regularity.available")
                     if phase_analysis is not None else ()))
@@ -279,22 +279,22 @@ def build_narrative_context(
             pass
         elif unavailable:
             add("interval.regularity", "limitations",
-                "Effort regularity is unavailable without a validated V2 verdict; the repetitions cannot be called regular.",
-                "La régularité des efforts est indisponible en l'absence de verdict V2 validé ; les répétitions ne peuvent pas être dites régulières.",
-                "La regularidad de los esfuerzos no está disponible sin un veredicto V2 validado; no se puede afirmar que las repeticiones sean regulares.",
+                "There is not enough data to determine whether the repetitions were consistent.",
+                "Les données sont insuffisantes pour déterminer si les répétitions ont été régulières.",
+                "No hay datos suficientes para determinar si las repeticiones fueron regulares.",
                 refs=(("session_classification.limitations",) if phase_analysis is None
                       else ("phase_analysis.available", "phase_analysis.effort_regularity.available")))
         elif phase_analysis is not None:
             add("interval.regularity", "limitations",
-                "No validated V2 regularity verdict was supplied; pace standard deviation alone cannot confirm regular repetitions.",
-                "Aucun verdict V2 de régularité validé n'est fourni ; l'écart-type des allures seul ne confirme pas des répétitions régulières.",
-                "No se proporcionó un veredicto V2 de regularidad validado; la desviación estándar de los ritmos sola no confirma repeticiones regulares.",
+                "The measured pace variations alone are not enough to draw a conclusion about the consistency of the repetitions.",
+                "Les variations d'allure mesurées ne suffisent pas, à elles seules, à conclure sur la régularité des répétitions.",
+                "Las variaciones de ritmo medidas no bastan, por sí solas, para concluir si las repeticiones fueron regulares.",
                 refs=("phase_analysis.effort_regularity",))
         else:
             add("interval.regularity", "limitations",
-                "No validated V2 repetition-regularity judgment is supplied; availability does not establish regular repetitions.",
-                "Aucun jugement V2 de régularité des répétitions validé n'est fourni ; la disponibilité ne prouve pas leur régularité.",
-                "No se proporciona un juicio V2 validado sobre la regularidad de las repeticiones; la disponibilidad no demuestra su regularidad.",
+                "The available information is not enough to draw a conclusion about the consistency of the repetitions.",
+                "Les informations disponibles ne permettent pas de conclure sur la régularité des répétitions.",
+                "La información disponible no permite concluir si las repeticiones fueron regulares.",
                 refs=("session_classification.confidence", "session_classification.limitations"))
 
     if _finite(intensity.hr_used_bpm) and cls.type != "intervals":
