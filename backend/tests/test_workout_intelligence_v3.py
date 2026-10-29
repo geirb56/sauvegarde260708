@@ -1035,9 +1035,40 @@ def test_narrative_reuses_scoped_canonical_phase_analysis_without_extra_reads():
     assert phases.effort_regularity.available
     assert len(phases.efforts) == 5
     assert generator.call_args.kwargs["coach_language"] is not None
+    canonical = generator.call_args.kwargs["v2_analysis"]
+    assert canonical.workout.id == "cur"
+    assert canonical.phase_analysis is phases
+    assert canonical.coach_language is generator.call_args.kwargs["coach_language"]
     assert asyncio.run(wiv3_service.load_scoped_workout_intelligence_v3_with_narrative(
         db=db, user_id="user-b", workout_id="cur", language="en",
     )) is None
+
+
+def test_c388_synthesis_is_scoped_even_for_same_workout_id_across_users():
+    import narrative_coach_v3
+
+    db = _db(_w("cur", CURRENT_DAY), [], phases=_interval_phases())
+    other_workout = {**db.workouts.docs[0], "user_id": "user-b"}
+    other_activity = {**db.garmin_activities.docs[0], "user_id": "user-b",
+                      "activity_details": None}
+    db.workouts.docs.append(other_workout)
+    db.garmin_activities.docs.append(other_activity)
+    results = []
+    for user_id in ("user-a", "user-b", "user-a"):
+        _, intelligence, rendered = asyncio.run(
+            wiv3_service.load_scoped_workout_intelligence_v3_with_narrative(
+                db=db, user_id=user_id, workout_id="cur", language="fr",
+            )
+        )
+        results.append(rendered)
+        if user_id == "user-a":
+            assert "session_synthesis.primary" in rendered.evidence_refs
+        else:
+            assert not any(ref.startswith("session_synthesis.") for ref in rendered.evidence_refs)
+            assert rendered == narrative_coach_v3.deterministic_fallback(intelligence, "fr")
+    assert results[0] == results[2] != results[1]
+    assert all(query.get("user_id") in {"user-a", "user-b"}
+               for coll in vars(db).values() for query in coll.queries)
 
 
 def test_v3_sources_have_no_writes_garmin_calls_or_rag():

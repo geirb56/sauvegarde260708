@@ -182,9 +182,9 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
         evidence["regularity_band"] = "not_assessed"
         text = _localized(
             language,
-            f"Sur tes deux répétitions comparables, l'écart d'allure est de {_n(abs(delta))} s/km ; cela ne suffit pas à juger la régularité d'une série.",
-            f"Your two comparable repetitions differ by {_n(abs(delta))} s/km; this is not enough to judge a whole series.",
-            f"Tus dos repeticiones comparables difieren {_n(abs(delta))} s/km; no basta para juzgar la regularidad de una serie.",
+            f"Sur tes deux répétitions comparables, l'écart d'allure est de {_n(abs(delta), language)} s/km ; cela ne suffit pas à juger la régularité d'une série.",
+            f"Your two comparable repetitions differ by {_n(abs(delta), language)} s/km; this is not enough to judge a whole series.",
+            f"Tus dos repeticiones comparables difieren {_n(abs(delta), language)} s/km; no basta para juzgar la regularidad de una serie.",
         )
         return (text, evidence, False), None
 
@@ -196,9 +196,9 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
     }[band]
     text = _localized(
         language,
-        f"{label} sur tes {len(paces)} répétitions : écart moyen de {_n(dispersion)} s/km par rapport à l'allure médiane.",
-        f"{label} across your {len(paces)} repetitions: an average gap of {_n(dispersion)} s/km from the median pace.",
-        f"{label} en tus {len(paces)} repeticiones: diferencia media de {_n(dispersion)} s/km respecto a la mediana de los ritmos.",
+        f"{label} sur tes {len(paces)} répétitions : écart moyen de {_n(dispersion, language)} s/km par rapport à l'allure médiane.",
+        f"{label} across your {len(paces)} repetitions: an average gap of {_n(dispersion, language)} s/km from the median pace.",
+        f"{label} en tus {len(paces)} repeticiones: diferencia media de {_n(dispersion, language)} s/km respecto a la mediana de los ritmos.",
     )
     atypical = []
     if len(paces) >= 4:
@@ -223,16 +223,16 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
                         atypical_difference_sec_per_km=pace - center, atypical_limit_sec_per_km=limit)
         text += " " + _localized(
             language,
-            f"La répétition n° {number} se distingue à {formatted}, {_n(abs(pace - center))} s/km plus {'rapide' if pace < center else 'lente'} que l'allure centrale des autres répétitions.",
-            f"Repetition {number} stands out at {formatted}, {_n(abs(pace - center))} s/km {'faster' if pace < center else 'slower'} than the central pace of the other repetitions.",
-            f"La repetición n.º {number} destaca a {formatted}, {_n(abs(pace - center))} s/km más {'rápida' if pace < center else 'lenta'} que el ritmo central de las demás repeticiones.",
+            f"La répétition n° {number} se distingue à {formatted}, {_n(abs(pace - center), language)} s/km plus {'rapide' if pace < center else 'lente'} que l'allure centrale des autres répétitions.",
+            f"Repetition {number} stands out at {formatted}, {_n(abs(pace - center), language)} s/km {'faster' if pace < center else 'slower'} than the central pace of the other repetitions.",
+            f"La repetición n.º {number} destaca a {formatted}, {_n(abs(pace - center), language)} s/km más {'rápida' if pace < center else 'lenta'} que el ritmo central de las demás repeticiones.",
         )
         # Endpoint proximity adds context without interpreting an outlier as a trend.
         if abs(delta) + 2 * uncertainty <= trend_limit:
             text += " " + _localized(
-                language, f"La première et la dernière restent proches ({_n(abs(delta))} s/km d'écart).",
-                f"The first and last remain close ({_n(abs(delta))} s/km apart).",
-                f"La primera y la última siguen próximas ({_n(abs(delta))} s/km de diferencia).",
+                language, f"La première et la dernière restent proches ({_n(abs(delta), language)} s/km d'écart).",
+                f"The first and last remain close ({_n(abs(delta), language)} s/km apart).",
+                f"La primera y la última siguen próximas ({_n(abs(delta), language)} s/km de diferencia).",
             )
             evidence["endpoint_relationship"] = "close"
     elif len(paces) >= 4:
@@ -253,9 +253,9 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
             evidence["group_direction"] = "faster" if change < 0 else "slower"
             evidence["direction"] = evidence["group_direction"]
             text += " " + _localized(
-                language, f"La fin est plus {'rapide' if change < 0 else 'lente'} : {_n(abs(change))} s/km entre les {size} premières et les {size} dernières répétitions.",
-                f"The finish is {'faster' if change < 0 else 'slower'}: {_n(abs(change))} s/km between the first {size} and last {size} repetitions.",
-                f"El final es más {'rápido' if change < 0 else 'lento'}: {_n(abs(change))} s/km entre las primeras {size} y las últimas {size} repeticiones.",
+                language, f"La fin est plus {'rapide' if change < 0 else 'lente'} : {_n(abs(change), language)} s/km entre les {size} premières et les {size} dernières répétitions.",
+                f"The finish is {'faster' if change < 0 else 'slower'}: {_n(abs(change), language)} s/km between the first {size} and last {size} repetitions.",
+                f"El final es más {'rápido' if change < 0 else 'lento'}: {_n(abs(change), language)} s/km entre las primeras {size} y las últimas {size} repeticiones.",
             )
         elif abs(change) + 2 * uncertainty <= trend_limit:
             evidence["group_direction"] = "close"
@@ -266,9 +266,9 @@ def _repetition_judgment(phases, cohort, basis, comparable, language, config):
             evidence["trend_scope"] = "first_last_of_three_efforts"
             evidence["trend_limit_sec_per_km"] = trend_limit
             text += " " + _localized(
-                language, f"La dernière répétition est {_n(abs(delta))} s/km plus {'rapide' if delta < 0 else 'lente'} que la première.",
-                f"The last repetition is {_n(abs(delta))} s/km {'faster' if delta < 0 else 'slower'} than the first.",
-                f"La última repetición es {_n(abs(delta))} s/km más {'rápida' if delta < 0 else 'lenta'} que la primera.",
+                language, f"La dernière répétition est {_n(abs(delta), language)} s/km plus {'rapide' if delta < 0 else 'lente'} que la première.",
+                f"The last repetition is {_n(abs(delta), language)} s/km {'faster' if delta < 0 else 'slower'} than the first.",
+                f"La última repetición es {_n(abs(delta), language)} s/km más {'rápida' if delta < 0 else 'lenta'} que la primera.",
             )
     return (text, evidence, True), None
 
@@ -277,8 +277,9 @@ def _localized(language, fr, en, es):
     return {"fr": fr, "en": en, "es": es}.get(language, en)
 
 
-def _n(value):
-    return f"{value:.1f}".rstrip("0").rstrip(".")
+def _n(value, language="en"):
+    text = f"{value:.1f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",") if language in {"fr", "es"} else text
 
 
 def _pace_description(paces, language):
@@ -287,20 +288,20 @@ def _pace_description(paces, language):
     # At the boundary, reuse V2's inclusive significant-change convention.
     if spread < PACE_DISPLAY_CHANGE_SEC_KM:
         return "stable", _localized(
-            language, f"Ton allure reste régulière (écart maximal de {_n(spread)} s/km).",
-            f"Your pace stays steady (a range of {_n(spread)} s/km).",
-            f"Tu ritmo se mantiene estable (rango de {_n(spread)} s/km).",
+            language, f"Ton allure reste régulière (écart maximal de {_n(spread, language)} s/km).",
+            f"Your pace stays steady (a range of {_n(spread, language)} s/km).",
+            f"Tu ritmo se mantiene estable (rango de {_n(spread, language)} s/km).",
         )
     if abs(delta) < PACE_DISPLAY_CHANGE_SEC_KM:
         return "variable", _localized(
-            language, f"Ton allure varie de {_n(spread)} s/km entre les segments mesurés.",
-            f"Your pace varies by {_n(spread)} s/km across the measured segments.",
-            f"Tu ritmo varía {_n(spread)} s/km entre los segmentos medidos.",
+            language, f"Ton allure varie de {_n(spread, language)} s/km entre les segments mesurés.",
+            f"Your pace varies by {_n(spread, language)} s/km across the measured segments.",
+            f"Tu ritmo varía {_n(spread, language)} s/km entre los segmentos medidos.",
         )
     return ("slower" if delta > 0 else "faster"), _localized(
-        language, f"Ton dernier segment est {_n(abs(delta))} s/km plus {'lent' if delta > 0 else 'rapide'} que le premier.",
-        f"Your last segment is {_n(abs(delta))} s/km {'slower' if delta > 0 else 'faster'} than your first.",
-        f"Tu último segmento es {_n(abs(delta))} s/km más {'lento' if delta > 0 else 'rápido'} que el primero.",
+        language, f"Ton dernier segment est {_n(abs(delta), language)} s/km plus {'lent' if delta > 0 else 'rapide'} que le premier.",
+        f"Your last segment is {_n(abs(delta), language)} s/km {'slower' if delta > 0 else 'faster'} than your first.",
+        f"Tu último segmento es {_n(abs(delta), language)} s/km más {'lento' if delta > 0 else 'rápido'} que el primero.",
     )
 
 
@@ -317,14 +318,14 @@ def _crossed_description(paces, first_hr, last_hr, language):
     )
     if abs(pace_delta) < PACE_DISPLAY_CHANGE_SEC_KM:
         return _localized(
-            language, f"Entre ton premier et ton dernier segment, l'allure diffère de {_n(abs(pace_delta))} s/km et la FC moyenne passe de {_n(first_hr)} à {_n(last_hr)} bpm.",
-            f"Between your first and last segments, pace differs by {_n(abs(pace_delta))} s/km and average heart rate goes from {_n(first_hr)} to {_n(last_hr)} bpm.",
-            f"Entre tu primer y último segmento, el ritmo difiere {_n(abs(pace_delta))} s/km y la FC media pasa de {_n(first_hr)} a {_n(last_hr)} lpm.",
+            language, f"Entre ton premier et ton dernier segment, l'allure diffère de {_n(abs(pace_delta), language)} s/km et la FC moyenne passe de {_n(first_hr, language)} à {_n(last_hr, language)} bpm.",
+            f"Between your first and last segments, pace differs by {_n(abs(pace_delta), language)} s/km and average heart rate goes from {_n(first_hr, language)} to {_n(last_hr, language)} bpm.",
+            f"Entre tu primer y último segmento, el ritmo difiere {_n(abs(pace_delta), language)} s/km y la FC media pasa de {_n(first_hr, language)} a {_n(last_hr, language)} lpm.",
         )
     return pace_text.rstrip(".") + _localized(
-        language, f", avec une FC moyenne {hr_direction} sur le dernier ({_n(first_hr)} à {_n(last_hr)} bpm).",
-        f", with {hr_direction} average heart rate on the last ({_n(first_hr)} to {_n(last_hr)} bpm).",
-        f", con una FC media {hr_direction} en el último ({_n(first_hr)} a {_n(last_hr)} lpm).",
+        language, f", avec une FC moyenne {hr_direction} sur le dernier ({_n(first_hr, language)} à {_n(last_hr, language)} bpm).",
+        f", with {hr_direction} average heart rate on the last ({_n(first_hr, language)} to {_n(last_hr, language)} bpm).",
+        f", con una FC media {hr_direction} en el último ({_n(first_hr, language)} a {_n(last_hr, language)} lpm).",
     )
 
 
@@ -625,15 +626,15 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                 direction = ("slower" if half_delta > 0 else "faster") if significant else "stable"
                 if significant:
                     description = _localized(
-                        language, f"Tu cours la seconde moitié en distance de ta séance {_n(abs(half_delta))} s/km plus {'lentement' if half_delta > 0 else 'vite'}.",
-                        f"You run the second distance half of your session {_n(abs(half_delta))} s/km {'slower' if half_delta > 0 else 'faster'}.",
-                        f"Corres la segunda mitad en distancia de tu sesión {_n(abs(half_delta))} s/km más {'lento' if half_delta > 0 else 'rápido'}.",
+                        language, f"Tu cours la seconde moitié en distance de ta séance {_n(abs(half_delta), language)} s/km plus {'lentement' if half_delta > 0 else 'vite'}.",
+                        f"You run the second distance half of your session {_n(abs(half_delta), language)} s/km {'slower' if half_delta > 0 else 'faster'}.",
+                        f"Corres la segunda mitad en distancia de tu sesión {_n(abs(half_delta), language)} s/km más {'lento' if half_delta > 0 else 'rápido'}.",
                     )
                 else:
                     description = _localized(
-                        language, f"Entre les deux moitiés en distance de ta séance, l'allure moyenne diffère de {_n(abs(half_delta))} s/km.",
-                        f"Between the two distance halves of your session, average pace differs by {_n(abs(half_delta))} s/km.",
-                        f"Entre las dos mitades en distancia de tu sesión, el ritmo medio difiere {_n(abs(half_delta))} s/km.",
+                        language, f"Entre les deux moitiés en distance de ta séance, l'allure moyenne diffère de {_n(abs(half_delta), language)} s/km.",
+                        f"Between the two distance halves of your session, average pace differs by {_n(abs(half_delta), language)} s/km.",
+                        f"Entre las dos mitades en distancia de tu sesión, el ritmo medio difiere {_n(abs(half_delta), language)} s/km.",
                     )
                 if half_hr:
                     hr_delta = last_hr - first_hr
@@ -641,9 +642,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                                     heart_rate_change_bpm=hr_delta,
                                     hr_aggregation="duration_weighted_measured")
                     description = description.rstrip(".") + _localized(
-                        language, f", avec une FC moyenne de {_n(first_hr)} puis {_n(last_hr)} bpm sur ces mêmes moitiés.",
-                        f", with average heart rate of {_n(first_hr)} then {_n(last_hr)} bpm over those same halves.",
-                        f", con una FC media de {_n(first_hr)} y luego {_n(last_hr)} lpm en esas mismas mitades.",
+                        language, f", avec une FC moyenne de {_n(first_hr, language)} puis {_n(last_hr, language)} bpm sur ces mêmes moitiés.",
+                        f", with average heart rate of {_n(first_hr, language)} then {_n(last_hr, language)} bpm over those same halves.",
+                        f", con una FC media de {_n(first_hr, language)} y luego {_n(last_hr, language)} lpm en esas mismas mitades.",
                     )
                     crossed = True
         if evidence["comparison_scope"] == "measured_segments":
@@ -685,9 +686,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
             evidence.update(first_hr_bpm=first.average_hr, last_hr_bpm=last.average_hr,
                            heart_rate_change_bpm=last.average_hr - first.average_hr)
             description += " " + _localized(
-               language, f"La FC moyenne passe de {_n(first.average_hr)} à {_n(last.average_hr)} bpm entre la première et la dernière.",
-               f"Average heart rate goes from {_n(first.average_hr)} to {_n(last.average_hr)} bpm between the first and last.",
-               f"La FC media pasa de {_n(first.average_hr)} a {_n(last.average_hr)} lpm entre la primera y la última.",
+               language, f"La FC moyenne passe de {_n(first.average_hr, language)} à {_n(last.average_hr, language)} bpm entre la première et la dernière.",
+               f"Average heart rate goes from {_n(first.average_hr, language)} to {_n(last.average_hr, language)} bpm between the first and last.",
+               f"La FC media pasa de {_n(first.average_hr, language)} a {_n(last.average_hr, language)} lpm entre la primera y la última.",
             )
         add("coach.repetitions.pace_hr" if crossed else "coach.repetitions.pacing",
             description, evidence, "repetitions",
@@ -730,9 +731,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                     "más lento" if delta > 0 else "más rápido",
                 )
                 text = _localized(
-                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec allure mesurée, sans garantie de même nature ni de même structure, ton allure moyenne est {_n(abs(seconds))} s/km {adjective}.",
-                    f"Compared with your {count} earlier sessions of comparable distance with recorded pace, without any guarantee of the same nature or structure, your average pace is {_n(abs(seconds))} s/km {adjective}.",
-                    f"Frente a tus {count} sesiones anteriores de distancia comparable con ritmo registrado, sin garantía de que sean de la misma naturaleza ni de la misma estructura, tu ritmo medio es {_n(abs(seconds))} s/km {adjective}.",
+                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec allure mesurée, sans garantie de même nature ni de même structure, ton allure moyenne est {_n(abs(seconds), language)} s/km {adjective}.",
+                    f"Compared with your {count} earlier sessions of comparable distance with recorded pace, without any guarantee of the same nature or structure, your average pace is {_n(abs(seconds), language)} s/km {adjective}.",
+                    f"Frente a tus {count} sesiones anteriores de distancia comparable con ritmo registrado, sin garantía de que sean de la misma naturaleza ni de la misma estructura, tu ritmo medio es {_n(abs(seconds), language)} s/km {adjective}.",
                 )
                 if delta == 0:
                     text = _localized(
@@ -742,9 +743,9 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
                     )
             else:
                 text = _localized(
-                    language, f"Tu cours {_n(abs(seconds))} s/km {direction} que sur tes {count} séances comparables avec allure mesurée.",
-                    f"You run {_n(abs(seconds))} s/km {direction} than in your {count} comparable sessions with recorded pace.",
-                    f"Corres {_n(abs(seconds))} s/km {direction} que en tus {count} sesiones comparables con ritmo registrado.",
+                    language, f"Tu cours {_n(abs(seconds), language)} s/km {direction} que sur tes {count} séances comparables avec allure mesurée.",
+                    f"You run {_n(abs(seconds), language)} s/km {direction} than in your {count} comparable sessions with recorded pace.",
+                    f"Corres {_n(abs(seconds), language)} s/km {direction} que en tus {count} sesiones comparables con ritmo registrado.",
                 )
                 if delta == 0:
                     text = _localized(
@@ -771,27 +772,27 @@ def build_coach_language(workout, phase_analysis, comparison, cohort, basis, com
             )
             if limited:
                 text = _localized(
-                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ni de même structure, ta FC moyenne est {direction} ({_n(current_hr)} contre {_n(baseline_hr)} bpm).",
-                    f"Compared with your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature or structure, your average heart rate is {direction} ({_n(current_hr)} versus {_n(baseline_hr)} bpm).",
-                    f"Frente a tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ni de la misma estructura, tu FC media es {direction} ({_n(current_hr)} frente a {_n(baseline_hr)} lpm).",
+                    language, f"Par rapport à tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ni de même structure, ta FC moyenne est {direction} ({_n(current_hr, language)} contre {_n(baseline_hr, language)} bpm).",
+                    f"Compared with your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature or structure, your average heart rate is {direction} ({_n(current_hr, language)} versus {_n(baseline_hr, language)} bpm).",
+                    f"Frente a tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ni de la misma estructura, tu FC media es {direction} ({_n(current_hr, language)} frente a {_n(baseline_hr, language)} lpm).",
                 )
                 if delta == 0:
                     text = _localized(
-                        language, f"Ta FC moyenne est identique à celle de tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ni de même structure ({_n(baseline_hr)} bpm).",
-                        f"Your average heart rate equals that of your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature or structure ({_n(baseline_hr)} bpm).",
-                        f"Tu FC media es igual a la de tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ni de la misma estructura ({_n(baseline_hr)} lpm).",
+                        language, f"Ta FC moyenne est identique à celle de tes {count} sorties antérieures de distance comparable avec FC mesurée, sans garantie de même nature ni de même structure ({_n(baseline_hr, language)} bpm).",
+                        f"Your average heart rate equals that of your {count} earlier sessions of comparable distance with recorded heart rate, without any guarantee of the same nature or structure ({_n(baseline_hr, language)} bpm).",
+                        f"Tu FC media es igual a la de tus {count} sesiones anteriores de distancia comparable con FC registrada, sin garantía de que sean de la misma naturaleza ni de la misma estructura ({_n(baseline_hr, language)} lpm).",
                     )
             else:
                 text = _localized(
-                    language, f"Ta FC moyenne est {direction} que sur tes {count} séances comparables avec FC mesurée ({_n(current_hr)} contre {_n(baseline_hr)} bpm).",
-                    f"Your average heart rate is {direction} than in your {count} comparable sessions with recorded heart rate ({_n(current_hr)} versus {_n(baseline_hr)} bpm).",
-                    f"Tu FC media es {direction} que en tus {count} sesiones comparables con FC registrada ({_n(current_hr)} frente a {_n(baseline_hr)} lpm).",
+                    language, f"Ta FC moyenne est {direction} que sur tes {count} séances comparables avec FC mesurée ({_n(current_hr, language)} contre {_n(baseline_hr, language)} bpm).",
+                    f"Your average heart rate is {direction} than in your {count} comparable sessions with recorded heart rate ({_n(current_hr, language)} versus {_n(baseline_hr, language)} bpm).",
+                    f"Tu FC media es {direction} que en tus {count} sesiones comparables con FC registrada ({_n(current_hr, language)} frente a {_n(baseline_hr, language)} lpm).",
                 )
                 if delta == 0:
                     text = _localized(
-                        language, f"Tu retrouves la même FC moyenne que sur tes {count} séances comparables avec FC mesurée ({_n(baseline_hr)} bpm).",
-                        f"Your average heart rate matches your {count} comparable sessions with recorded heart rate ({_n(baseline_hr)} bpm).",
-                        f"Tu FC media coincide con la de tus {count} sesiones comparables con FC registrada ({_n(baseline_hr)} lpm).",
+                        language, f"Tu retrouves la même FC moyenne que sur tes {count} séances comparables avec FC mesurée ({_n(baseline_hr, language)} bpm).",
+                        f"Your average heart rate matches your {count} comparable sessions with recorded heart rate ({_n(baseline_hr, language)} bpm).",
+                        f"Tu FC media coincide con la de tus {count} sesiones comparables con FC registrada ({_n(baseline_hr, language)} lpm).",
                     )
             add("coach.history.hr", text,
                 {"hr_sample_count": count, "heart_rate_difference_bpm": delta,

@@ -49,6 +49,20 @@ def _pace(minutes):
     return f"{seconds // 60}:{seconds % 60:02d}/km"
 
 
+def synthesis_conclusion_text(conclusion, language):
+    text = conclusion.text
+    if conclusion.code == "coach.history.pace":
+        current = _pace(conclusion.evidence["current_pace_min_km"])
+        baseline = _pace(conclusion.evidence["baseline_pace_min_km"])
+        text += " " + _text(
+            language,
+            f"Allure moyenne enregistrée : {current}, contre {baseline} pour ces références.",
+            f"Recorded average pace: {current}, versus {baseline} for these references.",
+            f"Ritmo medio registrado: {current}, frente a {baseline} en esas referencias.",
+        )
+    return text
+
+
 def build_session_synthesis(coach_language, facts, contextual_facts, history_environment, language):
     """Select, never recalculate, scientific conclusions or comparability.
 
@@ -64,18 +78,9 @@ def build_session_synthesis(coach_language, facts, contextual_facts, history_env
             metric = "pace" if conclusion.code == "coach.history.pace" else "hr"
             if history_environment.get(metric) != "same_known":
                 continue
-        text = conclusion.text
-        if conclusion.code == "coach.history.pace":
-            current = _pace(conclusion.evidence["current_pace_min_km"])
-            baseline = _pace(conclusion.evidence["baseline_pace_min_km"])
-            text += " " + _text(
-                language,
-                f"Allure moyenne enregistrée : {current}, contre {baseline} pour ces références.",
-                f"Recorded average pace: {current}, versus {baseline} for these references.",
-                f"Ritmo medio registrado: {current}, frente a {baseline} en esas referencias.",
-            )
         candidates.append((conclusion.priority, conclusion.category, SessionSynthesisItem(
-            code=conclusion.code, text=text, evidence=conclusion.evidence,
+            code=conclusion.code, text=synthesis_conclusion_text(conclusion, language),
+            evidence=conclusion.evidence,
             kind="interpretation" if conclusion.kind == "conclusion" else "observation",
             source_paths=[f"coach_language.conclusions[{index}]"],
             replaces_factual_codes=conclusion.replaces_factual_codes,
