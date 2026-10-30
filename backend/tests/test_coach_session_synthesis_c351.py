@@ -223,7 +223,7 @@ def test_hr_only_history_keeps_its_own_population_and_explicit_scope(language):
     assert [limit.code for limit in analysis.session_synthesis.limitations] == [
         "synthesis.history_descriptive", "synthesis.hr_observation",
     ]
-    assert "127" in primary.text and "131.5" in primary.text
+    assert "127" in primary.text and ("131.5" if language == "en" else "131,5") in primary.text
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

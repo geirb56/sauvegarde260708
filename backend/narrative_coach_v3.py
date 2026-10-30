@@ -1,4 +1,4 @@
-"""C355: read-only narrative rendering of canonical V3 and optional V2 phases.
+"""Read-only narrative rendering of canonical V3 and same-pass V2 synthesis.
 
 Safety tradeoff: the LLM is an editor, not a free-text author. It may choose
 approved sentence variants and reorder claims within sections, but cannot add,
@@ -9,6 +9,8 @@ versioned coach regularity judgments are reused without recalculation. Numeric
 dispersion alone is not promoted into a categorical regularity verdict.
 No coach text, source-path strings,
 identifiers, dates, or other user-controlled strings are sent to the provider.
+Canonical V2 synthesis is rendered whole and locally, with its own reserves;
+it never enters the optional editor or its cross-request cache.
 
 The optional LLM costs nothing by default (C355_NARRATIVE_LLM_ENABLED=false).
 When enabled, one isolated llm_coach._call_gpt call has a bounded outer timeout.
@@ -34,9 +36,9 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
 if TYPE_CHECKING:
     from coach_language import CoachLanguageV1
-    from workout_analysis_v2 import WorkoutAnalysisPhaseAnalysis
+    from workout_analysis_v2 import WorkoutAnalysisPhaseAnalysis, WorkoutAnalysisV2Response
 
-GENERATION_VERSION = "c358-controlled-1"
+GENERATION_VERSION = "c388-controlled-1"
 LLM_TIMEOUT_SECONDS = 8.0
 CACHE_MAX_ENTRIES = 128
 MAX_RESPONSE_CHARS = 24000
@@ -108,17 +110,110 @@ def _approved_repetition_judgment(coach_language, effort_count):
     return approved[0] if len(approved) == 1 else None
 
 
+def _synthesis_claims(analysis, intelligence, language):
+    """Consume only the canonical, same-pass server response, never client text.
+
+    V2 has already gated environment, comparability and measurement confidence.
+    Synthesis has no confidence field: admission is its available status plus
+    traceability to the selected, available V2 sources, not V3 classification.
+    """
+    from workout_analysis_v2 import WorkoutAnalysisV2Response
+    from coach_session_synthesis import synthesis_conclusion_text
+
+    if (type(analysis) is not WorkoutAnalysisV2Response or analysis.version != "v2"
+            or analysis.workout.id != intelligence.workout_id):
+        return []
+    synthesis = analysis.session_synthesis
+    if synthesis is None or synthesis.status != "available" or synthesis.primary is None:
+        return []
+    items = [synthesis.primary, *synthesis.supporting]
+    limits = {limit.code for limit in synthesis.limitations}
+    if (any(item.code.startswith("coach.history.") for item in items)
+            and "synthesis.history_descriptive" not in limits):
+        return []
+    if (any("heart_rate_change_bpm" in item.evidence
+            or "heart_rate_difference_bpm" in item.evidence
+            or item.code == "fact.effort_hr_evolution" for item in items)
+            and "synthesis.hr_observation" not in limits):
+        return []
+    sources = {}
+    if analysis.coach_language is not None and analysis.coach_language.version == "v1":
+        for index, item in enumerate(analysis.coach_language.conclusions):
+            if item.available and item.code in {
+                "coach.pacing", "coach.execution.pace_hr",
+                "coach.repetitions.pacing", "coach.repetitions.pace_hr",
+                "coach.history.pace", "coach.history.hr",
+            }:
+                sources[f"coach_language.conclusions[{index}]"] = item
+    for index, item in enumerate(analysis.meaning.factual_observations):
+        if item.code in {
+            "fact.pace_change", "fact.negative_split",
+            "fact.effort_extremes", "fact.effort_hr_evolution",
+        }:
+            sources[f"meaning.factual_observations[{index}]"] = item
+
+    claims = []
+    for index, item in enumerate(items):
+        if len(item.source_paths) != 1 or not item.text.strip():
+            return []
+        path = item.source_paths[0]
+        source = sources.get(path)
+        if source is not None:
+            if item.code != source.code or item.evidence != source.evidence:
+                return []
+            approved_texts = {source.text}
+            if (item.code == "coach.history.pace"
+                    and {"current_pace_min_km", "baseline_pace_min_km"} <= source.evidence.keys()):
+                approved_texts.add(synthesis_conclusion_text(source, language))
+            if item.text not in approved_texts:
+                return []
+            if item.code.startswith("coach.repetitions.") and source.kind == "conclusion":
+                judgment = _approved_repetition_judgment(
+                    analysis.coach_language, len(analysis.phase_analysis.efforts),
+                )
+                if judgment is None or not analysis.phase_analysis.available:
+                    return []
+        elif item.code in {"fact.repetitions", "fact.recoveries"}:
+            expected_path = "phase_analysis." + (
+                "efforts" if item.code == "fact.repetitions" else "recoveries"
+            )
+            rows = getattr(analysis.phase_analysis, expected_path.split(".")[1])
+            if (path != expected_path or not analysis.phase_analysis.available
+                    or len(rows) < 2 or item.evidence.get("count") != len(rows)
+                    or rows[0].duration_s != item.evidence.get("duration_s")):
+                return []
+        else:
+            return []
+        claims.append({
+            "id": f"v2.synthesis.{index}", "section": "analysis" if index == 0 else "interpretation",
+            "variants": [item.text],
+            "evidence_refs": [
+                f"session_synthesis.{'primary' if index == 0 else 'supporting.' + str(index - 1)}",
+                *item.source_paths,
+            ],
+        })
+    for index, limit in enumerate(synthesis.limitations):
+        claims.append({
+            "id": f"v2.limit.{index}", "section": "limitations",
+            "variants": [limit.text],
+            "evidence_refs": [f"session_synthesis.limitations.{index}", *limit.source_paths],
+        })
+    return claims
+
+
 def build_narrative_context(
     intelligence: Optional[WorkoutIntelligenceV3], language: str = "en",
     *, phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    v2_analysis: Optional[WorkoutAnalysisV2Response] = None,
 ) -> dict:
     """Return a minimal, PII-free approved-claim catalog (not raw V3).
 
     Refs are relative to WorkoutIntelligenceV3, except ``phase_analysis.*``,
-    as well as ``coach_language.*``, which document the supplied canonical
-    WorkoutAnalysisV2Response sources.
-    Phases must be from the same loader pass. No I/O or recalculation occurs.
+    ``coach_language.*``, ``meaning.*`` and ``session_synthesis.*``, which
+    document the supplied canonical WorkoutAnalysisV2Response sources.
+    V2 evidence must come from the same scoped loader pass. No I/O or
+    scientific recalculation occurs.
     Missing metrics stay missing. Arbitrary coach text/advice is never copied.
     """
     lang = _language(language)
@@ -345,7 +440,7 @@ def build_narrative_context(
                       "session_classification.relative_effort.status",
                       "session_classification.relative_effort.reference_count"))
         else:
-            add("intensity.relative", "analysis",
+            add("intensity.relative", "limitations",
                 "The classification is relative to personal history, not a physiological zone assessment.",
                 "La classification est relative à l'historique personnel, pas à une zone physiologique.",
                 "La clasificación es relativa al historial personal, no a una zona fisiológica.",
@@ -477,7 +572,7 @@ def build_narrative_context(
     else:
         primary = next((catalog[key] for key in (
             "session.unknown", "intensity.relative", "intensity.position", "intensity.hr",
-        ) if key in catalog), None)
+        ) if key in catalog and catalog[key]["section"] == "analysis"), None)
         if primary is not None:
             selected.append(primary)
         selected.extend(claim for claim in claims
@@ -530,6 +625,28 @@ def build_narrative_context(
         selected.append(catalog["advice.comfortable"])
     if len(selected) > 6:
         selected = [claim for claim in selected if claim["id"] != "interval.cohort"]
+    synthesis_claims = _synthesis_claims(v2_analysis, v3, lang) if v2_analysis is not None else []
+    if synthesis_claims:
+        # V2 owns relevance and reserves. Do not mix its distance-only comparison
+        # with V3 physiological/trend judgments or automatically append advice.
+        scope_limits = [claim for claim in selected if claim["id"] == "limit.scope"]
+        selected = [catalog["session.kind"], *synthesis_claims, *scope_limits]
+        if not any(claim["section"] == "interpretation" for claim in selected):
+            if "intensity.hr" in catalog:
+                selected.append({**catalog["intensity.hr"], "section": "interpretation"})
+            elif "interval.count" in catalog:
+                selected.append({**catalog["interval.count"], "section": "interpretation"})
+            else:
+                caution = catalog["interval.execution"] if cls.type == "intervals" else catalog["trend.caution"]
+                selected.append({**caution, "section": "interpretation"})
+        selected.extend(
+            claim for claim in claims
+            if claim["id"] in {"intensity.relative", "session.no_structure"}
+            and claim["section"] == "limitations"
+        )
+        selected.append({**prescription_claim, "section": "limitations"})
+    elif "intensity.relative" in catalog and catalog["intensity.relative"]["section"] == "limitations":
+        selected.append(catalog["intensity.relative"])
     return {"generation_version": GENERATION_VERSION, "language": lang,
             "available": True, "claims": selected}
 
@@ -565,6 +682,7 @@ def validate_narrative_selection(
     payload: Any, intelligence: Optional[WorkoutIntelligenceV3], language: str = "en",
     *, phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    v2_analysis: Optional[WorkoutAnalysisV2Response] = None,
 ) -> Optional[NarrativeCoachV3]:
     """Fail closed on anything except a complete approved-ID/variant selection.
 
@@ -580,6 +698,7 @@ def validate_narrative_selection(
         return None
     context = build_narrative_context(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        v2_analysis=v2_analysis,
     )
     if type(payload) is not dict or set(payload) != {"selections"}:
         return None
@@ -613,14 +732,16 @@ def deterministic_fallback(
     intelligence: Optional[WorkoutIntelligenceV3], language: str = "en",
     *, phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    v2_analysis: Optional[WorkoutAnalysisV2Response] = None,
 ) -> NarrativeCoachV3:
-    """Complete localized narrative requiring no provider, imports or I/O.
+    """Complete localized narrative requiring no provider or I/O.
 
-    Only versioned, whitelisted coach regularity metadata/numeric evidence is
-    consumed. Coach free-text content is never read or forwarded.
+    Optional canonical V2 synthesis is server-generated prose from the same
+    scoped loader pass. It is never forwarded to an editing provider.
     """
     context = build_narrative_context(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        v2_analysis=v2_analysis,
     )
     selections = [{"id": claim["id"], "variant": 0} for claim in context["claims"]]
     return _render(context, selections, "deterministic_fallback" if intelligence is not None else "none")
@@ -645,6 +766,7 @@ async def generate_narrative_coach_v3(
     intelligence: Optional[WorkoutIntelligenceV3], language: str = "en", *,
     phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    v2_analysis: Optional[WorkoutAnalysisV2Response] = None,
     transport: Optional[Transport] = None,
 ) -> NarrativeCoachV3:
     """Optionally edit approved claims; all provider failures use fresh fallback.
@@ -652,12 +774,17 @@ async def generate_narrative_coach_v3(
     Transport injection preserves the same opt-in, timeout and validation.
     Caller cancellation propagates; provider errors never escape this layer.
     Cache copies prevent callers from poisoning subsequent responses.
-    Optional coach_language free text is never consumed; only approved
-    versioned categorical repetition evidence can add a regularity label.
+    Without canonical V2 synthesis, coach_language prose is never consumed;
+    only versioned categorical repetition evidence can add a regularity label.
     """
     fallback = deterministic_fallback(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        v2_analysis=v2_analysis,
     )
+    # Canonical V2 prose is rendered locally, never sent to or cached by the
+    # optional closed-vocabulary editor. No user text crosses that boundary.
+    if any(ref.startswith("session_synthesis.") for ref in fallback.evidence_refs):
+        return fallback
     if intelligence is None or os.getenv("C355_NARRATIVE_LLM_ENABLED", "").lower() not in {"1", "true", "yes"}:
         return fallback
     context = build_narrative_context(

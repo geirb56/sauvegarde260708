@@ -646,7 +646,7 @@ def test_duration_weighted_hr_uses_interior_observations_not_endpoints():
     assert item.text == (
         "Sur tes 4 segments mesurés (4 km) : Tu cours la seconde moitié en distance "
         "de ta séance 30 s/km plus lentement, avec une FC moyenne de 150 puis "
-        "166.4 bpm sur ces mêmes moitiés."
+        "166,4 bpm sur ces mêmes moitiés."
     )
 
 
