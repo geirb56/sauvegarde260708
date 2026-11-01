@@ -383,27 +383,34 @@ async def test_concurrent_failures_do_not_double_refund_or_go_negative():
     assert _count(fake_db) == 0
 
 
-async def test_concurrent_at_9_of_10_with_one_failure_allows_exactly_cap():
+async def test_concurrent_success_and_failure_at_8_of_10_ends_at_9_then_fills_cap():
     fake_db = _FakeDB()
     fake_db.coach_quota_counters._docs.append({
-        "user_id": "user-a", "month_key": _current_month_key(), "count": 9, "baseline": 0,
+        "user_id": "user-a", "month_key": _current_month_key(), "count": 8, "baseline": 0,
     })
-    calls = {"n": 0}
+    arrived = 0
+    both_admitted = asyncio.Event()
 
     async def llm(**_kwargs):
-        await asyncio.sleep(0)
-        calls["n"] += 1
-        return ("ok", True, {}) if calls["n"] == 1 else (None, False, {})
+        nonlocal arrived
+        arrived += 1
+        mine = arrived
+        if arrived == 2:
+            both_admitted.set()
+        await both_admitted.wait()
+        return ("ok", True, {}) if mine == 1 else (None, False, {})
 
     with _analyze_environment(fake_db, _free_access):
         server.llm_coach.enrich_chat_response.side_effect = llm
         server.rate_limiter.requests.clear()
-        results = await asyncio.gather(*[_send_analyze_request() for _ in range(3)])
-    codes = sorted(r.status_code for r in results)
-    assert codes.count(200) == 1
-    assert set(codes) <= {200, 429, 503}
-    assert _count(fake_db) == 10 or _count(fake_db) == 9
-    assert 0 <= _count(fake_db) <= 10
+        results = await asyncio.gather(*[_send_analyze_request() for _ in range(2)])
+        assert sorted(r.status_code for r in results) == [200, 503]
+        assert _count(fake_db) == 9
+        server.llm_coach.enrich_chat_response.side_effect = _llm(("ok", True, {}))
+        assert (await _post({"message": "x"})).status_code == 200
+        assert _count(fake_db) == 10
+        assert (await _post({"message": "x"})).status_code == 429
+        assert _count(fake_db) == 10
 
 
 async def test_history_clear_does_not_reset_quota_after_failures():
@@ -455,3 +462,152 @@ async def test_failure_of_one_user_does_not_affect_another():
     assert _count(fake_db, "user-a") == 0
     assert _count(fake_db, "user-b") == 1
     assert all(d["user_id"] == "user-b" for d in fake_db.conversations._docs if d["role"] == "assistant")
+
+
+# ------------------------------------------- refund robustness (review)
+
+
+def _request():
+    return server.CoachRequest(message="x", language="en")
+
+
+async def test_history_update_error_still_releases_quota():
+    fake_db = _FakeDB()
+    original = fake_db.conversations.update_one
+
+    async def update(query, update_doc):
+        if "quota_refunded" in update_doc.get("$set", {}):
+            raise RuntimeError("history update failed")
+        return await original(query, update_doc)
+
+    fake_db.conversations.update_one = update
+    with _analyze_environment(fake_db, _free_access):
+        server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
+        response = await _post({"message": "x"})
+    assert response.status_code == 503
+    assert _count(fake_db) == 0
+    assert "quota_refunded" not in fake_db.conversations._docs[0]
+
+
+async def test_cancel_during_release_applies_exactly_one_decrement_and_flags_after():
+    fake_db = _FakeDB()
+    events = []
+    release_started, release_gate = asyncio.Event(), asyncio.Event()
+    real_release = server._release_free_coach_quota_slot
+    real_update = fake_db.conversations.update_one
+
+    async def slow_release(reservation):
+        events.append("release_start")
+        release_started.set()
+        await release_gate.wait()
+        await real_release(reservation)
+        events.append("release_done")
+
+    async def update(query, update_doc):
+        if "quota_refunded" in update_doc.get("$set", {}):
+            events.append("flag")
+        return await real_update(query, update_doc)
+
+    fake_db.conversations.update_one = update
+    with (
+        _analyze_environment(fake_db, _free_access),
+        patch("server._release_free_coach_quota_slot", side_effect=slow_release) as release,
+    ):
+        server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
+        task = asyncio.ensure_future(server.process_coach_message(request=_request(), user={"id": "user-a"}))
+        await release_started.wait()
+        assert "flag" not in events  # not flagged before cleanup completes
+        task.cancel()
+        await asyncio.sleep(0)
+        release_gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.gather(*list(server._COACH_REFUND_TASKS))
+        assert release.call_count == 1
+    assert events == ["release_start", "release_done", "flag"]
+    assert _count(fake_db) == 0
+
+
+async def test_cancel_during_llm_call_refunds_once():
+    fake_db = _FakeDB()
+    started = asyncio.Event()
+
+    async def hang(**_kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    with (
+        _analyze_environment(fake_db, _free_access),
+        patch("server._release_free_coach_quota_slot", wraps=server._release_free_coach_quota_slot) as release,
+    ):
+        server.llm_coach.enrich_chat_response.side_effect = hang
+        task = asyncio.ensure_future(server.process_coach_message(request=_request(), user={"id": "user-a"}))
+        await started.wait()
+        assert _count(fake_db) == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.gather(*list(server._COACH_REFUND_TASKS))
+        assert release.call_count == 1
+    assert _count(fake_db) == 0
+    assert fake_db.conversations._docs[0]["quota_refunded"] is True
+
+
+async def test_repeated_cancellation_during_cleanup_does_not_double_refund():
+    fake_db = _FakeDB()
+    release_started, release_gate = asyncio.Event(), asyncio.Event()
+    real_release = server._release_free_coach_quota_slot
+
+    async def slow_release(reservation):
+        release_started.set()
+        await release_gate.wait()
+        await real_release(reservation)
+
+    with (
+        _analyze_environment(fake_db, _free_access),
+        patch("server._release_free_coach_quota_slot", side_effect=slow_release) as release,
+    ):
+        server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
+        task = asyncio.ensure_future(server.process_coach_message(request=_request(), user={"id": "user-a"}))
+        await release_started.wait()
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
+        release_gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.gather(*list(server._COACH_REFUND_TASKS))
+        assert release.call_count == 1
+    assert _count(fake_db) == 0
+
+
+async def test_cancel_while_flagging_message_does_not_redecrement():
+    fake_db = _FakeDB()
+    fake_db.coach_quota_counters._docs.append({
+        "user_id": "user-a", "month_key": _current_month_key(), "count": 5, "baseline": 0,
+    })
+    flag_started, flag_gate = asyncio.Event(), asyncio.Event()
+    real_update = fake_db.conversations.update_one
+
+    async def update(query, update_doc):
+        if "quota_refunded" in update_doc.get("$set", {}):
+            flag_started.set()
+            await flag_gate.wait()
+        return await real_update(query, update_doc)
+
+    fake_db.conversations.update_one = update
+    with (
+        _analyze_environment(fake_db, _free_access),
+        patch("server._release_free_coach_quota_slot", wraps=server._release_free_coach_quota_slot) as release,
+    ):
+        server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
+        task = asyncio.ensure_future(server.process_coach_message(request=_request(), user={"id": "user-a"}))
+        await flag_started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        flag_gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.gather(*list(server._COACH_REFUND_TASKS))
+        assert release.call_count == 1
+    assert _count(fake_db) == 5

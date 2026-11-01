@@ -14,6 +14,7 @@ from admin.router import admin_router
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import os
 import re
 import json
@@ -1959,24 +1960,44 @@ async def _coach_degraded_workout_reply(
     return f"{_COACH_DEGRADED_NOTICE.get(language, _COACH_DEGRADED_NOTICE['en'])}\n\n{body}"
 
 
+# Strong references so a refund outlives a cancelled request until it completes.
+_COACH_REFUND_TASKS: set = set()
+
+
 async def _refund_failed_coach_attempt(
     reservation: Optional[dict], user_msg_id: Optional[str],
 ) -> None:
-    """Return the Free quota unit of a technical failure, at most once per request.
+    """Return the Free quota unit of a technical failure.
 
-    The persisted user message is kept in history but flagged so a quota
-    re-bootstrap does not count it; the release is floored at the baseline.
+    The release is a single atomic, baseline-floored decrement and runs first;
+    a history-update failure can never prevent it. The message is flagged
+    `quota_refunded` only once the release has finished, so a re-bootstrap does
+    not count it. Callers must run this at most once per request.
     """
     if reservation is None:
         return
     try:
-        if user_msg_id is not None:
-            await db.conversations.update_one(
-                {"id": user_msg_id}, {"$set": {"quota_refunded": True}},
-            )
         await _release_free_coach_quota_slot(reservation)
     except Exception:
-        logger.exception("[Coach] Quota refund failed")
+        logger.exception("[Coach] Quota release failed")
+        return
+    if user_msg_id is None:
+        return
+    try:
+        await db.conversations.update_one(
+            {"id": user_msg_id}, {"$set": {"quota_refunded": True}},
+        )
+    except Exception:
+        logger.exception("[Coach] Could not flag refunded coach message")
+
+
+def _start_coach_refund(
+    reservation: Optional[dict], user_msg_id: Optional[str],
+) -> "asyncio.Future":
+    task = asyncio.ensure_future(_refund_failed_coach_attempt(reservation, user_msg_id))
+    _COACH_REFUND_TASKS.add(task)
+    task.add_done_callback(_COACH_REFUND_TASKS.discard)
+    return task
 
 
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
@@ -2005,7 +2026,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
     is_unlimited = user_access.is_unlimited_chat
     reservation: Optional[dict] = None
     user_msg_id: Optional[str] = None
-    quota_refunded = False
+    refund_task: Optional[asyncio.Future] = None
 
     if is_unlimited:
         month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -2135,8 +2156,8 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
         if not success or not llm_response:
             logger.warning(f"LLM chat failed: {meta}")
-            quota_refunded = True
-            await _refund_failed_coach_attempt(reservation, user_msg_id)
+            refund_task = _start_coach_refund(reservation, user_msg_id)
+            await asyncio.shield(refund_task)
             if request.workout_id is not None:
                 degraded = await _coach_degraded_workout_reply(
                     user_id=user_id, workout_id=request.workout_id, language=language,
@@ -2164,8 +2185,13 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
         return CoachResponse(response=response_text, message_id=msg_id)
     except BaseException:
-        if not quota_refunded:
-            await _refund_failed_coach_attempt(reservation, user_msg_id)
+        # One refund task per request; shield keeps it running if we are cancelled.
+        if refund_task is None:
+            refund_task = _start_coach_refund(reservation, user_msg_id)
+        try:
+            await asyncio.shield(refund_task)
+        except BaseException:
+            pass
         raise
 
 
