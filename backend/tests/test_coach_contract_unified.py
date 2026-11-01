@@ -80,6 +80,11 @@ class _Collection:
                 if "$lt" in value:
                     if doc.get(key) is None or doc.get(key) >= value["$lt"]:
                         return False
+                if "$gt" in value:
+                    if doc.get(key) is None or doc.get(key) <= value["$gt"]:
+                        return False
+                if "$ne" in value and doc.get(key) == value["$ne"]:
+                    return False
             elif doc.get(key) != value:
                 return False
         return True
@@ -446,7 +451,8 @@ async def test_coach_request_contract_no_longer_exposes_deep_analysis_and_respon
     request_fields = set(server.CoachRequest.model_fields)
     assert request_fields == {"message", "workout_id", "context", "language"}
     assert "deep_analysis" not in server.CoachRequest.model_json_schema().get("properties", {})
-    assert set(server.CoachResponse.model_fields) == {"response", "message_id"}
+    assert set(server.CoachResponse.model_fields) == {"response", "message_id", "degraded"}
+    assert server.CoachResponse(response="x", message_id="y").degraded is False
 
 
 async def test_coach_analyze_preserves_workout_context_without_deep_analysis():
@@ -872,7 +878,7 @@ async def test_free_reservation_rolls_back_when_failure_occurs_before_user_messa
     assert fake_db.coach_quota_counters._docs[0]["count"] == 0
 
 
-async def test_user_message_persisted_then_llm_failure_still_consumes_free_slot():
+async def test_user_message_persisted_then_llm_failure_refunds_free_slot():
     fake_db = _FakeDB()
 
     async def _llm_fail(**_kwargs):
@@ -906,4 +912,5 @@ async def test_user_message_persisted_then_llm_failure_still_consumes_free_slot(
     assistant_messages = [m for m in fake_db.conversations._docs if m.get("role") == "assistant"]
     assert len(user_messages) == 1
     assert len(assistant_messages) == 0
-    assert fake_db.coach_quota_counters._docs[0]["count"] == 1
+    assert user_messages[0]["quota_refunded"] is True
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 0

@@ -99,6 +99,32 @@ async def load_scoped_workout_intelligence_v3_with_narrative(
     return result[:3] if result is not None else None
 
 
+async def load_scoped_workout_deterministic_narrative(
+    *, db: Any, user_id: str, workout_id: str, language: str,
+) -> Optional[NarrativeCoachV3]:
+    """Provider-free narrative for the Coach chat fallback (read-only, no LLM).
+
+    Never calls generate_narrative_coach_v3, so no provider can be reached.
+    Returns None when the workout is not owned or no intelligence is available.
+    """
+    result = await _load_scoped_workout_intelligence_v3(
+        db=db, user_id=user_id, workout_id=workout_id, language=language,
+    )
+    if result is None:
+        return None
+    _, intelligence, _, v2_analysis = result
+    if intelligence is None:
+        return None
+    from narrative_coach_v3 import deterministic_fallback
+
+    return deterministic_fallback(
+        intelligence, language,
+        phase_analysis=v2_analysis.phase_analysis if v2_analysis is not None else None,
+        coach_language=v2_analysis.coach_language if v2_analysis is not None else None,
+        v2_analysis=v2_analysis,
+    )
+
+
 async def load_scoped_workout_intelligence_v3_with_v2(
     *, db: Any, user_id: str, workout_id: str, language: str,
 ) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], Optional[ScopedV2Evidence]]]:

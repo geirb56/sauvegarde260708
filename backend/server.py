@@ -52,7 +52,10 @@ from workout_analysis_v2 import (
 )
 from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 from narrative_coach_v3_models import WorkoutIntelligenceV3NarrativeResponse
-from workout_intelligence_v3_service import load_scoped_workout_intelligence_v3_with_narrative
+from workout_intelligence_v3_service import (
+    load_scoped_workout_deterministic_narrative,
+    load_scoped_workout_intelligence_v3_with_narrative,
+)
 
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
@@ -643,6 +646,7 @@ class CoachRequest(BaseModel):
 class CoachResponse(BaseModel):
     response: str
     message_id: str
+    degraded: bool = False
 
 
 class ConversationMessage(BaseModel):
@@ -1766,6 +1770,7 @@ async def _ensure_free_coach_quota_counter(
     baseline_count = await db.conversations.count_documents({
         "user_id": user_id,
         "role": "user",
+        "quota_refunded": {"$ne": True},
         "timestamp": {"$gte": month_start_iso, "$lt": next_month_start_iso},
     })
 
@@ -1912,6 +1917,68 @@ def _coach_workout_restriction(language: str) -> CoachResponse:
     return CoachResponse(response=messages.get(language, messages["en"]), message_id="")
 
 
+_COACH_DEGRADED_NOTICE = {
+    "fr": "Le Coach conversationnel est temporairement indisponible. "
+          "Voici les observations factuelles de cette séance, sans réponse personnalisée à votre question. "
+          "Ce message n'est pas décompté de votre quota.",
+    "es": "El Coach conversacional no está disponible temporalmente. "
+          "Estas son las observaciones factuales de esta sesión, sin una respuesta personalizada a tu pregunta. "
+          "Este mensaje no se descuenta de tu cuota.",
+    "en": "The conversational Coach is temporarily unavailable. "
+          "Here are the factual observations for this session, without a personalized answer to your question. "
+          "This message does not count against your quota.",
+}
+
+_COACH_UNAVAILABLE = {
+    "fr": "Le service de coaching IA n'est pas disponible actuellement.",
+    "es": "El servicio de coaching con IA no está disponible actualmente.",
+    "en": "The AI coaching service is currently unavailable.",
+}
+
+
+async def _coach_degraded_workout_reply(
+    *, user_id: str, workout_id: str, language: str,
+) -> Optional[str]:
+    """Deterministic factual reply for a selected workout; None if unusable.
+
+    Read-only and provider-free: no second LLM call, no prescription text.
+    """
+    try:
+        narrative = await load_scoped_workout_deterministic_narrative(
+            db=db, user_id=user_id, workout_id=workout_id, language=language,
+        )
+    except Exception:
+        logger.exception("[Coach] Deterministic fallback unavailable")
+        return None
+    if narrative is None or narrative.generation_mode != "deterministic_fallback":
+        return None
+    parts = [narrative.headline, narrative.analysis, narrative.interpretation, *narrative.limitations]
+    body = "\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+    if not body:
+        return None
+    return f"{_COACH_DEGRADED_NOTICE.get(language, _COACH_DEGRADED_NOTICE['en'])}\n\n{body}"
+
+
+async def _refund_failed_coach_attempt(
+    reservation: Optional[dict], user_msg_id: Optional[str],
+) -> None:
+    """Return the Free quota unit of a technical failure, at most once per request.
+
+    The persisted user message is kept in history but flagged so a quota
+    re-bootstrap does not count it; the release is floored at the baseline.
+    """
+    if reservation is None:
+        return
+    try:
+        if user_msg_id is not None:
+            await db.conversations.update_one(
+                {"id": user_msg_id}, {"$set": {"quota_refunded": True}},
+            )
+        await _release_free_coach_quota_slot(reservation)
+    except Exception:
+        logger.exception("[Coach] Quota refund failed")
+
+
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
@@ -1937,7 +2004,8 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
     is_unlimited = user_access.is_unlimited_chat
     reservation: Optional[dict] = None
-    user_message_persisted = False
+    user_msg_id: Optional[str] = None
+    quota_refunded = False
 
     if is_unlimited:
         month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -2056,7 +2124,6 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             "workout_id": request.workout_id,
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
-        user_message_persisted = True
 
         # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
         llm_response, success, meta = await llm_coach.enrich_chat_response(
@@ -2068,15 +2135,17 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
         if not success or not llm_response:
             logger.warning(f"LLM chat failed: {meta}")
-            if language == "fr":
-                message = "Le service de coaching IA n'est pas disponible actuellement."
-            elif language == "es":
-                message = "El servicio de coaching con IA no está disponible actualmente."
-            else:
-                message = "The AI coaching service is currently unavailable."
+            quota_refunded = True
+            await _refund_failed_coach_attempt(reservation, user_msg_id)
+            if request.workout_id is not None:
+                degraded = await _coach_degraded_workout_reply(
+                    user_id=user_id, workout_id=request.workout_id, language=language,
+                )
+                if degraded is not None:
+                    return CoachResponse(response=degraded, message_id="", degraded=True)
             raise HTTPException(
                 status_code=503,
-                detail=message,
+                detail=_COACH_UNAVAILABLE.get(language, _COACH_UNAVAILABLE["en"]),
             )
 
         response_text = llm_response
@@ -2094,9 +2163,9 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         })
 
         return CoachResponse(response=response_text, message_id=msg_id)
-    except Exception:
-        if reservation is not None and not user_message_persisted:
-            await _release_free_coach_quota_slot(reservation)
+    except BaseException:
+        if not quota_refunded:
+            await _refund_failed_coach_attempt(reservation, user_msg_id)
         raise
 
 
