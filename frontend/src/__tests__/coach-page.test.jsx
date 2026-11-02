@@ -130,10 +130,10 @@ describe("Coach page", () => {
   });
 
   test("existing history remains visible with workout metadata and a discreet clear action", async () => {
-    axios.get.mockResolvedValueOnce({ data: [
+    axios.get.mockImplementation((url) => Promise.resolve({ data: String(url).includes("/coach/history") ? [
       { role: "user", content: "Tell me about my run", workout_id: "past-run" },
       { role: "assistant", content: "You kept a steady effort.", workout_id: "past-run" },
-    ] });
+    ] : { name: "Past run" } }));
     render(
       <LanguageProvider>
         <MemoryRouter>
@@ -148,10 +148,125 @@ describe("Coach page", () => {
     expect(screen.getByTestId("message-1")).toHaveAttribute("data-workout-id", "past-run");
     expect(screen.getByRole("button", { name: "Clear history" })).toBeInTheDocument();
     expect(screen.queryByTestId("coach-empty-state")).not.toBeInTheDocument();
-    expect(screen.queryByText("Workout analyzed")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
     expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test("reload restores the active workout from the latest stored message and follow-ups keep it", async () => {
+    axios.get.mockImplementation((url) => Promise.resolve({ data: String(url).includes("/coach/history") ? [
+      { role: "user", content: "Tell me about my run", workout_id: "past-run" },
+      { role: "assistant", content: "You kept a steady effort.", workout_id: "past-run" },
+    ] : { name: "Past run" } }));
+    axios.post.mockResolvedValue({ data: { response: "ok" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    await screen.findByText("You kept a steady effort.");
+    await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Et pourquoi est-ce monté vers la fin ?" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1]).toMatchObject({ workout_id: "past-run", language: "en" });
+  });
+
+  const renderCoach = (entry = "/coach") => render(
+    <LanguageProvider>
+      <MemoryRouter initialEntries={[entry]}>
+        <Coach />
+      </MemoryRouter>
+    </LanguageProvider>
+  );
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise(res => { resolve = res; });
+    return { promise, resolve };
+  };
+
+  test("restored context follows the last element of the chronological history, not an earlier workout", async () => {
+    axios.get.mockImplementation(url => Promise.resolve({ data: String(url).includes("/coach/history") ? [
+      { role: "user", content: "a", workout_id: "old-run", timestamp: "2026-10-01T10:00:00+00:00" },
+      { role: "assistant", content: "b", workout_id: "old-run", timestamp: "2026-10-01T10:00:01+00:00" },
+      { role: "user", content: "c", workout_id: "new-run", timestamp: "2026-10-02T10:00:00+00:00" },
+      { role: "assistant", content: "d", workout_id: "new-run", timestamp: "2026-10-02T10:00:01+00:00" },
+    ] : { name: "Run" } }));
+    axios.post.mockResolvedValue({ data: { response: "ok" } });
+    renderCoach();
+    await screen.findByText("d");
+    await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Pourquoi ?" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1].workout_id).toBe("new-run");
+  });
+
+  test("?analyze= wins over a late history that ends on another workout", async () => {
+    const history = deferred();
+    axios.get.mockImplementation(url => String(url).includes("/coach/history")
+      ? history.promise
+      : Promise.resolve({ data: { name: String(url).split("/").pop() } }));
+    axios.post.mockResolvedValue({ data: { response: "analysis" } });
+    renderCoach("/coach?analyze=w-new");
+    expect(axios.post).not.toHaveBeenCalled();
+    history.resolve({ data: [{ role: "user", content: "old", workout_id: "w-old" }] });
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1].workout_id).toBe("w-new");
+    await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Et la FC ?" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1].workout_id).toBe("w-new");
+    const workoutGets = axios.get.mock.calls.map(([u]) => String(u)).filter(u => u.includes("/workouts/"));
+    expect(workoutGets.some(u => u.endsWith("/workouts/w-old"))).toBe(false);
+  });
+
+  test("late metadata of a restored workout does not reactivate a context closed meanwhile", async () => {
+    const workout = deferred();
+    axios.get.mockImplementation(url => String(url).includes("/coach/history")
+      ? Promise.resolve({ data: [{ role: "assistant", content: "Earlier", workout_id: "past-run" }] })
+      : workout.promise);
+    axios.post.mockResolvedValue({ data: { response: "ok" } });
+    renderCoach();
+    fireEvent.click(await screen.findByTestId("close-workout-context"));
+    workout.resolve({ data: { name: "Late name", distance_km: 9, date: "2026-10-06" } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Question générale" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1]).not.toHaveProperty("workout_id");
+  });
+
+  test("history is not interactive until it resolves, so no general message can precede a restore", async () => {
+    const history = deferred();
+    axios.get.mockImplementation(url => String(url).includes("/coach/history")
+      ? history.promise : Promise.resolve({ data: { name: "Run" } }));
+    renderCoach();
+    expect(screen.queryByTestId("coach-input")).not.toBeInTheDocument();
+    history.resolve({ data: [{ role: "assistant", content: "Earlier", workout_id: "past-run" }] });
+    expect(await screen.findByTestId("coach-workout-context")).toBeInTheDocument();
+  });
+
+  test("history whose latest message is general does not restore a workout context", async () => {
+    axios.get.mockResolvedValueOnce({ data: [
+      { role: "user", content: "Old run", workout_id: "past-run" },
+      { role: "user", content: "General question" },
+    ] });
+    axios.post.mockResolvedValue({ data: { response: "ok" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    await screen.findByText("General question");
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Combien de séances cette semaine ?" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1].workout_id).toBeUndefined();
   });
 
   test("composer preserves Enter submission, loading guard, and recoverable errors", async () => {

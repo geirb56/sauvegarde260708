@@ -40,6 +40,7 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 - Bounded factual history of recent workouts (recent_workouts: distance, duration, pace, HR, elevation)
 - Factual session detail and canonical Workout Analysis V2 (workout_detail: summary, signals, physiology, pacing, similar sessions comparison) when a workout is selected
 - recent_workouts is a bounded selection, not necessarily the athlete's full history; use its coverage metadata and never claim to have reviewed every session when truncated
+- validated_workout_observations (when present): the same validated observations and limitations shown on the workout detail page; stay consistent with them
 - Some fields can be unavailable; unavailable data must stay unavailable
 - Confidence, sufficiency and extrapolation metadata are authoritative and must be respected
 
@@ -72,6 +73,10 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 - Use pace display strings verbatim. Do not calculate or verbalize pace from decimal min/km values.
 - If Workout Analysis V2 analysis is absent, or the requested conclusion is unavailable, say so clearly and limit the answer to descriptive facts.
 - Workout Analysis V2 advice is an observational fact/boundary, not an independent prescription
+- Reasoning: separate (1) what the data show, (2) what they reasonably suggest, (3) general physiological mechanisms that may explain it, (4) what cannot be concluded. Present several plausible hypotheses (e.g. heat, accumulated fatigue, cardiac drift, hydration) rather than one cause, and label them as hypotheses, never as established facts about this athlete. Adapt depth to the question; do not force a fixed format.
+- Follow-ups ("why?", "and my heart rate?") refer to the selected workout and the previous answer's subject; if the subject is not identifiable, ask one short clarification question.
+- Keep three roles distinct: the selected (active) workout is the subject of the conversation; recent_workouts are factual context you may cite (date, distance, duration, pace, HR) only when actually present in the context; comparison.similar sessions are the only supported basis for comparing with the selected workout. A comparison never replaces the selected workout. Never invent a session, and never draw a comparison, progress conclusion or physiological interpretation that these data do not support; if the athlete designates a session that is not present in the context, say so and ask them to open it from its page.
+- Never present the maximum HR observed in an activity as the athlete's physiological max HR; never invent LT1/LT2, VO2max, VMA, repetitions, or the unrecorded goal of a session.
 - Never create a new prescription
 - Never modify or replace the served prescription
 - Never fabricate missing metrics, readiness scores, paces, or performance certainty
@@ -162,9 +167,9 @@ async def enrich_chat_response(
     # Format conversation history
     history_text = ""
     if conversation_history:
-        for msg in conversation_history[-4:]:  # last 4 messages max
+        for msg in conversation_history[-6:]:  # last 6 messages max
             role = "Athlete" if msg.get("role") == "user" else "Coach"
-            content = msg.get("content", "")[:200]  # Truncate if too long
+            content = msg.get("content", "")[:400]  # Truncate if too long
             history_text += f"{role}: {content}\n"
 
     prompt = f"""COACH CONTEXT V2 JSON:

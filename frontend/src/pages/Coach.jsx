@@ -40,6 +40,23 @@ export default function Coach() {
           workout_id: msg.workout_id,
           timestamp: msg.timestamp
         })));
+        // Restore the active workout from the latest stored message (no new persistence);
+        // an explicit ?analyze= opening takes precedence.
+        const lastWorkoutId = res.data.length > 0 ? res.data[res.data.length - 1].workout_id : null;
+        if (lastWorkoutId && !searchParams.get("analyze")) {
+          activeWorkoutRef.current = lastWorkoutId;
+          setActiveWorkoutId(lastWorkoutId);
+          setActiveWorkoutMetadata({});
+          axios.get(`${API}/workouts/${lastWorkoutId}`).then(({ data }) => {
+            if (activeWorkoutRef.current !== lastWorkoutId) return;
+            const { name, distance_km, date } = data;
+            setActiveWorkoutMetadata({
+              ...(typeof name === "string" && name.trim() ? { name } : {}),
+              ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
+              ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
+            });
+          }).catch(() => {});
+        }
       } catch (error) {
         console.error("Failed to load history:", error);
         setHistoryLoadError(true);
@@ -48,7 +65,7 @@ export default function Coach() {
       }
     };
     loadHistory();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check for workout analysis param
   useEffect(() => {

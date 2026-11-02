@@ -1937,20 +1937,26 @@ _COACH_UNAVAILABLE = {
 }
 
 
+_NARRATIVE_NOT_LOADED = object()  # distinguishes "not attempted" from "attempted, unavailable (None)"
+
+
 async def _coach_degraded_workout_reply(
-    *, user_id: str, workout_id: str, language: str,
+    *, user_id: str, workout_id: str, language: str, narrative=_NARRATIVE_NOT_LOADED,
 ) -> Optional[str]:
     """Deterministic factual reply for a selected workout; None if unusable.
 
     Read-only and provider-free: no second LLM call, no prescription text.
+    A narrative load already attempted for this request (even if it returned None
+    or failed) is never repeated.
     """
-    try:
-        narrative = await load_scoped_workout_deterministic_narrative(
-            db=db, user_id=user_id, workout_id=workout_id, language=language,
-        )
-    except Exception:
-        logger.exception("[Coach] Deterministic fallback unavailable")
-        return None
+    if narrative is _NARRATIVE_NOT_LOADED:
+        try:
+            narrative = await load_scoped_workout_deterministic_narrative(
+                db=db, user_id=user_id, workout_id=workout_id, language=language,
+            )
+        except Exception:
+            logger.exception("[Coach] Deterministic fallback unavailable")
+            return None
     if narrative is None or narrative.generation_mode != "deterministic_fallback":
         return None
     parts = [narrative.headline, narrative.analysis, narrative.interpretation, *narrative.limitations]
@@ -2000,6 +2006,39 @@ def _start_coach_refund(
     return task
 
 
+COACH_HISTORY_LIMIT = 8
+
+
+async def _load_coach_narrative(*, user_id: str, workout_id: str, language: str):
+    """Owner-scoped, read-only, provider-free V3 deterministic narrative; None on failure."""
+    try:
+        return await load_scoped_workout_deterministic_narrative(
+            db=db, user_id=user_id, workout_id=workout_id, language=language,
+        )
+    except Exception:
+        logger.exception("[Coach] Validated observations unavailable")
+        return None
+
+
+def _coach_validated_workout_observations(narrative) -> Optional[dict]:
+    """Same validated observations as the workout detail pages (V3), compacted for the LLM."""
+    if narrative is None:
+        return None
+    observations = {
+        key: getattr(narrative, key).strip()
+        for key in ("headline", "analysis", "interpretation")
+        if isinstance(getattr(narrative, key, None), str) and getattr(narrative, key).strip()
+    }
+    limitations = [x.strip() for x in narrative.limitations if isinstance(x, str) and x.strip()]
+    if not observations and not limitations:
+        return None
+    return {
+        "source": "workout_intelligence_v3_deterministic",
+        **observations,
+        "limitations": limitations,
+    }
+
+
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
@@ -2027,6 +2066,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
     reservation: Optional[dict] = None
     user_msg_id: Optional[str] = None
     refund_task: Optional[asyncio.Future] = None
+    scoped_narrative = _NARRATIVE_NOT_LOADED
 
     if is_unlimited:
         month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -2053,7 +2093,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         conversation_scope = _coach_history_scope(user_id, workout_analysis_allowed, request.workout_id)
         conversation_history = await db.conversations.find(
             conversation_scope
-        ).sort("timestamp", -1).limit(5).to_list(5)
+        ).sort("timestamp", -1).limit(COACH_HISTORY_LIMIT).to_list(COACH_HISTORY_LIMIT)
         conversation_history = list(reversed(conversation_history))  # Chronological order
 
         ninety_days_ago = now_utc - timedelta(days=90)
@@ -2134,6 +2174,13 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         llm_context = build_llm_coach_context(
             context, workout_analysis_allowed=workout_analysis_allowed,
         )
+        if request.workout_id is not None and workout_analysis_allowed:
+            scoped_narrative = await _load_coach_narrative(
+                user_id=user_id, workout_id=request.workout_id, language=language,
+            )
+            validated = _coach_validated_workout_observations(scoped_narrative)  # None when unavailable
+            if validated is not None:
+                llm_context["validated_workout_observations"] = validated
 
         # 6. Stocker le message utilisateur
         user_msg_id = str(uuid.uuid4())
@@ -2161,6 +2208,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             if request.workout_id is not None:
                 degraded = await _coach_degraded_workout_reply(
                     user_id=user_id, workout_id=request.workout_id, language=language,
+                    narrative=scoped_narrative,
                 )
                 if degraded is not None:
                     return CoachResponse(response=degraded, message_id="", degraded=True)
