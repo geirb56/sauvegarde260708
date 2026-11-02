@@ -1937,15 +1937,19 @@ _COACH_UNAVAILABLE = {
 }
 
 
+_NARRATIVE_NOT_LOADED = object()  # distinguishes "not attempted" from "attempted, unavailable (None)"
+
+
 async def _coach_degraded_workout_reply(
-    *, user_id: str, workout_id: str, language: str, narrative=None,
+    *, user_id: str, workout_id: str, language: str, narrative=_NARRATIVE_NOT_LOADED,
 ) -> Optional[str]:
     """Deterministic factual reply for a selected workout; None if unusable.
 
     Read-only and provider-free: no second LLM call, no prescription text.
-    A narrative already loaded for this request is reused (no second pass).
+    A narrative load already attempted for this request (even if it returned None
+    or failed) is never repeated.
     """
-    if narrative is None:
+    if narrative is _NARRATIVE_NOT_LOADED:
         try:
             narrative = await load_scoped_workout_deterministic_narrative(
                 db=db, user_id=user_id, workout_id=workout_id, language=language,
@@ -2062,7 +2066,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
     reservation: Optional[dict] = None
     user_msg_id: Optional[str] = None
     refund_task: Optional[asyncio.Future] = None
-    scoped_narrative = None
+    scoped_narrative = _NARRATIVE_NOT_LOADED
 
     if is_unlimited:
         month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -2174,7 +2178,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             scoped_narrative = await _load_coach_narrative(
                 user_id=user_id, workout_id=request.workout_id, language=language,
             )
-            validated = _coach_validated_workout_observations(scoped_narrative)
+            validated = _coach_validated_workout_observations(scoped_narrative)  # None when unavailable
             if validated is not None:
                 llm_context["validated_workout_observations"] = validated
 

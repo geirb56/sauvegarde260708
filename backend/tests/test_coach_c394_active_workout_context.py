@@ -59,6 +59,35 @@ async def test_degraded_reply_reuses_loaded_narrative():
     loader.assert_awaited_once()
 
 
+@pytest.mark.parametrize("outcome", [None, RuntimeError("boom")])
+async def test_unavailable_narrative_is_not_reloaded_for_fallback(outcome):
+    fake_db = _FakeDB()
+    mock = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=outcome)
+    with (
+        _analyze_environment(fake_db, _premium_access),
+        _owned_workout(fake_db),
+        patch("server.load_scoped_workout_deterministic_narrative", mock),
+    ):
+        server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
+        response = await _post({"message": "x", "workout_id": "w1", "language": "en"})
+    assert response.status_code == 503  # C393: no usable fallback -> explicit unavailable
+    mock.assert_awaited_once()
+    assert fake_db.coach_quota_counters._docs == [] or fake_db.coach_quota_counters._docs[0]["count"] == 0
+
+
+async def test_prompt_allows_recent_workouts_but_keeps_roles_and_limits():
+    p = llm_coach.SYSTEM_PROMPT_COACH
+    assert "Only the selected workout and comparison.similar sessions are available" not in p
+    for fragment in (
+        "recent_workouts are factual context you may cite",
+        "selected (active) workout is the subject",
+        "comparison.similar sessions are the only supported basis",
+        "Never invent a session",
+        "A comparison never replaces the selected workout",
+    ):
+        assert fragment in p
+
+
 async def test_general_chat_loads_no_workout_observations():
     fake_db = _FakeDB()
     with (
@@ -95,7 +124,7 @@ async def test_prompt_contract_covers_reasoning_followups_and_limits():
     p = llm_coach.SYSTEM_PROMPT_COACH
     for fragment in (
         "validated_workout_observations", "hypotheses", "Follow-ups",
-        "Do not invent a \"previous\"", "never invent LT1/LT2", "Never create a new prescription",
+        "never invent LT1/LT2", "Never create a new prescription",
     ):
         assert fragment.lower() in p.lower()
 
