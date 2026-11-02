@@ -16,13 +16,13 @@ C393, C392-B and Coach Context V2 tests all passed once pytest-asyncio was prese
 ## Changes
 
 1. `llm_coach.py`: re-added `A comparison never replaces the selected workout.` to the roles bullet of the system prompt. No other prompt change; 700-char limit untouched.
-2. Voice test: language directive asserted in both prompts; physiological, permission, no-new-prescription, comparison and non-relaxation guards asserted in the system prompt only (and explicitly *not* duplicated in the user prompt); per-mode directives asserted, other modes absent. Three stale user-prompt assertions (`do not infer effort labels…`, `they do not establish…`, `do not invent a prescription…`) matched text that no longer exists anywhere in the code and were replaced by the system-prompt checks above.
+2. Voice test: language directive asserted in both prompts; physiological, permission, no-new-prescription, comparison and non-relaxation guards asserted in the system prompt only (and explicitly *not* duplicated in the user prompt); per-mode directives asserted, other modes absent. Two stale user-prompt assertions (`do not infer effort labels…`, `do not invent a prescription…`) matched text no longer present in the code and were replaced by the system-prompt checks above. The user-prompt assertion `they do not establish the athlete's historical state on a selected workout date` is still valid (`llm_coach.py` `enrich_chat_response`) and was restored after review.
 3. C394 test: `hypotheses` replaced by the C392-B hypothesis contract (general knowledge label, never an established cause, never proof of progress) plus follow-up continuity assertions.
 
 ## Results
 
 - Before: 14 failed, 212 passed
-- After: 226 passed (`tests/test_llm_coach_voice.py tests/test_coach_c394_active_workout_context.py tests/test_coach_c392b_evidence_prompt.py tests/test_coach_c393_fallback_quota.py tests/test_coach_context_v2.py`)
+- After (head `b6872ed`): 226 passed (`tests/test_llm_coach_voice.py tests/test_coach_c394_active_workout_context.py tests/test_coach_c392b_evidence_prompt.py tests/test_coach_c393_fallback_quota.py tests/test_coach_context_v2.py`)
 
 ## Protections maintained
 
