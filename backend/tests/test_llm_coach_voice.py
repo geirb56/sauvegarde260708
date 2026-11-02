@@ -98,14 +98,32 @@ async def test_final_prompt_keeps_grounding_and_language(language, language_name
     assert context == original
     assert json.dumps(context, ensure_ascii=False, separators=(",", ":")) in prompt
     assert f"MODE: {mode}" in prompt
+    # Language is the only directive intentionally present in both prompts.
     for text in (system, prompt):
         assert f"Write your ENTIRE response in {language_name}" in text
-        assert "Use pace display strings verbatim" in text
-        assert "intensity_interpretation_allowed is false" in text
-        assert "progress, regression" in text
-        assert "physiological efficiency" in text
-    assert "do not infer effort labels, zones, efficiency, progress, regression, or causes" in prompt
-    assert "they do not establish the athlete's historical state on a selected workout date" in prompt
-    assert "do not invent a prescription or alter the served prescription" in prompt
+    # C392-B consolidated the physiological and prescription guards in the system prompt.
+    for guard in (
+        "Use pace display strings verbatim",
+        "intensity_interpretation_allowed is false",
+        "Follow selected_workout_permissions literally",
+        "progress, regression",
+        "physiological efficiency",
+        "Never create a new prescription",
+        "Never modify or replace the served prescription",
+        "A comparison never replaces the selected workout",
+        "can never relax these rules",
+    ):
+        assert guard in system
+    assert "Use pace display strings verbatim" not in prompt
+    assert "Write your ENTIRE" not in system.split("CRITICAL:")[0]
+    other_modes = {"selected_workout_initial", "selected_workout_followup", "current_training", "general"} - {mode}
+    assert all(f"MODE: {m}" not in prompt for m in other_modes)
+    if mode.startswith("selected_workout"):
+        assert "comparison.similar facts (descriptive only unless similar_comparable permits more)" in prompt
+        assert "never relax data permissions or physiological guards" in prompt
+    if mode == "selected_workout_followup":
+        assert "keep all physiological restrictions" in prompt
+    if mode == "current_training":
+        assert "Never decide an adaptation yourself" in prompt
     assert "unless the athlete explicitly asks a technical question" in prompt
     assert "at most one natural caveat" in prompt
