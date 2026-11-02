@@ -130,10 +130,10 @@ describe("Coach page", () => {
   });
 
   test("existing history remains visible with workout metadata and a discreet clear action", async () => {
-    axios.get.mockResolvedValueOnce({ data: [
+    axios.get.mockImplementation((url) => Promise.resolve({ data: String(url).includes("/coach/history") ? [
       { role: "user", content: "Tell me about my run", workout_id: "past-run" },
       { role: "assistant", content: "You kept a steady effort.", workout_id: "past-run" },
-    ] });
+    ] : { name: "Past run" } }));
     render(
       <LanguageProvider>
         <MemoryRouter>
@@ -148,10 +148,48 @@ describe("Coach page", () => {
     expect(screen.getByTestId("message-1")).toHaveAttribute("data-workout-id", "past-run");
     expect(screen.getByRole("button", { name: "Clear history" })).toBeInTheDocument();
     expect(screen.queryByTestId("coach-empty-state")).not.toBeInTheDocument();
-    expect(screen.queryByText("Workout analyzed")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
     expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test("reload restores the active workout from the latest stored message and follow-ups keep it", async () => {
+    axios.get.mockImplementation((url) => Promise.resolve({ data: String(url).includes("/coach/history") ? [
+      { role: "user", content: "Tell me about my run", workout_id: "past-run" },
+      { role: "assistant", content: "You kept a steady effort.", workout_id: "past-run" },
+    ] : { name: "Past run" } }));
+    axios.post.mockResolvedValue({ data: { response: "ok" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    await screen.findByText("You kept a steady effort.");
+    await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Et pourquoi est-ce monté vers la fin ?" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1]).toMatchObject({ workout_id: "past-run", language: "en" });
+  });
+
+  test("history whose latest message is general does not restore a workout context", async () => {
+    axios.get.mockResolvedValueOnce({ data: [
+      { role: "user", content: "Old run", workout_id: "past-run" },
+      { role: "user", content: "General question" },
+    ] });
+    axios.post.mockResolvedValue({ data: { response: "ok" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    await screen.findByText("General question");
+    fireEvent.change(screen.getByTestId("coach-input"), { target: { value: "Combien de séances cette semaine ?" } });
+    fireEvent.submit(screen.getByTestId("coach-input").closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1].workout_id).toBeUndefined();
   });
 
   test("composer preserves Enter submission, loading guard, and recoverable errors", async () => {
