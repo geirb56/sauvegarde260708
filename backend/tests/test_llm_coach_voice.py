@@ -125,5 +125,6 @@ async def test_final_prompt_keeps_grounding_and_language(language, language_name
         assert "keep all physiological restrictions" in prompt
     if mode == "current_training":
         assert "Never decide an adaptation yourself" in prompt
+    assert "they do not establish the athlete's historical state on a selected workout date" in prompt
     assert "unless the athlete explicitly asks a technical question" in prompt
     assert "at most one natural caveat" in prompt
