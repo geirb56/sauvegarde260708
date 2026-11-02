@@ -64,6 +64,12 @@ def test_evidence_levels_and_classification_distinction():
     assert '"Probable easy run" does not prove an intensity below LT1' in SYSTEM
 
 
+def test_evidence_levels_are_internal_and_never_announced():
+    assert "use these levels internally to guide reasoning" in SYSTEM
+    assert "never announce or label them in the response to the athlete" in SYSTEM
+    assert "state the level you are on" not in SYSTEM
+
+
 def test_general_hypothesis_allowed_personal_not_and_single_explanation():
     assert "general physiological mechanism" in SYSTEM
     assert "One relevant explanation is enough" in SYSTEM
