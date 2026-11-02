@@ -123,10 +123,18 @@ async def test_history_window_is_wider_than_c393_baseline():
 async def test_prompt_contract_covers_reasoning_followups_and_limits():
     p = llm_coach.SYSTEM_PROMPT_COACH
     for fragment in (
-        "validated_workout_observations", "hypotheses", "Follow-ups",
+        "validated_workout_observations", "Follow-ups",
         "never invent LT1/LT2", "Never create a new prescription",
+        # C392-B general-hypothesis contract replaces the former "hypotheses" keyword.
+        "C. Hypothesis: you may explain a general physiological mechanism",
+        "labeled as general knowledge",
+        "never present a hypothesis as an established cause",
+        "never present a general explanation as proof of this athlete's progress",
+        # C394 continuity: follow-ups stay attached to the selected workout.
+        "refer to the selected workout and the previous answer's subject",
+        "ask one short clarification question",
     ):
-        assert fragment.lower() in p.lower()
+        assert fragment in p
 
 
 async def test_conversation_history_window_in_prompt():
