@@ -346,7 +346,9 @@ def apply_weekly_budget(
     in the budget.  Distance-based plans only.
 
     Retention: the budget is also evaluated as it stood on each earlier day of
-    the week (same activities restricted to that day); a session keeps the
+    the week (same activities restricted to that day, and only the snapshots of
+    that day or earlier: a snapshot served later did not exist then and must not
+    reopen budget already removed); a session keeps the
     smallest distance any of those views prescribed (distance only: a type
     change decided on an earlier day is not carried over).  Missed kilometres are
     therefore never recovered when a later day frees budget, and nothing is
@@ -373,8 +375,11 @@ def apply_weekly_budget(
 
     week_start = reference_date - timedelta(days=today_idx)
     for offset in range(today_idx):
+        # A snapshot only exists from its own day on: replaying day D must not see
+        # snapshots of later days (they would restore kilometres removed on D).
+        frozen_then = {d: p for d, p in frozen.items() if d in _DAYS and _DAYS.index(d) <= offset}
         earlier = _budget_view(
-            weekly_plan, activities, week_start + timedelta(days=offset), frozen,
+            weekly_plan, activities, week_start + timedelta(days=offset), frozen_then,
             plan_goal, periodization, confirmed_intense_days,
         )
         for i, current in enumerate(sessions):

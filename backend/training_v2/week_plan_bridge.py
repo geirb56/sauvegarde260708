@@ -274,11 +274,17 @@ def _build_weekly_context_from_workouts(
         reference_date, max(week_start_of(reference_date), cycle_start_date or date.min)
     )
     if effective_race_date and effective_race_date > anchor_date:
-        volume_periodization = build_periodization(
-            plan_goal=plan_goal,
-            reference_date=anchor_date,
-            race_plan_start_date=cycle_start_date,
-        )
+        if cycle_start_date is None:
+            # Race falls inside the week and no plan start was provided: a Monday
+            # anchor before the race would need an invented start, so keep the
+            # (already valid, post-race / race-day) daily periodization.
+            volume_periodization = periodization
+        else:
+            volume_periodization = build_periodization(
+                plan_goal=plan_goal,
+                reference_date=anchor_date,
+                race_plan_start_date=cycle_start_date,
+            )
     else:
         volume_periodization = build_periodization(
             plan_goal=plan_goal,
