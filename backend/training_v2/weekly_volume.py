@@ -30,11 +30,10 @@ Weeks with no data are ``None`` (not 0 km) and are ignored.  No reference
 (fewer than 3 active completed weeks) → ``None``; the caller keeps its legacy,
 observed-only behaviour and no km is invented.
 
-Stability caveat: no prior target is persisted, so the trajectory is recomputed
-from history on every call.  It is deterministic and does not drift within a
-week (the current week is excluded), but ``weeks_to_race`` changes the slope
-from one week to the next; stability across weeks is therefore not guaranteed
-by construction.
+Stability: no prior target is persisted.  The caller dates the race horizon
+and the phase on the Monday of the calendar week (a deterministic weekly
+anchor), so the trajectory is identical on every day of a week and may change
+only from one week to the next, with the completed history.
 
 The remaining budget lives in ``weekly_budget`` (it depends on the generator).
 """

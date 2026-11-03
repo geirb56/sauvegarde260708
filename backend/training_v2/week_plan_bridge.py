@@ -26,7 +26,7 @@ from .domain_activity import DomainActivity, to_domain_activity
 from .periodization import PeriodizationSnapshot, build_periodization
 from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
-from .training_history import build_completed_week_km, build_training_history
+from .training_history import build_completed_week_km, build_training_history, week_start_of
 from .training_load import build_training_load
 from .training_paces import TrainingPaces, compute_training_paces, vdot_from_performance
 from .training_response import RecentTrainingResponse, build_recent_training_response
@@ -268,6 +268,24 @@ def _build_weekly_context_from_workouts(
             cycle_anchor_date=cycle_start_date or reference_date,
         )
 
+    # Weekly anchor: the volume trajectory (race horizon + phase) is read at the
+    # Monday of the reference week, so a daily consultation never moves the target.
+    anchor_date = min(
+        reference_date, max(week_start_of(reference_date), cycle_start_date or date.min)
+    )
+    if effective_race_date and effective_race_date > anchor_date:
+        volume_periodization = build_periodization(
+            plan_goal=plan_goal,
+            reference_date=anchor_date,
+            race_plan_start_date=cycle_start_date,
+        )
+    else:
+        volume_periodization = build_periodization(
+            plan_goal=plan_goal,
+            reference_date=anchor_date,
+            cycle_anchor_date=cycle_start_date or anchor_date,
+        )
+
     weekly_target = build_weekly_target(
         runner_profile=runner_profile,
         training_history=training_history,
@@ -277,6 +295,7 @@ def _build_weekly_context_from_workouts(
         reference_date=reference_date,
         sessions_preference=sessions_preference,
         completed_week_km=build_completed_week_km(activities, reference_date),
+        volume_periodization=volume_periodization,
     )
 
     target_capability_time_seconds: Optional[int] = None

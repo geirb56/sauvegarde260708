@@ -8,9 +8,10 @@ PURE: no I/O, no clock.  Budget (indicative upper bound, never an obligation)::
 
 ``planned_weekly_km`` is the INITIAL plan volume and is never rewritten by the
 adaptation; ``adapted_remaining_km`` is the new total of the sessions still to
-run after adaptation.  Future sessions can only be reduced, never increased: a
-missed session is never made up.  Today, past days and frozen (served
-snapshot) sessions are never modified.  Frozen future sessions still consume
+run after adaptation.  Sessions can only be reduced, never increased: a
+missed session is never made up.  Today's session is adapted too while it is
+neither served nor run (a reduction never reverts when a future day becomes
+today); past days and frozen (served snapshot) sessions are never modified.  Frozen future sessions still consume
 budget; when they alone exceed it, only the mutable sessions are adapted and
 ``WEEKLY_BUDGET_EXCEEDED_BY_FROZEN_SESSIONS`` is raised — the cap is then not
 guaranteed.
@@ -37,7 +38,7 @@ when its blocks could not close the new total.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Collection, Mapping, Optional, Sequence
 
 from .domain_activity import DomainActivity
@@ -217,37 +218,46 @@ def _limit_quality_duplication(
         codes.append("QUALITY_DUPLICATION_NOT_ADAPTABLE")
 
 
-def apply_weekly_budget(
+@dataclass(frozen=True)
+class _View:
+    sessions: list
+    codes: list
+    evidence: str
+    actual_km: float
+    remaining: Optional[float]
+    ran_today: bool
+    today_idx: int
+
+
+def _is_adaptable(
+    session: WorkoutPrescription, today_idx: int, ran_today: bool, frozen: Mapping[str, WorkoutPrescription]
+) -> bool:
+    """Not served (no snapshot) and not yet run: future day, or today before any run."""
+    idx = _day_idx(session)
+    return (
+        _is_running_session(session)
+        and session.day.lower() not in frozen
+        and (idx > today_idx or (idx == today_idx and not ran_today))
+    )
+
+
+def _budget_view(
     weekly_plan: WeeklyPlan,
     activities: Sequence[object],
     reference_date: date,
-    *,
-    frozen_sessions: Optional[Mapping[str, WorkoutPrescription]] = None,
-    plan_goal: Optional[PlanGoal] = None,
-    periodization: Optional[PeriodizationSnapshot] = None,
-    confirmed_intense_days: Collection[date] = (),
-) -> tuple[WeeklyPlan, WeeklyVolumeBudget]:
-    """Adapt sessions strictly after ``reference_date`` to the remaining budget.
-
-    ``frozen_sessions`` maps a day name to an authoritative served prescription;
-    it replaces the live session for that day, is never modified and is counted
-    in the budget.  Distance-based plans only.
-    """
+    frozen: Mapping[str, WorkoutPrescription],
+    plan_goal: Optional[PlanGoal],
+    periodization: Optional[PeriodizationSnapshot],
+    confirmed_intense_days: Collection[date],
+) -> _View:
     week_acts: list[DomainActivity] = activities_in_week(activities, reference_date)
     actual_km = round(sum(float(a.distance_m) for a in week_acts) / 1000.0, 2)
-    frozen = {k.lower(): v for k, v in (frozen_sessions or {}).items()}
 
     sessions = [frozen.get(s.day.lower(), s) for s in weekly_plan.sessions]
     confirmed_days, unverified_days = _unplanned_demanding_days(
         week_acts, sessions, set(confirmed_intense_days)
     )
     evidence = _intensity_state(week_acts, confirmed_days, unverified_days)
-
-    if weekly_plan.target_basis != "distance" or weekly_plan.planned_km is None:
-        return weekly_plan, WeeklyVolumeBudget(
-            None, actual_km, None, ("BUDGET_NOT_DISTANCE_BASED",), None, evidence
-        )
-
     planned_km = weekly_plan.planned_km
     remaining = compute_remaining_budget(planned_km, actual_km)
     codes: list[str] = []
@@ -255,28 +265,29 @@ def apply_weekly_budget(
         codes.append("UNPLANNED_INTENSITY_EVIDENCE_UNVERIFIED")
         codes.append("INTENSITY_CONFIRMATION_UNAVAILABLE")
     today_idx = reference_date.weekday()
-
     ran_today = any(activity_calendar_date(a) == reference_date for a in week_acts)
-    today_pending_km = 0.0
+
+    # A served (frozen) session of today that is not run yet still reserves budget.
+    reserved_km = 0.0
     for s in sessions:
-        if _day_idx(s) == today_idx and _is_running_session(s) and not ran_today:
-            today_pending_km = float(s.distance_km or 0.0)
+        if (
+            _day_idx(s) == today_idx and _is_running_session(s) and not ran_today
+            and s.day.lower() in frozen
+        ):
+            reserved_km += float(s.distance_km or 0.0)
 
     if confirmed_days:
         _limit_quality_duplication(
             sessions, week_acts, frozen, today_idx, len(confirmed_days), codes
         )
 
-    mutable = [
-        i for i, s in enumerate(sessions)
-        if _day_idx(s) > today_idx and _is_running_session(s) and s.day.lower() not in frozen
-    ]
+    mutable = [i for i, s in enumerate(sessions) if _is_adaptable(s, today_idx, ran_today, frozen)]
     frozen_future_km = sum(
         float(s.distance_km or 0.0)
         for s in sessions
         if _day_idx(s) > today_idx and _is_running_session(s) and s.day.lower() in frozen
     )
-    headroom = (remaining or 0.0) - today_pending_km - frozen_future_km
+    headroom = (remaining or 0.0) - reserved_km - frozen_future_km
     if headroom < 0 and mutable:
         codes.append("WEEKLY_BUDGET_EXCEEDED_BY_FROZEN_SESSIONS")
     allowed_future = max(0.0, headroom)
@@ -302,12 +313,90 @@ def apply_weekly_budget(
                 codes.append(extra)
         codes.append("WEEKLY_BUDGET_APPLIED")
         break
+    return _View(sessions, codes, evidence, actual_km, remaining, ran_today, today_idx)
+
+
+def _session_km(session: WorkoutPrescription) -> float:
+    return float(session.distance_km or 0.0) if _is_running_session(session) else 0.0
+
+
+def apply_weekly_budget(
+    weekly_plan: WeeklyPlan,
+    activities: Sequence[object],
+    reference_date: date,
+    *,
+    frozen_sessions: Optional[Mapping[str, WorkoutPrescription]] = None,
+    plan_goal: Optional[PlanGoal] = None,
+    periodization: Optional[PeriodizationSnapshot] = None,
+    confirmed_intense_days: Collection[date] = (),
+) -> tuple[WeeklyPlan, WeeklyVolumeBudget]:
+    """Adapt not-yet-served sessions from ``reference_date`` on to the remaining budget.
+
+    Session states (the same rule for Today and Week):
+
+    A. future, not served      -> adapted, reduce-only;
+    B. today, not served/run   -> adapted exactly like A (never re-grows because
+       the reference date moved: a reduction decided on an earlier day of the
+       week is retained, see below);
+    C. today, already served   -> frozen snapshot, never modified, reserves budget;
+    D. past day / frozen       -> never modified.
+
+    ``frozen_sessions`` maps a day name to an authoritative served prescription;
+    it replaces the live session for that day, is never modified and is counted
+    in the budget.  Distance-based plans only.
+
+    Retention: the budget is also evaluated as it stood on each earlier day of
+    the week (same activities restricted to that day); a session keeps the
+    smallest distance any of those views prescribed (distance only: a type
+    change decided on an earlier day is not carried over).  Missed kilometres are
+    therefore never recovered when a later day frees budget, and nothing is
+    read from or written to storage.
+    """
+    frozen = {k.lower(): v for k, v in (frozen_sessions or {}).items()}
+    view = _budget_view(
+        weekly_plan, activities, reference_date, frozen, plan_goal, periodization,
+        confirmed_intense_days,
+    )
+    evidence = view.evidence
+    actual_km = view.actual_km
+
+    if weekly_plan.target_basis != "distance" or weekly_plan.planned_km is None:
+        return weekly_plan, WeeklyVolumeBudget(
+            None, actual_km, None, ("BUDGET_NOT_DISTANCE_BASED",), None, evidence
+        )
+
+    planned_km = weekly_plan.planned_km
+    remaining = view.remaining
+    sessions = view.sessions
+    codes = list(view.codes)
+    today_idx = view.today_idx
+
+    week_start = reference_date - timedelta(days=today_idx)
+    for offset in range(today_idx):
+        earlier = _budget_view(
+            weekly_plan, activities, week_start + timedelta(days=offset), frozen,
+            plan_goal, periodization, confirmed_intense_days,
+        )
+        for i, current in enumerate(sessions):
+            if not _is_adaptable(current, today_idx, view.ran_today, frozen):
+                continue
+            retained_km = _session_km(earlier.sessions[i])
+            if retained_km >= _session_km(current) - 1e-9:
+                continue
+            # Only the distance reduction is carried over, never a type change.
+            if retained_km <= 0.0:
+                sessions[i] = _make_rest(current.day, ("WEEKLY_BUDGET_SESSION_DROPPED",))
+            else:
+                sessions[i], extra = _fit_session(current, retained_km, plan_goal, periodization)
+                if extra:
+                    codes.append(extra)
+            codes.append("WEEKLY_BUDGET_REDUCTION_RETAINED")
 
     changed = [s for s, o in zip(sessions, weekly_plan.sessions) if s != o]
     remaining_sessions = [
         s for s in sessions
         if _is_running_session(s)
-        and (_day_idx(s) > today_idx or (_day_idx(s) == today_idx and not ran_today))
+        and (_day_idx(s) > today_idx or (_day_idx(s) == today_idx and not view.ran_today))
     ]
     adapted_remaining = round(sum(float(s.distance_km) for s in remaining_sessions), 1)
     unique_codes = tuple(dict.fromkeys(codes))
