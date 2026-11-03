@@ -15,10 +15,18 @@ budget; when they alone exceed it, only the mutable sessions are adapted and
 ``WEEKLY_BUDGET_EXCEEDED_BY_FROZEN_SESSIONS`` is raised — the cap is then not
 guaranteed.
 
-Intensity: no physiological classification is attempted.  Vigorous minutes
-reported by Garmin on an unplanned run are exposed as an explicit, unverified
-evidence state; they never remove a planned quality session and quality is
-never added.
+Intensity: no physiological classification and no new threshold.  Three
+evidence states are kept apart: ``confirmed`` (the caller supplied reliable
+execution evidence for an unplanned demanding run), ``present_unverified``
+(Garmin vigorous minutes alone, never a proof), ``unknown`` / ``none_known``.
+Only a CONFIRMED unplanned demanding run can remove a future, mutable planned
+quality session, and only so that demanding sessions done + still planned never
+exceed the planned quality count of the week.  A planned quality session that
+was not run is not counted as done.  Quality is never added, frozen sessions
+and today are never modified; when duplication cannot be avoided because the
+excess session is frozen or is today's, ``QUALITY_DUPLICATION_NOT_ADAPTABLE``
+is reported.  The canonical pipeline currently has no reliable confirmation
+source, so it reports ``INTENSITY_CONFIRMATION_UNAVAILABLE`` instead of acting.
 
 Structured sessions are regenerated from the final ``distance_km`` by the
 structured-workout builder at serve time; after scaling each session is
@@ -30,7 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Mapping, Optional, Sequence
+from typing import Collection, Mapping, Optional, Sequence
 
 from .domain_activity import DomainActivity
 from .periodization import PeriodizationSnapshot
@@ -43,6 +51,7 @@ MIN_SESSION_KM: float = 3.0
 INTENSE_VIGOROUS_MINUTES: float = 10.0
 
 INTENSITY_NONE_KNOWN = "none_known"
+INTENSITY_CONFIRMED = "confirmed"
 INTENSITY_UNVERIFIED = "present_unverified"
 INTENSITY_UNKNOWN = "unknown"
 
@@ -111,25 +120,35 @@ def _structure_is_coherent(
     return bool(structured.distance_closes_total)
 
 
-def _intensity_evidence(
+def _unplanned_demanding_days(
     week_acts: Sequence[DomainActivity],
     sessions: Sequence[WorkoutPrescription],
-) -> str:
-    if not week_acts:
-        return INTENSITY_NONE_KNOWN
-    if all(a.vigorous_intensity_minutes is None for a in week_acts):
-        return INTENSITY_UNKNOWN
-    planned_quality_days = {
-        _day_idx(s) for s in sessions if s.workout_type == "quality"
-    }
+    confirmed_days: Collection[date],
+) -> tuple[set[date], set[date]]:
+    """(confirmed, unverified) days of unplanned runs with intensity evidence."""
+    planned_quality_days = {_day_idx(s) for s in sessions if s.workout_type == "quality"}
+    confirmed: set[date] = set()
+    unverified: set[date] = set()
     for act in week_acts:
         day = activity_calendar_date(act)
-        if (
-            (act.vigorous_intensity_minutes or 0.0) >= INTENSE_VIGOROUS_MINUTES
-            and day is not None
-            and day.weekday() not in planned_quality_days
-        ):
-            return INTENSITY_UNVERIFIED
+        if day is None or day.weekday() in planned_quality_days:
+            continue
+        if day in confirmed_days:
+            confirmed.add(day)
+        elif (act.vigorous_intensity_minutes or 0.0) >= INTENSE_VIGOROUS_MINUTES:
+            unverified.add(day)
+    return confirmed, unverified
+
+
+def _intensity_state(
+    week_acts: Sequence[DomainActivity], confirmed: set[date], unverified: set[date]
+) -> str:
+    if confirmed:
+        return INTENSITY_CONFIRMED
+    if unverified:
+        return INTENSITY_UNVERIFIED
+    if week_acts and all(a.vigorous_intensity_minutes is None for a in week_acts):
+        return INTENSITY_UNKNOWN
     return INTENSITY_NONE_KNOWN
 
 
@@ -157,6 +176,47 @@ def _fit_session(
     return _make_rest(session.day, ("WEEKLY_BUDGET_SESSION_DROPPED",)), "WEEKLY_BUDGET_SESSION_DROPPED"
 
 
+def _limit_quality_duplication(
+    sessions: list[WorkoutPrescription],
+    week_acts: Sequence[DomainActivity],
+    frozen: Mapping[str, WorkoutPrescription],
+    today_idx: int,
+    confirmed_off_plan: int,
+    codes: list[str],
+) -> None:
+    """Downgrade surplus FUTURE mutable quality so demanding sessions never exceed the plan."""
+    run_days = {d.weekday() for d in (activity_calendar_date(a) for a in week_acts) if d}
+    planned_total = sum(1 for s in sessions if s.workout_type == "quality")
+    done_planned = sum(
+        1 for s in sessions
+        if s.workout_type == "quality" and 0 <= _day_idx(s) <= today_idx and _day_idx(s) in run_days
+    )
+    pending = [
+        i for i, s in enumerate(sessions)
+        if s.workout_type == "quality"
+        and (_day_idx(s) > today_idx or (_day_idx(s) == today_idx and _day_idx(s) not in run_days))
+    ]
+    allowed = max(0, planned_total - done_planned - confirmed_off_plan)
+    excess = len(pending) - allowed
+    if excess <= 0:
+        return
+    for i in sorted(pending, key=lambda i: -_day_idx(sessions[i])):
+        if excess <= 0:
+            break
+        s = sessions[i]
+        if _day_idx(s) <= today_idx or s.day.lower() in frozen:
+            continue
+        sessions[i] = s.model_copy(update={
+            "workout_type": "easy",
+            "intensity_class": "low",
+            "reason_codes": (*s.reason_codes, "QUALITY_NOT_DUPLICATED_AFTER_CONFIRMED_INTENSE_RUN"),
+        })
+        codes.append("QUALITY_NOT_DUPLICATED_AFTER_CONFIRMED_INTENSE_RUN")
+        excess -= 1
+    if excess > 0:
+        codes.append("QUALITY_DUPLICATION_NOT_ADAPTABLE")
+
+
 def apply_weekly_budget(
     weekly_plan: WeeklyPlan,
     activities: Sequence[object],
@@ -165,6 +225,7 @@ def apply_weekly_budget(
     frozen_sessions: Optional[Mapping[str, WorkoutPrescription]] = None,
     plan_goal: Optional[PlanGoal] = None,
     periodization: Optional[PeriodizationSnapshot] = None,
+    confirmed_intense_days: Collection[date] = (),
 ) -> tuple[WeeklyPlan, WeeklyVolumeBudget]:
     """Adapt sessions strictly after ``reference_date`` to the remaining budget.
 
@@ -177,7 +238,10 @@ def apply_weekly_budget(
     frozen = {k.lower(): v for k, v in (frozen_sessions or {}).items()}
 
     sessions = [frozen.get(s.day.lower(), s) for s in weekly_plan.sessions]
-    evidence = _intensity_evidence(week_acts, sessions)
+    confirmed_days, unverified_days = _unplanned_demanding_days(
+        week_acts, sessions, set(confirmed_intense_days)
+    )
+    evidence = _intensity_state(week_acts, confirmed_days, unverified_days)
 
     if weekly_plan.target_basis != "distance" or weekly_plan.planned_km is None:
         return weekly_plan, WeeklyVolumeBudget(
@@ -189,6 +253,7 @@ def apply_weekly_budget(
     codes: list[str] = []
     if evidence == INTENSITY_UNVERIFIED:
         codes.append("UNPLANNED_INTENSITY_EVIDENCE_UNVERIFIED")
+        codes.append("INTENSITY_CONFIRMATION_UNAVAILABLE")
     today_idx = reference_date.weekday()
 
     ran_today = any(activity_calendar_date(a) == reference_date for a in week_acts)
@@ -196,6 +261,11 @@ def apply_weekly_budget(
     for s in sessions:
         if _day_idx(s) == today_idx and _is_running_session(s) and not ran_today:
             today_pending_km = float(s.distance_km or 0.0)
+
+    if confirmed_days:
+        _limit_quality_duplication(
+            sessions, week_acts, frozen, today_idx, len(confirmed_days), codes
+        )
 
     mutable = [
         i for i, s in enumerate(sessions)
@@ -259,6 +329,7 @@ def apply_weekly_budget(
 
 
 __all__ = [
+    "INTENSITY_CONFIRMED",
     "INTENSITY_NONE_KNOWN",
     "INTENSITY_UNKNOWN",
     "INTENSITY_UNVERIFIED",

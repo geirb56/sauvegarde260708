@@ -534,7 +534,14 @@ def _target_normal(
         trajectory = build_volume_trajectory(
             completed_week_km=completed_week_km,
             goal_type=goal,
-            weeks_to_race=periodization.weeks_to_race,
+            # Anchored on the Monday of the week so the slope (hence the target)
+            # does not drift from one day to the next within the same week.
+            weeks_to_race=(
+                periodization.weeks_to_race
+                + periodization.reference_date.weekday() / 7.0
+                if periodization.weeks_to_race is not None
+                else None
+            ),
             taper_weeks=next(
                 (w for g, w in TAPER_WEEKS.items() if g.value == goal), 0
             ),

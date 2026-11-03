@@ -2985,41 +2985,20 @@ def _resolve_canonical_reference_date(now_utc: datetime, garmin_activities_90: l
 async def _load_frozen_week_sessions(
     user_id: str, reference_date: date
 ) -> dict[str, WorkoutPrescription]:
-    """Authoritative served snapshots of the current week as day → prescription.
+    """Authoritative served snapshots of the week as day → prescription.
 
-    Shared by /training/today and /training/v2/week so the weekly budget sees
-    the same immutable sessions.  Only this user's snapshots are read, and
-    nothing is written or modified here.
+    Shared by /training/today and /training/v2/week (same selection module),
+    so the weekly budget sees the same immutable sessions.  Read-only.
     """
-    from training_v2.prescription_snapshot import (
-        PrescriptionSnapshot,
-        is_snapshot_authoritative,
+    from training_v2.snapshot_selection import (
+        frozen_sessions_from_snapshots,
+        load_authoritative_week_snapshots,
     )
 
-    week_start = reference_date - timedelta(days=reference_date.weekday())
-    week_end = week_start + timedelta(days=6)
-    docs = await db.training_prescription_snapshots.find(
-        {"user_id": user_id}, {"_id": 0}
-    ).to_list(1000)
-    frozen: dict[str, WorkoutPrescription] = {}
-    for doc in docs:
-        try:
-            snapshot = PrescriptionSnapshot(**doc)
-        except Exception:
-            continue
-        if not (week_start <= snapshot.planned_date <= week_end):
-            continue
-        if not is_snapshot_authoritative(snapshot=snapshot, reference_date=reference_date):
-            continue
-        frozen[snapshot.day.lower()] = WorkoutPrescription(
-            day=snapshot.day.lower(),
-            workout_type=snapshot.workout_type,
-            intensity_class=snapshot.intensity_class,
-            distance_km=snapshot.distance_km,
-            duration_minutes=snapshot.duration_minutes,
-            reason_codes=("FROZEN_SERVED_SNAPSHOT",),
-        )
-    return frozen
+    snapshots = await load_authoritative_week_snapshots(
+        db, user_id=user_id, reference_date=reference_date
+    )
+    return frozen_sessions_from_snapshots(snapshots)
 
 
 @api_router.get("/training/today")
@@ -3867,26 +3846,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     await invalidate_future_snapshots(
         db, user_id=user_id, reference_date=reference_date
     )
-    existing_snapshot_docs = await db.training_prescription_snapshots.find(
-        {"user_id": user_id}, {"_id": 0}
-    ).to_list(1000)
-    frozen_snapshots: dict[str, PrescriptionSnapshot] = {}
-    for doc in existing_snapshot_docs:
-        prescription_id = doc.get("prescription_id")
-        planned_date_raw = doc.get("planned_date")
-        if not isinstance(prescription_id, str) or not isinstance(planned_date_raw, str):
-            continue
-        try:
-            snapshot_planned_date = date.fromisoformat(planned_date_raw)
-        except ValueError:
-            continue
-        if not (week_start <= snapshot_planned_date <= week_end):
-            continue
-        snapshot = PrescriptionSnapshot(**doc)
-        if is_snapshot_authoritative(
-            snapshot=snapshot, reference_date=reference_date
-        ):
-            frozen_snapshots[prescription_id] = snapshot
+    from training_v2.snapshot_selection import load_authoritative_week_snapshots
+
+    frozen_snapshots: dict[str, PrescriptionSnapshot] = dict(
+        await load_authoritative_week_snapshots(
+            db, user_id=user_id, reference_date=reference_date
+        )
+    )
 
     # Training V2 planned-memory (current week): per-day last known PLANNED
     # prescription used as fallback for past days lacking a served snapshot.
