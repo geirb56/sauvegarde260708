@@ -213,6 +213,7 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
         max_hr=max_hr,
         elevation_gain_m=elevation_gain_m,
         moving_duration_s=moving_duration_s,
+        start_time_local=garmin_local_start_time(doc),
     )
 
 

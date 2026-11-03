@@ -2982,6 +2982,46 @@ def _resolve_canonical_reference_date(now_utc: datetime, garmin_activities_90: l
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+async def _load_frozen_week_sessions(
+    user_id: str, reference_date: date
+) -> dict[str, WorkoutPrescription]:
+    """Authoritative served snapshots of the current week as day → prescription.
+
+    Shared by /training/today and /training/v2/week so the weekly budget sees
+    the same immutable sessions.  Only this user's snapshots are read, and
+    nothing is written or modified here.
+    """
+    from training_v2.prescription_snapshot import (
+        PrescriptionSnapshot,
+        is_snapshot_authoritative,
+    )
+
+    week_start = reference_date - timedelta(days=reference_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    docs = await db.training_prescription_snapshots.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(1000)
+    frozen: dict[str, WorkoutPrescription] = {}
+    for doc in docs:
+        try:
+            snapshot = PrescriptionSnapshot(**doc)
+        except Exception:
+            continue
+        if not (week_start <= snapshot.planned_date <= week_end):
+            continue
+        if not is_snapshot_authoritative(snapshot=snapshot, reference_date=reference_date):
+            continue
+        frozen[snapshot.day.lower()] = WorkoutPrescription(
+            day=snapshot.day.lower(),
+            workout_type=snapshot.workout_type,
+            intensity_class=snapshot.intensity_class,
+            distance_km=snapshot.distance_km,
+            duration_minutes=snapshot.duration_minutes,
+            reason_codes=("FROZEN_SERVED_SNAPSHOT",),
+        )
+    return frozen
+
+
 @api_router.get("/training/today")
 async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     """
@@ -3096,6 +3136,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
         training_preferences=active_preferences,
+    
+        frozen_sessions=await _load_frozen_week_sessions(user["id"], today),
     )
     weekly_plan = canonical.weekly_plan
 
@@ -3376,6 +3418,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "action": canonical.reconciliation_result.action.value,
             "reason_codes": list(canonical.reconciliation_result.reason_codes),
         },
+        "weekly_volume": canonical.volume_budget.to_response() if canonical.volume_budget else None,
         # vma / vma_confidence: PR228 — no longer computed in /training/today.
         # Verified: frontend does not consume vma from this endpoint.
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
@@ -3768,6 +3811,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
         training_preferences=active_preferences,
+    
+        frozen_sessions=await _load_frozen_week_sessions(user_id, reference_date),
     )
     weekly_target = canonical.reconciled_target
     weekly_plan = canonical.weekly_plan
@@ -4220,6 +4265,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         ),
         reconciliation_action=reconciliation_result.action.value,
         reconciliation_reason_codes=list(reconciliation_result.reason_codes),
+        weekly_volume=canonical.volume_budget.to_response() if canonical.volume_budget else None,
     )
 
     return response.model_dump(mode="json")

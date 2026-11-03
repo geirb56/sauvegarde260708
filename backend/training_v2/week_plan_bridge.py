@@ -478,6 +478,7 @@ def build_canonical_weekly_plan(
     target_time_seconds: Optional[int] = None,
     sessions_preference: Optional[int] = None,
     training_preferences: Optional[dict] = None,
+    frozen_sessions: Optional[Mapping[str, WorkoutPrescription]] = None,
 ) -> CanonicalWeeklyPlan:
     """PR228 — Build the full canonical weekly plan including reconciliation audit.
 
@@ -495,6 +496,9 @@ def build_canonical_weekly_plan(
     (preserve/reduce only, never increase).
     sessions_preference seeds original_target, subject to availability/reprise
     caps; normal continuity preserves it against observed-frequency-only reduction.
+    frozen_sessions (optional): day name → authoritative served prescription.  They
+    replace the live session of that day, are never adapted and still consume the
+    weekly budget.
     """
     if training_preferences is not None:
         sessions_preference = training_preferences.get("sessions_per_week")
@@ -529,7 +533,12 @@ def build_canonical_weekly_plan(
     # Remaining-budget adaptation: future days only, reduce-only. Same call for
     # Today and Week, so both always read the same plan.
     weekly_plan, volume_budget = apply_weekly_budget(
-        weekly_plan, workouts_to_domain_activities(workouts), reference_date
+        weekly_plan,
+        workouts_to_domain_activities(workouts),
+        reference_date,
+        frozen_sessions=frozen_sessions,
+        plan_goal=ctx.plan_goal,
+        periodization=ctx.periodization,
     )
 
     return CanonicalWeeklyPlan(

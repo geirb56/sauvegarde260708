@@ -520,7 +520,7 @@ def _target_normal(
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
     reason_codes: list[str],
-    completed_week_km: Optional[tuple[float, ...]] = None,
+    completed_week_km: Optional[tuple[Optional[float], ...]] = None,
     availability_sessions: int = 3,
     trajectory_out: Optional[list] = None,
 ) -> tuple[str, Optional[float], Optional[int]]:
@@ -589,7 +589,7 @@ def build_weekly_target(
     periodization: PeriodizationSnapshot,
     reference_date: date,
     sessions_preference: Optional[int] = None,
-    completed_week_km: Optional[tuple[float, ...]] = None,
+    completed_week_km: Optional[tuple[Optional[float], ...]] = None,
 ) -> WeeklyTarget:
     """Build an immutable WeeklyTarget from explicit V2 inputs.
 
@@ -645,7 +645,7 @@ def build_weekly_target(
         target_basis, target_km, target_minutes = _target_normal(
             runner_profile, training_history, plan_goal, periodization, reason_codes,
             completed_week_km=completed_week_km,
-            availability_sessions=_clamp_sessions(runner_profile, continuity, None),
+            availability_sessions=_clamp_sessions(runner_profile, continuity, sessions_preference),
             trajectory_out=trajectory_out,
         )
 

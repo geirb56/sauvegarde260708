@@ -2,12 +2,14 @@
 
 PURE: no I/O, no clock, no global state.
 
-Four distinct quantities (never conflated):
+Five distinct quantities (never conflated):
 
 1. ``reference_km``         demonstrated volume, from COMPLETED calendar weeks.
-2. ``trajectory_target_km`` plan volume for this week = reference × (1 + rate).
-3. ``load_cap_km``          admissible ceiling for this week.
-4. ``prescribed_km``        min(trajectory, cap) × phase multiplier.
+2. ``trajectory_target_km`` theoretical plan volume = reference × (1 + rate).
+3. ``theoretical_km``       trajectory × phase multiplier (before any load cap).
+4. ``load_cap_km``          admissible ceiling for this week (phase multipliers
+                            are all <= 1, so they can only lower the cap).
+5. ``prescribed_km``        min(trajectory, cap) × phase multiplier.
 
 Formulas (calibration V1, recalibrable)::
 
@@ -21,10 +23,18 @@ Formulas (calibration V1, recalibrable)::
     load_cap      = min(1.10 × reference, max(reference, 1.10 × last_completed_week))
     prescribed    = round(min(trajectory, load_cap) × phase_multiplier, 1)
 
-Per-goal peaks are calibration parameters, NOT minimums: a runner below the
-peak is never lifted to it, and a runner above it is held, not reduced.
-No reference (fewer than 3 active completed weeks) → ``None``; the caller keeps
-its legacy, observed-only behaviour and no km is invented.
+Per-goal calibration volumes only set the SLOPE of the build: they are neither
+objectives nor minimums nor ceilings.  A runner below one is never lifted to it,
+and one above it is held at the demonstrated volume, never reduced.
+Weeks with no data are ``None`` (not 0 km) and are ignored.  No reference
+(fewer than 3 active completed weeks) → ``None``; the caller keeps its legacy,
+observed-only behaviour and no km is invented.
+
+Stability caveat: no prior target is persisted, so the trajectory is recomputed
+from history on every call.  It is deterministic and does not drift within a
+week (the current week is excluded), but ``weeks_to_race`` changes the slope
+from one week to the next; stability across weeks is therefore not guaranteed
+by construction.
 
 The remaining budget lives in ``weekly_budget`` (it depends on the generator).
 """
@@ -40,7 +50,7 @@ from typing import Optional, Sequence
 # Calibration constants — V1, recalibrable, NOT minimums
 # ---------------------------------------------------------------------------
 
-GOAL_PEAK_WEEKLY_KM: dict[str, float] = {
+GOAL_CALIBRATION_WEEKLY_KM: dict[str, float] = {
     "5k": 40.0,
     "10k": 50.0,
     "half_marathon": 65.0,
@@ -54,12 +64,14 @@ CONTINUOUS_WEEKLY_RATE: float = 0.03
 SPECIFIC_PHASE_MAX_RATE: float = 0.03
 MIN_SESSIONS_FOR_GROWTH: int = 3
 LOAD_CAP_FACTOR: float = 1.10
+GOAL_PEAK_WEEKLY_KM = GOAL_CALIBRATION_WEEKLY_KM  # backward-compatible alias
 
 
 @dataclass(frozen=True)
 class VolumeTrajectory:
     reference_km: float
     trajectory_target_km: float
+    theoretical_km: float
     load_cap_km: float
     prescribed_km: float
     weekly_rate: float
@@ -72,9 +84,9 @@ def _median(values: Sequence[float]) -> float:
     return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
-def compute_reference_km(completed_week_km: Sequence[float]) -> Optional[float]:
+def compute_reference_km(completed_week_km: Sequence[Optional[float]]) -> Optional[float]:
     """Demonstrated weekly volume, robust to one light or one spike week."""
-    active = [km for km in completed_week_km if km > 0]
+    active = [km for km in completed_week_km if km is not None and km > 0]
     if len(active) < MIN_ACTIVE_COMPLETED_WEEKS:
         return None
     ceiling = SPIKE_CAP_FACTOR * _median(active)
@@ -85,7 +97,7 @@ def compute_reference_km(completed_week_km: Sequence[float]) -> Optional[float]:
 
 def build_volume_trajectory(
     *,
-    completed_week_km: Sequence[float],
+    completed_week_km: Sequence[Optional[float]],
     goal_type: str,
     weeks_to_race: Optional[float],
     taper_weeks: int,
@@ -99,7 +111,7 @@ def build_volume_trajectory(
         return None
 
     codes: list[str] = ["VOLUME_TRAJECTORY"]
-    peak = GOAL_PEAK_WEEKLY_KM.get(goal_type)
+    peak = GOAL_CALIBRATION_WEEKLY_KM.get(goal_type)
     rate = 0.0
     if peak is None:
         codes.append("TRAJECTORY_MAINTENANCE_HOLD")
@@ -122,20 +134,26 @@ def build_volume_trajectory(
 
     trajectory = reference * (1.0 + rate)
 
-    last_week = completed_week_km[0] if completed_week_km else 0.0
-    load_cap = min(
-        LOAD_CAP_FACTOR * reference,
-        max(reference, LOAD_CAP_FACTOR * last_week),
-    )
+    last_week = completed_week_km[0] if completed_week_km else None
+    if last_week is None:
+        load_cap = LOAD_CAP_FACTOR * reference
+    else:
+        load_cap = min(
+            LOAD_CAP_FACTOR * reference,
+            max(reference, LOAD_CAP_FACTOR * last_week),
+        )
     if trajectory > load_cap:
         codes.append("TRAJECTORY_LOAD_CAPPED")
-    if 0 < last_week < reference * 0.85:
+    if last_week is not None and 0 < last_week < reference * 0.85:
         codes.append("TRAJECTORY_LIGHT_WEEK_IGNORED")
 
-    prescribed = round(min(trajectory, load_cap) * phase_multiplier, 1)
+    multiplier = max(0.0, phase_multiplier)
+    admissible = min(trajectory, load_cap)
+    prescribed = round(admissible * multiplier, 1)
     return VolumeTrajectory(
         reference_km=round(reference, 1),
         trajectory_target_km=round(trajectory, 1),
+        theoretical_km=round(trajectory * multiplier, 1),
         load_cap_km=round(load_cap, 1),
         prescribed_km=prescribed,
         weekly_rate=round(rate, 4),
@@ -144,6 +162,7 @@ def build_volume_trajectory(
 
 
 __all__ = [
+    "GOAL_CALIBRATION_WEEKLY_KM",
     "GOAL_PEAK_WEEKLY_KM",
     "VolumeTrajectory",
     "build_volume_trajectory",

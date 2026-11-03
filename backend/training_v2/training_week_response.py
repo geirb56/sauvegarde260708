@@ -13,7 +13,7 @@ Design rules
 from __future__ import annotations
 
 from datetime import date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -261,6 +261,11 @@ class TrainingWeekV2Response(BaseModel):
 
     reconciliation_reason_codes: Optional[List[str]] = None
     """PR228 — Language-neutral diagnostic codes from WeeklyReconciliation."""
+
+    weekly_volume: Optional[Dict[str, Any]] = None
+    """P384 — additive: planned_weekly_km (initial), actual_weekly_km,
+    remaining_budget_km, adapted_remaining_km, volume_reason_codes,
+    unplanned_intensity_evidence.  Same builder as /training/today."""
 
 
 __all__ = [
