@@ -290,8 +290,8 @@ class TestSessionsPreferencePrescription:
         if real_81km_case:
             assert result.observed_runs_per_week == 2.0
             assert result.observed_distance_km == 81.1
-            assert original.target_km == reconciled.target_km == 22.3
-            assert canonical.weekly_plan.planned_km == 22.3
+            assert original.target_km == reconciled.target_km == 21.0
+            assert canonical.weekly_plan.planned_km == 21.0
         assert "SESSIONS_PREFERENCE_PRESERVED" in result.reason_codes
         assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" not in result.reason_codes
         assert "SESSION_LOAD_CONCENTRATION_GUARD" not in result.reason_codes
@@ -310,14 +310,14 @@ class TestSessionsPreferencePrescription:
         assert canonical.reconciliation_result.observed_distance_km == 76.0
         assert canonical.original_target.target_sessions == preference
         assert canonical.reconciled_target.target_sessions == preference
-        assert canonical.reconciled_target.target_km == baseline.reconciled_target.target_km == 20.9
+        assert canonical.reconciled_target.target_km == baseline.reconciled_target.target_km == 19.0
         assert canonical.reconciliation_result.action == WeeklyReconciliationAction.KEEP
         assert canonical.original_target is canonical.reconciliation_result.original_target
         assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
         assert canonical.weekly_plan.session_count == preference
-        assert canonical.weekly_plan.planned_km == pytest.approx(20.9, abs=0.1)
+        assert canonical.weekly_plan.planned_km == pytest.approx(19.0, abs=0.1)
         long_run = next(s for s in canonical.weekly_plan.sessions if s.workout_type == "long_easy")
-        assert long_run.distance_km == pytest.approx(7.3, abs=0.2)
+        assert long_run.distance_km == pytest.approx(6.6, abs=0.2)
         assert long_run.distance_km <= 0.45 * canonical.reconciled_target.target_km
         assert long_run.distance_km <= 18.0
         assert canonical == build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
@@ -348,8 +348,10 @@ class TestSessionsPreferencePrescription:
         kwargs = _normal_two_runs_kwargs()
         baseline = build_canonical_weekly_plan(**kwargs)
         assert baseline.original_target.target_sessions == 2
-        assert baseline.original_target.target_km == 20.9
-        assert baseline.original_target.reason_codes == ("NORMAL_DISTANCE_BASED",)
+        assert baseline.original_target.target_km == 19.0
+        assert baseline.original_target.reason_codes == (
+            "VOLUME_TRAJECTORY", "TRAJECTORY_RACE_CALENDAR", "TRAJECTORY_FREQUENCY_HOLD",
+        )
         assert baseline.reconciliation_result.reason_codes == ("PLAN_STRUCTURE_KEPT",)
         assert build_canonical_weekly_plan(**kwargs, sessions_preference=preference) == baseline
         assert build_weekly_target_from_workouts(
