@@ -155,3 +155,67 @@ def test_post_race_target_matches_explicit_cycle_start_after_race_week(ref):
     explicit = build_canonical_weekly_plan(cycle_start_date=RACE - timedelta(weeks=8), **kw)
     assert implicit.original_target.target_km == explicit.original_target.target_km
     assert implicit.weekly_plan.sessions == explicit.weekly_plan.sessions
+
+
+# ── 3. contract: a snapshot never exists before its planned_date ─────────────
+# Replay hides snapshots of days > D from the view of day D.  This is exact because the
+# only writers (get_or_create_served_prescription, week_execution fallback) require
+# planned_date == served_reference_date == reference_date, and selection drops any
+# snapshot whose planned_date is after the reference date.
+
+def _snap(day_date, day_name, km, ref=None):
+    from training_v2.prescription_snapshot import snapshot_from_prescription
+    from training_v2.week_execution import prescription_id_for
+    return snapshot_from_prescription(
+        user_id="u1", prescription_id=prescription_id_for("u1", day_date, day_name),
+        planned_date=day_date, served_reference_date=ref or day_date,
+        session=WorkoutPrescription(
+            day=day_name, workout_type="easy", intensity_class="low", distance_km=km,
+            duration_minutes=None, reason_codes=(),
+        ),
+    )
+
+
+def test_future_snapshot_cannot_be_persisted():
+    import asyncio
+    from training_v2.snapshot_persistence import persist_served_snapshot
+    sat = _snap(SAT, "saturday", 5.0, ref=WED)
+    with pytest.raises(ValueError):
+        asyncio.run(persist_served_snapshot(None, sat, reference_date=WED))
+    sat_ok = _snap(SAT, "saturday", 5.0)
+    with pytest.raises(ValueError):  # served for another date than the reference
+        asyncio.run(persist_served_snapshot(None, sat_ok, reference_date=WED))
+
+
+def test_get_or_create_refuses_a_future_planned_date():
+    import asyncio
+    from training_v2.served_prescription import get_or_create_served_prescription
+    sess = _session(_plan(PLAN4), "saturday")
+    with pytest.raises(ValueError):
+        asyncio.run(get_or_create_served_prescription(
+            None, user_id="u1", prescription_id="x", planned_date=SAT, reference_date=WED,
+            served_candidate=sess, planned_prescription=sess, structured_factory=None,
+        ))
+
+
+def test_selection_never_admits_a_future_snapshot_and_midweek_view_ignores_it():
+    from training_v2.snapshot_selection import select_authoritative_week_snapshots
+    docs = [_snap(SAT, "saturday", 5.0, ref=WED).model_dump(mode="json"),
+            _snap(SAT, "saturday", 5.0).model_dump(mode="json")]
+    kw = dict(user_id="u1", week_start=MON)
+    assert select_authoritative_week_snapshots(docs, reference_date=WED, **kw) == {}
+    on_sat = select_authoritative_week_snapshots(docs, reference_date=SAT, **kw)
+    assert len(on_sat) == 1  # only the snapshot served on its own day
+
+
+def test_snapshot_created_saturday_equals_no_snapshot_in_earlier_views():
+    plan = _plan(PLAN4)
+    sat = _session(plan, "saturday")
+    # Wednesday and Thursday views are identical with or without a Saturday snapshot.
+    for ref in (WED, THU):
+        assert _all_days(plan, OFF, ref) == _all_days(plan, OFF, ref, None)
+    # On Saturday the snapshot is honoured, immutable and never grows other sessions.
+    frozen = {"saturday": sat.model_copy(update={"distance_km": 2.0})}
+    before, after = _all_days(plan, OFF, SAT), _all_days(plan, OFF, SAT, frozen)
+    assert after["saturday"] == 2.0
+    assert after["sunday"] <= before["sunday"] + 1e-9
