@@ -106,10 +106,11 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from .plan_goal import PlanGoal
-from .periodization import PeriodizationSnapshot, PeriodizationPhase
+from .periodization import PeriodizationSnapshot, PeriodizationPhase, TAPER_WEEKS
 from .runner_profile import RunnerProfile
 from .training_history import TrainingHistory
 from .training_state import TrainingState
+from .weekly_volume import build_volume_trajectory
 
 # ---------------------------------------------------------------------------
 # Calibration constants — V1, recalibrable
@@ -236,6 +237,16 @@ class WeeklyTarget(BaseModel):
 
     reason_codes: tuple[str, ...]
     """Deterministic, language-neutral diagnostic codes."""
+
+    # Volume trajectory audit (additive, None when the legacy path was used).
+    reference_km: Optional[float] = None
+    """Demonstrated weekly volume from completed calendar weeks."""
+
+    trajectory_target_km: Optional[float] = None
+    """Plan volume for this week before cap and phase multiplier."""
+
+    load_cap_km: Optional[float] = None
+    """Admissible load ceiling for this week."""
 
 
 # ---------------------------------------------------------------------------
@@ -509,8 +520,41 @@ def _target_normal(
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
     reason_codes: list[str],
+    completed_week_km: Optional[tuple[Optional[float], ...]] = None,
+    availability_sessions: int = 3,
+    trajectory_out: Optional[list] = None,
 ) -> tuple[str, Optional[float], Optional[int]]:
-    """Build target for normal state."""
+    """Build target for normal state.
+
+    With enough COMPLETED weeks the deterministic trajectory of
+    ``weekly_volume`` is used; otherwise the legacy observed-only path.
+    """
+    if completed_week_km is not None:
+        goal = plan_goal.goal_type.value
+        trajectory = build_volume_trajectory(
+            completed_week_km=completed_week_km,
+            goal_type=goal,
+            # Anchored on the Monday of the week so the slope (hence the target)
+            # does not drift from one day to the next within the same week.
+            weeks_to_race=(
+                periodization.weeks_to_race
+                + periodization.reference_date.weekday() / 7.0
+                if periodization.weeks_to_race is not None
+                else None
+            ),
+            taper_weeks=next(
+                (w for g, w in TAPER_WEEKS.items() if g.value == goal), 0
+            ),
+            phase_multiplier=_phase_multiplier(periodization.phase),
+            phase=periodization.phase.value,
+            target_sessions=availability_sessions,
+        )
+        if trajectory is not None:
+            reason_codes.extend(trajectory.reason_codes)
+            if trajectory_out is not None:
+                trajectory_out.append(trajectory)
+            return "distance", trajectory.prescribed_km, None
+
     chronic = _chronic_base_km(runner_profile, training_history)
     recent = _recent_weekly_km(training_history)
 
@@ -552,6 +596,7 @@ def build_weekly_target(
     periodization: PeriodizationSnapshot,
     reference_date: date,
     sessions_preference: Optional[int] = None,
+    completed_week_km: Optional[tuple[Optional[float], ...]] = None,
 ) -> WeeklyTarget:
     """Build an immutable WeeklyTarget from explicit V2 inputs.
 
@@ -574,8 +619,12 @@ def build_weekly_target(
         Anchor date — must be supplied explicitly by the caller.
     sessions_preference:
         Explicit session prescription (2..6), subject to availability/reprise caps.
+    completed_week_km:
+        Km of fully completed calendar weeks, newest first.  When omitted (or
+        insufficient) the normal state keeps its legacy observed-only target.
     """
     reason_codes: list[str] = []
+    trajectory_out: list = []
     continuity = training_state.continuity_state
 
     # ── Volume target ──────────────────────────────────────────────────────
@@ -601,7 +650,10 @@ def build_weekly_target(
 
     else:  # normal
         target_basis, target_km, target_minutes = _target_normal(
-            runner_profile, training_history, plan_goal, periodization, reason_codes
+            runner_profile, training_history, plan_goal, periodization, reason_codes,
+            completed_week_km=completed_week_km,
+            availability_sessions=_clamp_sessions(runner_profile, continuity, sessions_preference),
+            trajectory_out=trajectory_out,
         )
 
     # ── Intensity ──────────────────────────────────────────────────────────
@@ -651,6 +703,9 @@ def build_weekly_target(
         confidence=confidence,
         continuity_state=continuity,
         reason_codes=tuple(reason_codes),
+        reference_km=trajectory_out[0].reference_km if trajectory_out else None,
+        trajectory_target_km=trajectory_out[0].trajectory_target_km if trajectory_out else None,
+        load_cap_km=trajectory_out[0].load_cap_km if trajectory_out else None,
     )
 
 

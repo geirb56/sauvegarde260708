@@ -26,12 +26,13 @@ from .domain_activity import DomainActivity, to_domain_activity
 from .periodization import PeriodizationSnapshot, build_periodization
 from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
-from .training_history import build_training_history
+from .training_history import build_completed_week_km, build_training_history
 from .training_load import build_training_load
 from .training_paces import TrainingPaces, compute_training_paces, vdot_from_performance
 from .training_response import RecentTrainingResponse, build_recent_training_response
 from .training_state import build_training_state
 from .weekly_reconciliation import WeeklyReconciliationResult, build_weekly_reconciliation
+from .weekly_budget import WeeklyVolumeBudget, apply_weekly_budget
 from .weekly_target import WeeklyTarget, build_weekly_target
 from .workout_generator import WeeklyPlan, build_weekly_plan
 
@@ -275,6 +276,7 @@ def _build_weekly_context_from_workouts(
         periodization=periodization,
         reference_date=reference_date,
         sessions_preference=sessions_preference,
+        completed_week_km=build_completed_week_km(activities, reference_date),
     )
 
     target_capability_time_seconds: Optional[int] = None
@@ -459,6 +461,10 @@ class CanonicalWeeklyPlan:
     """C234 — the already-computed PeriodizationSnapshot, exposed (not
     recomputed) for the same reason as plan_goal above."""
 
+    volume_budget: Optional[WeeklyVolumeBudget] = None
+    """Additive: planned / actual / remaining km for the local calendar week
+    (all eligible Garmin runs, plan-associated or not)."""
+
 
 def build_canonical_weekly_plan(
     *,
@@ -472,6 +478,7 @@ def build_canonical_weekly_plan(
     target_time_seconds: Optional[int] = None,
     sessions_preference: Optional[int] = None,
     training_preferences: Optional[dict] = None,
+    frozen_sessions: Optional[Mapping[str, WorkoutPrescription]] = None,
 ) -> CanonicalWeeklyPlan:
     """PR228 — Build the full canonical weekly plan including reconciliation audit.
 
@@ -489,6 +496,9 @@ def build_canonical_weekly_plan(
     (preserve/reduce only, never increase).
     sessions_preference seeds original_target, subject to availability/reprise
     caps; normal continuity preserves it against observed-frequency-only reduction.
+    frozen_sessions (optional): day name → authoritative served prescription.  They
+    replace the live session of that day, are never adapted and still consume the
+    weekly budget.
     """
     if training_preferences is not None:
         sessions_preference = training_preferences.get("sessions_per_week")
@@ -520,6 +530,17 @@ def build_canonical_weekly_plan(
         target_capability_time_seconds=ctx.target_capability_time_seconds,
     )
 
+    # Remaining-budget adaptation: future days only, reduce-only. Same call for
+    # Today and Week, so both always read the same plan.
+    weekly_plan, volume_budget = apply_weekly_budget(
+        weekly_plan,
+        workouts_to_domain_activities(workouts),
+        reference_date,
+        frozen_sessions=frozen_sessions,
+        plan_goal=ctx.plan_goal,
+        periodization=ctx.periodization,
+    )
+
     return CanonicalWeeklyPlan(
         original_target=ctx.weekly_target,
         reconciliation_result=ctx.reconciliation_result,
@@ -527,4 +548,5 @@ def build_canonical_weekly_plan(
         weekly_plan=weekly_plan,
         plan_goal=ctx.plan_goal,
         periodization=ctx.periodization,
+        volume_budget=volume_budget,
     )

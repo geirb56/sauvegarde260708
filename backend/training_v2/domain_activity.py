@@ -25,6 +25,8 @@ class DomainActivity(BaseModel):
     max_hr: Optional[float] = None
     elevation_gain_m: Optional[float] = None
     moving_duration_s: Optional[float] = None
+    # Local wall-clock start when the provider exposes it; used for civil-week bucketing.
+    start_time_local: Optional[str] = None
 
 
 def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
@@ -74,6 +76,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         max_hr = activity.get('max_hr')
         elev_gain = activity.get('elevation_gain_m')
         moving_dur = activity.get('moving_duration_s')
+        start_local = activity.get('start_time_local')
     else:
         act_type = getattr(activity, 'activity_type', None)
         start = getattr(activity, 'start_time', None)
@@ -91,6 +94,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         max_hr = getattr(activity, 'max_hr', None)
         elev_gain = getattr(activity, 'elevation_gain_m', None)
         moving_dur = getattr(activity, 'moving_duration_s', None)
+        start_local = getattr(activity, 'start_time_local', None)
 
     def _hr(v: Any) -> Optional[float]:
         if isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -116,4 +120,5 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         max_hr=_hr(max_hr),
         elevation_gain_m=_elev(elev_gain),
         moving_duration_s=moving_dur if isinstance(moving_dur, (int, float)) and not isinstance(moving_dur, bool) and moving_dur > 0 else None,
+        start_time_local=start_local if isinstance(start_local, str) and start_local else None,
     )

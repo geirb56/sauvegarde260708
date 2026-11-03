@@ -552,3 +552,122 @@ def build_training_history(
         has_30d_history=has_any and available_days >= 30,
         has_90d_history=has_any and available_days >= 90,
     )
+
+
+# ---------------------------------------------------------------------------
+# Calendar-week volume (Monday-aligned) — shared by WeeklyTarget and the
+# weekly budget so that Today / Week always read the same observed km.
+# ---------------------------------------------------------------------------
+
+
+def week_start_of(day: date) -> date:
+    """Monday of the calendar week containing ``day``."""
+    return day - timedelta(days=day.weekday())
+
+
+def activity_calendar_date(act: DomainActivity) -> Optional[date]:
+    """Civil day of an activity: device-local start when known, else ``start_time``."""
+    local = _parse_date(act.start_time_local) if act.start_time_local else None
+    return local if local is not None else _parse_date(act.start_time)
+
+
+def unique_running_activities(activities: Sequence[Any]) -> List[DomainActivity]:
+    """Eligible running activities with Garmin duplicates removed.
+
+    Eligibility mirrors :func:`build_training_history` (RUNNING_TYPES, valid
+    positive distance, parseable date).  Reliable ``(source, source_activity_id)``
+    identifiers have priority: two activities with distinct IDs are always kept,
+    even when they share start minute and distance.  The start-minute/10 m shape
+    key only drops an ID-less activity that matches an already kept one.  The
+    order is deterministic, so repeated calls and late re-syncs give identical
+    results.
+    """
+    candidates: List[tuple[Any, DomainActivity]] = []
+    for raw in activities:
+        act = to_domain_activity(raw)
+        if (act.activity_type or "") not in RUNNING_TYPES:
+            continue
+        if _valid_distance(act.distance_m) is None or activity_calendar_date(act) is None:
+            continue
+        candidates.append(((str(act.start_time), act.source_activity_id or "", act.distance_m), act))
+    candidates.sort(key=lambda pair: pair[0])
+
+    def _shape(act: DomainActivity) -> tuple[str, int]:
+        return (str(act.start_time)[:16], int(round(float(act.distance_m) / 10.0)))
+
+    seen_ids: set[tuple[str, str]] = set()
+    kept_shapes: set[tuple[str, int]] = set()
+    unique: List[DomainActivity] = []
+    for _, act in candidates:
+        if not act.source_activity_id:
+            continue
+        id_key = (act.source or "", act.source_activity_id)
+        if id_key in seen_ids:
+            continue
+        seen_ids.add(id_key)
+        kept_shapes.add(_shape(act))
+        unique.append(act)
+    for _, act in candidates:
+        if act.source_activity_id:
+            continue
+        shape = _shape(act)
+        if shape in kept_shapes:
+            continue
+        kept_shapes.add(shape)
+        unique.append(act)
+    unique.sort(key=lambda a: (str(a.start_time), a.source_activity_id or "", a.distance_m))
+    return unique
+
+
+def activities_in_week(activities: Sequence[Any], reference_date: date) -> List[DomainActivity]:
+    """Unique running activities in the Monday-aligned week of ``reference_date``.
+
+    Includes plan-associated and free runs; activities after ``reference_date``
+    are ignored.
+    """
+    start = week_start_of(reference_date)
+    return [
+        act
+        for act in unique_running_activities(activities)
+        if start <= activity_calendar_date(act) <= reference_date  # type: ignore[operator]
+    ]
+
+
+def compute_actual_weekly_km(activities: Sequence[Any], reference_date: date) -> float:
+    """Sum of unique running distances (km) in the current calendar week."""
+    total_m = sum(float(a.distance_m) for a in activities_in_week(activities, reference_date))
+    return round(total_m / 1000.0, _ROUND)
+
+
+def build_completed_week_km(
+    activities: Sequence[Any],
+    reference_date: date,
+    weeks: int = 6,
+) -> tuple[Optional[float], ...]:
+    """Running km of the ``weeks`` fully completed calendar weeks, newest first.
+
+    Index 0 is the previous calendar week.  The current (partial) week is
+    excluded, so the result does not change as the week progresses or when
+    endpoints are called repeatedly.  Weeks that start before the first
+    observed run are ``None`` (no data), not 0 km; weeks after it with no run
+    are a genuine 0.0.
+    """
+    current_start = week_start_of(reference_date)
+    unique = unique_running_activities(activities)
+    dates = [d for d in (activity_calendar_date(a) for a in unique) if d is not None]
+    if not dates:
+        return tuple([None] * weeks)
+    first_week = week_start_of(min(dates))
+    totals = [0.0] * weeks
+    for act in unique:
+        act_date = activity_calendar_date(act)
+        if act_date is None or act_date >= current_start:
+            continue
+        index = (current_start - week_start_of(act_date)).days // 7 - 1
+        if 0 <= index < weeks:
+            totals[index] += float(act.distance_m) / 1000.0
+    result: list[Optional[float]] = []
+    for index, total in enumerate(totals):
+        week_monday = current_start - timedelta(weeks=index + 1)
+        result.append(None if week_monday < first_week else round(total, _ROUND))
+    return tuple(result)
