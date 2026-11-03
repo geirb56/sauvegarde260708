@@ -523,30 +523,28 @@ def _target_normal(
     completed_week_km: Optional[tuple[Optional[float], ...]] = None,
     availability_sessions: int = 3,
     trajectory_out: Optional[list] = None,
+    volume_periodization: Optional[PeriodizationSnapshot] = None,
 ) -> tuple[str, Optional[float], Optional[int]]:
     """Build target for normal state.
 
     With enough COMPLETED weeks the deterministic trajectory of
     ``weekly_volume`` is used; otherwise the legacy observed-only path.
+    The trajectory reads ``volume_periodization`` (the weekly Monday anchor,
+    defaulting to ``periodization``) so the race horizon and phase multiplier
+    cannot change from one day to the next within a calendar week.
     """
     if completed_week_km is not None:
         goal = plan_goal.goal_type.value
+        anchor = volume_periodization or periodization
         trajectory = build_volume_trajectory(
             completed_week_km=completed_week_km,
             goal_type=goal,
-            # Anchored on the Monday of the week so the slope (hence the target)
-            # does not drift from one day to the next within the same week.
-            weeks_to_race=(
-                periodization.weeks_to_race
-                + periodization.reference_date.weekday() / 7.0
-                if periodization.weeks_to_race is not None
-                else None
-            ),
+            weeks_to_race=anchor.weeks_to_race,
             taper_weeks=next(
                 (w for g, w in TAPER_WEEKS.items() if g.value == goal), 0
             ),
-            phase_multiplier=_phase_multiplier(periodization.phase),
-            phase=periodization.phase.value,
+            phase_multiplier=_phase_multiplier(anchor.phase),
+            phase=anchor.phase.value,
             target_sessions=availability_sessions,
         )
         if trajectory is not None:
@@ -597,6 +595,7 @@ def build_weekly_target(
     reference_date: date,
     sessions_preference: Optional[int] = None,
     completed_week_km: Optional[tuple[Optional[float], ...]] = None,
+    volume_periodization: Optional[PeriodizationSnapshot] = None,
 ) -> WeeklyTarget:
     """Build an immutable WeeklyTarget from explicit V2 inputs.
 
@@ -622,6 +621,10 @@ def build_weekly_target(
     completed_week_km:
         Km of fully completed calendar weeks, newest first.  When omitted (or
         insufficient) the normal state keeps its legacy observed-only target.
+    volume_periodization:
+        Periodization snapshot dated on the Monday of the reference week; the
+        volume trajectory (race horizon + phase) is read from it.  Defaults to
+        ``periodization``.
     """
     reason_codes: list[str] = []
     trajectory_out: list = []
@@ -654,6 +657,7 @@ def build_weekly_target(
             completed_week_km=completed_week_km,
             availability_sessions=_clamp_sessions(runner_profile, continuity, sessions_preference),
             trajectory_out=trajectory_out,
+            volume_periodization=volume_periodization,
         )
 
     # ── Intensity ──────────────────────────────────────────────────────────
