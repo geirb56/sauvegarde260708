@@ -35,7 +35,11 @@ When the budget cannot hold every session at that minimum, the least useful ones
 (plain easy before quality before long run, then shorter, then later day) are
 removed; kept sessions are served in priority order, never above their planned
 distance, and freed volume is never redistributed.  Exempt: explicit reprise
-continuity states (``short_sessions_allowed``) and frozen sessions.  Duration-based
+continuity states (``short_sessions_allowed``) and frozen sessions.  Explicit post-race recovery (periodization ``RACE_DATE_PASSED`` AND session code
+``POST_RACE_RECOVERY``, inert until the generator emits it) is served first and may
+stay under 4 km.  Quality is ranked below easy runs when intensity is confirmed
+off-plan and is requalified as easy when intensity is not allowed.  The budget is
+allocated from the exact (unrounded) remainder.  Duration-based
 plans are not converted to km (no adaptation).  Sessions no adaptation touched are
 left as generated.
 
@@ -62,6 +66,7 @@ from .workout_generator import (
     WeeklyPlan,
     WorkoutPrescription,
     _make_rest,
+    is_post_race_recovery,
     short_sessions_allowed,
 )
 
@@ -333,16 +338,36 @@ def _budget_view(
         for s in sessions
         if _day_idx(s) > today_idx and _is_running_session(s) and s.day.lower() in frozen
     )
-    headroom = (remaining or 0.0) - reserved_km - frozen_future_km
+    # Exact (unrounded) remainder: the published remaining_budget_km is rounded to
+    # 0.1 and may exceed it by up to 0.05, which must never be prescribed.
+    exact_remaining = max(0.0, (planned_km or 0.0) - actual_km) if planned_km is not None else 0.0
+    headroom = exact_remaining - reserved_km - frozen_future_km
     if headroom < 0 and mutable:
         codes.append("WEEKLY_BUDGET_EXCEEDED_BY_FROZEN_SESSIONS")
-    allowed_future = max(0.0, headroom)
+    allowed_future = _floor_tenth(max(0.0, headroom))
 
     if short_exempt:
         _scale_legacy(sessions, mutable, allowed_future, plan_goal, periodization, codes)
     else:
-        _arbitrate_ordinary(sessions, mutable, allowed_future, plan_goal, periodization, codes)
+        exempt = [i for i in mutable if is_post_race_recovery(sessions[i], periodization)]
+        left = _reserve_exempt(sessions, exempt, allowed_future, plan_goal, periodization, codes)
+        ordinary = [i for i in mutable if i not in exempt]
+        _arbitrate_ordinary(
+            sessions, ordinary, left, plan_goal, periodization, codes,
+            allow_intensity=weekly_plan.allow_intensity, intensity_confirmed=bool(confirmed_days),
+        )
     return _View(sessions, codes, evidence, actual_km, remaining, ran_today, today_idx)
+
+
+def _below_minimum(
+    session: WorkoutPrescription,
+    km: float,
+    short_exempt: bool,
+    periodization: Optional[PeriodizationSnapshot],
+) -> bool:
+    if short_exempt or is_post_race_recovery(session, periodization):
+        return False
+    return 0.0 < km < MIN_ORDINARY_SESSION_KM - 1e-9
 
 
 def _floor_tenth(value: float) -> float:
@@ -381,13 +406,41 @@ def _scale_legacy(
         break
 
 
-# Higher = kept first.  Long run and quality are the sessions a reduced week
-# still needs; plain easy/steady runs go first, then recovery-typed fillers.
-_KEEP_PRIORITY = {"long_easy": 3, "quality": 2, "steady": 1, "easy": 1, "recovery": 0}
+def _reserve_exempt(
+    sessions: list,
+    exempt: Sequence[int],
+    allowed: float,
+    plan_goal: Optional[PlanGoal],
+    periodization: Optional[PeriodizationSnapshot],
+    codes: list[str],
+) -> float:
+    """Explicit post-race recovery sessions are served first (reduce-only, may be < 4 km)."""
+    left = allowed
+    for i in sorted(exempt):
+        planned = float(sessions[i].distance_km)
+        km = _floor_tenth(min(planned, left))
+        if km <= 0:
+            sessions[i] = _make_rest(sessions[i].day, ("WEEKLY_BUDGET_SESSION_DROPPED",))
+            codes.append("WEEKLY_BUDGET_SESSION_DROPPED")
+            continue
+        if km < planned - 1e-9:
+            sessions[i], extra = _fit_session(sessions[i], km, plan_goal, periodization)
+            codes.append("WEEKLY_BUDGET_APPLIED")
+            if extra:
+                codes.append(extra)
+        left -= km if sessions[i].workout_type != "rest" else 0.0
+    return max(0.0, left)
 
 
-def _keep_key(session: WorkoutPrescription, idx: int) -> tuple:
-    return (_KEEP_PRIORITY.get(session.workout_type, 1), float(session.distance_km), -idx)
+# Higher = kept first.  Deterministic safety policy (no readiness/load signal is
+# available to the weekly budget, so none is invented): the long run first, then
+# quality ONLY while intensity is allowed and no confirmed unplanned intense run
+# exists, then plain easy/steady runs, then recovery-typed fillers.  Ties: longer
+# planned distance, then earlier day.
+def _keep_key(session: WorkoutPrescription, idx: int, intensity_ok: bool) -> tuple:
+    rank = {"long_easy": 3.0, "quality": 2.0 if intensity_ok else 0.5,
+            "steady": 1.0, "easy": 1.0, "recovery": 0.0}.get(session.workout_type, 1.0)
+    return (rank, float(session.distance_km), -idx)
 
 
 def _arbitrate_ordinary(
@@ -397,6 +450,8 @@ def _arbitrate_ordinary(
     plan_goal: Optional[PlanGoal],
     periodization: Optional[PeriodizationSnapshot],
     codes: list[str],
+    allow_intensity: bool = True,
+    intensity_confirmed: bool = False,
 ) -> None:
     """Fewer sessions instead of many short ones (C399).
 
@@ -407,6 +462,16 @@ def _arbitrate_ordinary(
     keep at least the minimum.  Freed volume is never redistributed upward.
     """
     originals = {i: sessions[i] for i in mutable}
+    if sum(float(s.distance_km) for s in originals.values()) <= allowed + 1e-9:
+        return
+    intensity_ok = allow_intensity and not intensity_confirmed
+    for i, s in list(originals.items()):
+        if s.workout_type == "quality" and not allow_intensity:
+            originals[i] = s.model_copy(update={
+                "workout_type": "easy", "intensity_class": "low",
+                "reason_codes": _with_code(s.reason_codes, "QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED"),
+            })
+            codes.append("QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED")
     if sum(float(s.distance_km) for s in originals.values()) <= allowed + 1e-9:
         return
 
@@ -422,7 +487,7 @@ def _arbitrate_ordinary(
             drop(i)
 
     while keep:
-        order = sorted(keep, key=lambda i: _keep_key(originals[i], i), reverse=True)
+        order = sorted(keep, key=lambda i: _keep_key(originals[i], i, intensity_ok), reverse=True)
         if MIN_ORDINARY_SESSION_KM * len(order) > allowed + 1e-9:
             drop(order[-1])
             keep.remove(order[-1])
@@ -561,11 +626,32 @@ def apply_weekly_budget(
             # Only the distance reduction is carried over, never a type change.
             if retained_km <= 0.0:
                 sessions[i] = _make_rest(current.day, ("WEEKLY_BUDGET_SESSION_DROPPED",))
+            elif _below_minimum(current, retained_km, short_exempt, periodization):
+                # Replaying a reduction must not publish an ordinary session under the
+                # minimum; the retained distance is never raised to reach it.
+                sessions[i] = _make_rest(
+                    current.day, ("WEEKLY_BUDGET_SESSION_DROPPED", "ORDINARY_SESSION_MIN_KM_NOT_MET")
+                )
+                codes.extend(["WEEKLY_BUDGET_SESSION_DROPPED", "ORDINARY_SESSION_MIN_KM_NOT_MET"])
             else:
                 sessions[i], extra = _fit_session(current, retained_km, plan_goal, periodization)
                 if extra:
                     codes.append(extra)
             codes.append("WEEKLY_BUDGET_REDUCTION_RETAINED")
+
+    # Final contract guard: whatever path reduced a modifiable session, an ordinary
+    # one never leaves under the minimum (frozen / exempt / untouched ones excepted).
+    for i, current in enumerate(sessions):
+        original = weekly_plan.sessions[i]
+        if (
+            _is_adaptable(current, today_idx, view.ran_today, frozen)
+            and _session_km(current) < _session_km(original) - 1e-9
+            and _below_minimum(current, _session_km(current), short_exempt, periodization)
+        ):
+            sessions[i] = _make_rest(
+                current.day, ("WEEKLY_BUDGET_SESSION_DROPPED", "ORDINARY_SESSION_MIN_KM_NOT_MET")
+            )
+            codes.extend(["WEEKLY_BUDGET_SESSION_DROPPED", "ORDINARY_SESSION_MIN_KM_NOT_MET"])
 
     changed = [s for s, o in zip(sessions, weekly_plan.sessions) if s != o]
     remaining_sessions = [

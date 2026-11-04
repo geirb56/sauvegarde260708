@@ -58,7 +58,7 @@ from .structured_workout import StructuredWorkoutPrescription, build_structured_
 from .training_load import TrainingLoadSnapshot, build_training_load
 from .training_paces import TrainingPaces
 from .training_response import RecentTrainingResponse, build_recent_training_response
-from .workout_generator import WorkoutPrescription, short_sessions_allowed
+from .workout_generator import WorkoutPrescription, is_post_race_recovery, short_sessions_allowed
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 
 
@@ -182,7 +182,10 @@ def resolve_today_final_prescription(
         readiness_decision=readiness_decision,
         training_load=training_load,
         recent_response=recent_response_for_readiness,
-        short_sessions_allowed=short_sessions_allowed(continuity_state),
+        short_sessions_allowed=(
+            short_sessions_allowed(continuity_state)
+            or is_post_race_recovery(planned_prescription, periodization)
+        ),
     )
 
     structured_prescription: Optional[StructuredWorkoutPrescription] = None

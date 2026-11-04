@@ -328,3 +328,220 @@ def test_today_and_week_use_the_same_budgeted_plan_and_adaptation():
         )
         assert a.adaptation_result == b_.adaptation_result
         assert a.adaptation_result.adapted_workout.distance_km >= MIN
+
+
+# ---- review corrections (retention replay, post-race, priority, rounding) --
+
+import random
+from types import SimpleNamespace
+
+import training_v2.weekly_budget as wb
+
+
+def _replay_with(monkeypatch, wed_km):
+    """Earlier-day views (the C385/C386 replay) report Wednesday at ``wed_km``."""
+    real = wb._budget_view
+
+    def patched(plan, acts, ref, *a, **k):
+        view = real(plan, acts, ref, *a, **k)
+        if ref < WED:
+            sessions = list(view.sessions)
+            i = next(n for n, s in enumerate(sessions) if s.day == "wednesday")
+            sessions[i] = sessions[i].model_copy(update={"distance_km": wed_km})
+            return wb._View(sessions, view.codes, view.evidence, view.actual_km, view.remaining,
+                            view.ran_today, view.today_idx)
+        return view
+
+    monkeypatch.setattr(wb, "_budget_view", patched)
+
+
+def _wed(plan):
+    return next(s for s in plan.sessions if s.day == "wednesday")
+
+
+def test_retained_reduction_below_4km_becomes_rest(monkeypatch):
+    plan = _plan({"wednesday": ("easy", 6.0), "friday": ("easy", 5.0)})
+    _replay_with(monkeypatch, 3.5)
+    new, b = apply_weekly_budget(plan, [], WED)
+    assert _wed(new).workout_type == "rest" and _wed(new).distance_km is None
+    assert "ORDINARY_SESSION_MIN_KM_NOT_MET" in _wed(new).reason_codes
+    assert "WEEKLY_BUDGET_REDUCTION_RETAINED" in b.reason_codes
+
+
+def test_retained_reduction_at_exactly_4km_is_kept_never_raised(monkeypatch):
+    plan = _plan({"wednesday": ("easy", 6.0)})
+    _replay_with(monkeypatch, 4.0)
+    new, _ = apply_weekly_budget(plan, [], WED)
+    assert _wed(new).distance_km == 4.0
+    _replay_with(monkeypatch, 3.9)
+    assert _wed(apply_weekly_budget(plan, [], WED)[0]).workout_type == "rest"
+
+
+def test_retained_reduction_exempt_in_reprise(monkeypatch):
+    plan = _plan({"wednesday": ("easy", 6.0)})
+    _replay_with(monkeypatch, 3.5)
+    new, _ = apply_weekly_budget(plan, [], WED, continuity_state="partial_reprise")
+    assert _wed(new).distance_km == 3.5
+
+
+def test_retained_reduction_never_touches_frozen(monkeypatch):
+    plan = _plan({"wednesday": ("easy", 3.0), "friday": ("easy", 6.0)})
+    _replay_with(monkeypatch, 2.0)
+    new, _ = apply_weekly_budget(plan, [], WED, frozen_sessions={"wednesday": plan.sessions[2]})
+    assert _wed(new) == plan.sessions[2]
+
+
+# post-race: only explicit structured evidence exempts
+RACE_PASSED = SimpleNamespace(reason_codes=("RACE_DATE_PASSED", "CONTINUOUS_CYCLE", "PHASE_CONSOLIDATION"))
+NO_RACE = SimpleNamespace(reason_codes=("CONTINUOUS_CYCLE", "PHASE_CONSOLIDATION"))
+
+
+def _post_race_plan(recovery_codes, wt="recovery", km=3.5):
+    plan = _plan({"wednesday": (wt, km), "friday": ("easy", 6.0), "sunday": ("long_easy", 8.0)})
+    sessions = list(plan.sessions)
+    sessions[2] = sessions[2].model_copy(update={"reason_codes": recovery_codes})
+    return plan.model_copy(update={"sessions": tuple(sessions)})
+
+
+def test_explicit_post_race_recovery_may_stay_under_4km():
+    plan = _post_race_plan(("POST_RACE_RECOVERY",))
+    new, b = apply_weekly_budget(plan, [_run(MON, 8.0, "a")], WED, periodization=RACE_PASSED)
+    assert _wed(new).distance_km == 3.5 and _wed(new).workout_type == "recovery"
+    assert sum(s.distance_km for s in _running(new)) <= b.remaining_budget_km + 1e-9
+    for s in _running(new):
+        assert s.day == "wednesday" or s.distance_km >= MIN - 1e-9
+
+
+def test_post_race_recovery_is_reduce_only_and_budget_bound():
+    plan = _post_race_plan(("POST_RACE_RECOVERY",), km=3.5)
+    new, b = apply_weekly_budget(plan, [_run(MON, 15.0, "a")], WED, periodization=RACE_PASSED)  # 17.5-15=2.5
+    assert _wed(new).distance_km == 2.5
+    assert all(s.workout_type == "rest" for s in _future(new) if s.day != "wednesday")
+
+
+@pytest.mark.parametrize("codes,perio,wt", [
+    ((), RACE_PASSED, "recovery"),                         # recovery name alone
+    (("POST_RACE_RECOVERY",), NO_RACE, "recovery"),        # code without a passed race
+    (("POST_RACE_RECOVERY",), RACE_PASSED, "easy"),        # ordinary run after a race
+    (("POST_RACE_RECOVERY",), None, "recovery"),
+])
+def test_post_race_exemption_needs_all_explicit_signals(codes, perio, wt):
+    plan = _post_race_plan(codes, wt=wt)
+    new, b = apply_weekly_budget(plan, [_run(MON, 8.0, "a")], WED, periodization=perio)
+    _no_short_ordinary(new)
+
+
+def test_daily_adaptation_post_race_exemption_is_explicit():
+    from training_v2.today_prescription import resolve_today_final_prescription
+
+    def final(session, perio):
+        return resolve_today_final_prescription(
+            planned_prescription=session, reference_date=WED, domain_activities_90=[],
+            garmin_daily_metrics_docs=[], garmin_connected=False, periodization=perio,
+        ).adaptation_result
+
+    rec = _workout(5.0, "recovery").model_copy(update={"reason_codes": ("POST_RACE_RECOVERY",)})
+    # Unavailable readiness keeps the plan: exemption only matters when shortening happens.
+    assert final(rec, RACE_PASSED).adapted_workout.distance_km == 5.0
+    r = build_daily_adaptation(
+        workout=rec, readiness_decision=_decision(ReadinessBand.LOW), training_load=None,
+        recent_response=None,
+        short_sessions_allowed=__import__("training_v2.workout_generator", fromlist=["x"]).is_post_race_recovery(rec, RACE_PASSED),
+    )
+    assert r.action == DailyAdaptationAction.SHORTEN and r.adapted_workout.distance_km == 3.5
+    r = build_daily_adaptation(
+        workout=rec, readiness_decision=_decision(ReadinessBand.LOW), training_load=None, recent_response=None,
+    )
+    assert r.adapted_workout.workout_type == "rest"
+
+
+def test_intensity_not_allowed_never_keeps_quality_by_priority():
+    plan = _plan({"wednesday": ("quality", 7.0), "friday": ("easy", 6.0), "sunday": ("easy", 6.0)})
+    plan = plan.model_copy(update={"allow_intensity": False})
+    new, b = apply_weekly_budget(plan, [_run(MON, 9.0, "a")], WED)   # 19-9 = 10 left
+    assert not any(s.workout_type == "quality" for s in new.sessions)
+    _no_short_ordinary(new)
+
+
+def test_confirmed_offplan_intensity_does_not_duplicate_quality():
+    plan = _plan({"wednesday": ("easy", 6.0), "friday": ("quality", 7.0), "sunday": ("long_easy", 8.0)})
+    new, b = apply_weekly_budget(plan, [_run(MON, 8.0, "a", vig=25.0)], WED, confirmed_intense_days={MON})
+    assert b.unplanned_intensity_evidence == "confirmed"
+    assert not any(s.workout_type == "quality" for s in new.sessions)
+    _no_short_ordinary(new)
+
+
+def test_quality_loses_to_easy_when_intensity_was_confirmed_and_budget_short(monkeypatch):
+    monkeypatch.setattr(wb, "_limit_quality_duplication", lambda *a, **k: None)  # isolate the ranking
+    plan = _plan({"wednesday": ("quality", 7.0), "friday": ("easy", 7.0)})
+    new, _ = apply_weekly_budget(plan, [_run(MON, 8.0, "a", vig=25.0)], WED, confirmed_intense_days={MON})  # 6 left
+    kept = _running(new)
+    assert [s.day for s in kept] == ["friday"]
+
+
+def test_long_run_shorter_than_an_easy_run_is_requalified():
+    plan = _plan({"wednesday": ("easy", 7.0), "sunday": ("long_easy", 5.0)})
+    new, b = apply_weekly_budget(plan, [_run(MON, 4.0, "a")], WED)   # 12-4 = 8 left
+    run = _running(new)
+    assert sum(s.distance_km for s in run) <= 8.0
+    longest = max(s.distance_km for s in run)
+    assert not any(s.workout_type == "long_easy" and s.distance_km < longest - 1e-9 for s in run)
+
+
+def test_rounding_never_exceeds_exact_remainder():
+    # planned 20.6, actual 10.44 -> exact 10.16, published (rounded) 10.2
+    plan = _plan({"wednesday": ("easy", 5.0), "friday": ("easy", 7.3), "sunday": ("long_easy", 6.3),
+                  "monday": ("easy", 2.0)})
+    acts = [_run(MON, 4.66, "a"), _run(TUE, 5.78, "b")]
+    new, b = apply_weekly_budget(plan, acts, WED)
+    assert b.remaining_budget_km == 10.2
+    assert sum(s.distance_km for s in _running(new)) <= 10.16 + 1e-9
+
+
+def _random_case(rng):
+    ref = MON + timedelta(days=rng.randint(0, 5))
+    sess = {d: (rng.choice(["easy", "easy", "quality", "long_easy", "recovery"]), round(rng.uniform(3, 12), 1))
+            for d in DAYS if rng.random() < 0.55}
+    acts = [_run(MON + timedelta(days=i), round(rng.uniform(2, 8), 1), f"a{i}{j}")
+            for i in range(ref.weekday() + 1) for j in range(2) if rng.random() < 0.3]
+    return ref, sess, acts
+
+
+def test_property_min_budget_no_regrowth_codes_and_determinism():
+    rng = random.Random(399)
+    for _ in range(600):
+        ref, sess, acts = _random_case(rng)
+        if not sess:
+            continue
+        plan = _plan(sess, ref)
+        orig = {s.day: s for s in plan.sessions}
+        new, b = apply_weekly_budget(plan, acts, ref)
+        assert apply_weekly_budget(plan, acts, ref)[0] == new
+        exact = max(0.0, plan.planned_km - round(sum(a.distance_m for a in acts) / 1000, 2))
+        ran_today = any(a.start_time[:10] == ref.isoformat() for a in acts)
+        prescribable = [s for s in _running(new, ref) if DAYS.index(s.day) > ref.weekday() or not ran_today]
+        assert sum(s.distance_km for s in prescribable) <= exact + 1e-9
+        assert len(b.reason_codes) == len(set(b.reason_codes))
+        for s in new.sessions:
+            assert len(s.reason_codes) == len(set(s.reason_codes))
+        for s in _running(new, ref):
+            o = orig[s.day]
+            assert s.distance_km <= o.distance_km + 1e-9
+            if s.distance_km < o.distance_km - 1e-9:
+                assert s.distance_km >= MIN - 1e-9
+        # moving the reference date later never re-grows a session
+        later = ref + timedelta(days=1)
+        if later.weekday() <= 6 and later <= MON + timedelta(days=6):
+            nxt, _ = apply_weekly_budget(_plan(sess, later), acts, later)
+            for s in nxt.sessions:
+                if DAYS.index(s.day) >= later.weekday():
+                    prev = next(p for p in new.sessions if p.day == s.day)
+                    assert (s.distance_km or 0.0) <= (prev.distance_km or 0.0) + 1e-9
+
+
+def test_today_then_week_and_week_then_today_share_the_same_plan():
+    sessions = {"wednesday": ("easy", 5.0), "friday": ("easy", 7.3), "sunday": ("long_easy", 6.3)}
+    acts = [_run(MON, 4.66, "a"), _run(TUE, 5.79, "b")]
+    week_first = apply_weekly_budget(_plan(sessions), acts, WED)
+    today_after = apply_weekly_budget(_plan(sessions), acts, WED)
+    assert week_first == today_after

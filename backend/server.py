@@ -3234,6 +3234,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             garmin_daily_metrics_docs=garmin_daily_metrics_docs,
             garmin_connected=garmin_connected,
             continuity_state=canonical.reconciled_target.continuity_state,
+            periodization=canonical.periodization,
         )
         readiness_decision = today_final.readiness_decision
         adaptation_result = today_final.adaptation_result
@@ -3967,6 +3968,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 garmin_daily_metrics_docs=garmin_daily_metrics_docs,
                 garmin_connected=garmin_connected,
                 continuity_state=weekly_target.continuity_state,
+                periodization=canonical.periodization,
             )
 
             def _structured_candidate_factory():

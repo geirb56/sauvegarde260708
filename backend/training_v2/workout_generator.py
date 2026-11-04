@@ -135,6 +135,28 @@ def short_sessions_allowed(continuity_state: Optional[str]) -> bool:
     return continuity_state in REPRISE_CONTINUITY_STATES
 
 
+# Post-race recovery.  Training V2 has NO structured post-race recovery state:
+# periodization only reports ``RACE_DATE_PASSED`` (phase ``consolidation``, shared
+# with the continuous cycle, no recovery window) and ``workout_type="recovery"``
+# is an ordinary low-intensity slot.  Neither alone is evidence of a recovery
+# prescription, so the exemption requires BOTH the race-passed periodization code
+# AND an explicit ``POST_RACE_RECOVERY`` reason code on the session itself.  The
+# generator does not emit that code yet (minimal future change: emit it, bounded
+# by a recovery window, on the recovery sessions of the weeks after a race), so
+# today the exemption is inert rather than guessed.
+POST_RACE_RECOVERY_CODE = "POST_RACE_RECOVERY"
+RACE_PASSED_CODE = "RACE_DATE_PASSED"
+
+
+def is_post_race_recovery(session: "WorkoutPrescription", periodization: object) -> bool:
+    codes = getattr(periodization, "reason_codes", ()) or ()
+    return (
+        RACE_PASSED_CODE in codes
+        and session.workout_type == "recovery"
+        and POST_RACE_RECOVERY_CODE in session.reason_codes
+    )
+
+
 # Long run fraction of weekly target (distance basis).
 LONG_RUN_FRACTION: float = 0.35
 """Base fraction of weekly km to assign to the long run. Calibration V1."""
@@ -1780,4 +1802,6 @@ __all__ = [
     "MIN_ORDINARY_SESSION_KM",
     "REPRISE_CONTINUITY_STATES",
     "short_sessions_allowed",
+    "is_post_race_recovery",
+    "POST_RACE_RECOVERY_CODE",
 ]
