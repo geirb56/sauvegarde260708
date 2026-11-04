@@ -568,6 +568,7 @@ def build_canonical_weekly_plan(
         frozen_sessions=frozen_sessions,
         plan_goal=ctx.plan_goal,
         periodization=ctx.periodization,
+        continuity_state=reconciled_target.continuity_state,
     )
 
     return CanonicalWeeklyPlan(

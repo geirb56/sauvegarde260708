@@ -119,6 +119,22 @@ from .weekly_target import WeeklyTarget
 # Calibration constants — V1, recalibrable
 # ---------------------------------------------------------------------------
 
+# C399 — an ordinary session whose distance is reduced by an adaptation (weekly
+# budget or daily adaptation) must keep at least this distance, else it is
+# removed.  Not applied to sessions that no adaptation touched.
+MIN_ORDINARY_SESSION_KM: float = 4.0
+
+# Continuity states in which the engine deliberately prescribes short sessions.
+REPRISE_CONTINUITY_STATES: frozenset[str] = frozenset(
+    {"no_history", "deep_reprise", "partial_reprise"}
+)
+
+
+def short_sessions_allowed(continuity_state: Optional[str]) -> bool:
+    """True only for an explicit structured reprise state (never from names/text)."""
+    return continuity_state in REPRISE_CONTINUITY_STATES
+
+
 # Long run fraction of weekly target (distance basis).
 LONG_RUN_FRACTION: float = 0.35
 """Base fraction of weekly km to assign to the long run. Calibration V1."""
@@ -1761,4 +1777,7 @@ __all__ = [
     "LONG_RUN_MIN_FRACTION",
     "LONG_RUN_MAX_FRACTION",
     "LONG_RUN_DURATION_FRACTION",
+    "MIN_ORDINARY_SESSION_KM",
+    "REPRISE_CONTINUITY_STATES",
+    "short_sessions_allowed",
 ]

@@ -29,6 +29,16 @@ excess session is frozen or is today's, ``QUALITY_DUPLICATION_NOT_ADAPTABLE``
 is reported.  The canonical pipeline currently has no reliable confirmation
 source, so it reports ``INTENSITY_CONFIRMATION_UNAVAILABLE`` instead of acting.
 
+C399 — minimum distance: an ordinary session reduced by the adaptation keeps at
+least ``MIN_ORDINARY_SESSION_KM`` (4.0 km) or is replaced by an explicit rest.
+When the budget cannot hold every session at that minimum, the least useful ones
+(plain easy before quality before long run, then shorter, then later day) are
+removed; kept sessions are served in priority order, never above their planned
+distance, and freed volume is never redistributed.  Exempt: explicit reprise
+continuity states (``short_sessions_allowed``) and frozen sessions.  Duration-based
+plans are not converted to km (no adaptation).  Sessions no adaptation touched are
+left as generated.
+
 Structured sessions are regenerated from the final ``distance_km`` by the
 structured-workout builder at serve time; after scaling each session is
 validated with that same builder and downgraded (quality → easy) or dropped
@@ -37,7 +47,8 @@ when its blocks could not close the new total.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Collection, Mapping, Optional, Sequence
 
@@ -46,8 +57,17 @@ from .periodization import PeriodizationSnapshot
 from .plan_goal import PlanGoal
 from .structured_workout import build_structured_workout_prescription
 from .training_history import activities_in_week, activity_calendar_date
-from .workout_generator import WeeklyPlan, WorkoutPrescription, _make_rest
+from .workout_generator import (
+    MIN_ORDINARY_SESSION_KM,
+    WeeklyPlan,
+    WorkoutPrescription,
+    _make_rest,
+    short_sessions_allowed,
+)
 
+# Legacy floor, kept ONLY for explicit reprise states where short sessions are
+# deliberate (see ``short_sessions_allowed``).  Ordinary weeks use
+# ``MIN_ORDINARY_SESSION_KM`` (C399).
 MIN_SESSION_KM: float = 3.0
 INTENSE_VIGOROUS_MINUTES: float = 10.0
 
@@ -67,6 +87,27 @@ class WeeklyVolumeBudget:
     reason_codes: tuple[str, ...] = ()
     adapted_remaining_km: Optional[float] = None
     unplanned_intensity_evidence: str = INTENSITY_NONE_KNOWN
+    reference_weekday: Optional[int] = None
+    ran_today: bool = False
+
+    def with_final_sessions(self, final_sessions: Sequence[WorkoutPrescription]) -> "WeeklyVolumeBudget":
+        """Recompute ``adapted_remaining_km`` from the sessions really exposed.
+
+        ``remaining_budget_km`` (theoretical) is left untouched.  Same
+        selection rule as the budget: today (not run yet) and later days.
+        """
+        if self.reference_weekday is None or self.adapted_remaining_km is None:
+            return self
+        total = sum(
+            float(s.distance_km)
+            for s in final_sessions
+            if _is_running_session(s)
+            and (
+                _day_idx(s) > self.reference_weekday
+                or (_day_idx(s) == self.reference_weekday and not self.ran_today)
+            )
+        )
+        return replace(self, adapted_remaining_km=round(total, 1))
 
     def to_response(self) -> dict:
         """Additive, JSON-safe block shared by Today and Week."""
@@ -86,6 +127,10 @@ def compute_remaining_budget(
     if planned_weekly_km is None:
         return None
     return round(max(0.0, planned_weekly_km - actual_weekly_km), 1)
+
+
+def _with_code(codes: Sequence[str], code: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*codes, code)))
 
 
 def _is_running_session(session: WorkoutPrescription) -> bool:
@@ -162,7 +207,7 @@ def _fit_session(
     """Scale one session; keep it coherent or downgrade it, never leave blocks stale."""
     scaled = session.model_copy(update={
         "distance_km": km,
-        "reason_codes": (*session.reason_codes, "WEEKLY_BUDGET_APPLIED"),
+        "reason_codes": _with_code(session.reason_codes, "WEEKLY_BUDGET_APPLIED"),
     })
     if _structure_is_coherent(scaled, plan_goal, periodization):
         return scaled, None
@@ -170,7 +215,7 @@ def _fit_session(
         easy = scaled.model_copy(update={
             "workout_type": "easy",
             "intensity_class": "low",
-            "reason_codes": (*scaled.reason_codes, "QUALITY_DOWNGRADED_STRUCTURE_INCOHERENT"),
+            "reason_codes": _with_code(scaled.reason_codes, "QUALITY_DOWNGRADED_STRUCTURE_INCOHERENT"),
         })
         if _structure_is_coherent(easy, plan_goal, periodization):
             return easy, "QUALITY_DOWNGRADED_STRUCTURE_INCOHERENT"
@@ -249,6 +294,7 @@ def _budget_view(
     plan_goal: Optional[PlanGoal],
     periodization: Optional[PeriodizationSnapshot],
     confirmed_intense_days: Collection[date],
+    short_exempt: bool = False,
 ) -> _View:
     week_acts: list[DomainActivity] = activities_in_week(activities, reference_date)
     actual_km = round(sum(float(a.distance_m) for a in week_acts) / 1000.0, 2)
@@ -292,12 +338,32 @@ def _budget_view(
         codes.append("WEEKLY_BUDGET_EXCEEDED_BY_FROZEN_SESSIONS")
     allowed_future = max(0.0, headroom)
 
+    if short_exempt:
+        _scale_legacy(sessions, mutable, allowed_future, plan_goal, periodization, codes)
+    else:
+        _arbitrate_ordinary(sessions, mutable, allowed_future, plan_goal, periodization, codes)
+    return _View(sessions, codes, evidence, actual_km, remaining, ran_today, today_idx)
+
+
+def _floor_tenth(value: float) -> float:
+    return math.floor(value * 10 + 1e-9) / 10
+
+
+def _scale_legacy(
+    sessions: list,
+    mutable: Sequence[int],
+    allowed: float,
+    plan_goal: Optional[PlanGoal],
+    periodization: Optional[PeriodizationSnapshot],
+    codes: list[str],
+) -> None:
+    """Proportional reduction, only for explicit reprise states (short sessions are deliberate)."""
     active = list(mutable)
     while active:
         total = sum(float(sessions[i].distance_km) for i in active)
-        if total <= allowed_future + 1e-9:
+        if total <= allowed + 1e-9:
             break
-        factor = allowed_future / total
+        factor = allowed / total
         scaled_km = {i: round(float(sessions[i].distance_km) * factor, 1) for i in active}
         too_small = [i for i in active if scaled_km[i] < MIN_SESSION_KM]
         if too_small:
@@ -313,7 +379,109 @@ def _budget_view(
                 codes.append(extra)
         codes.append("WEEKLY_BUDGET_APPLIED")
         break
-    return _View(sessions, codes, evidence, actual_km, remaining, ran_today, today_idx)
+
+
+# Higher = kept first.  Long run and quality are the sessions a reduced week
+# still needs; plain easy/steady runs go first, then recovery-typed fillers.
+_KEEP_PRIORITY = {"long_easy": 3, "quality": 2, "steady": 1, "easy": 1, "recovery": 0}
+
+
+def _keep_key(session: WorkoutPrescription, idx: int) -> tuple:
+    return (_KEEP_PRIORITY.get(session.workout_type, 1), float(session.distance_km), -idx)
+
+
+def _arbitrate_ordinary(
+    sessions: list,
+    mutable: Sequence[int],
+    allowed: float,
+    plan_goal: Optional[PlanGoal],
+    periodization: Optional[PeriodizationSnapshot],
+    codes: list[str],
+) -> None:
+    """Fewer sessions instead of many short ones (C399).
+
+    When the mutable sessions fit the budget nothing changes.  Otherwise the
+    least useful sessions are removed until every kept one can reach
+    ``MIN_ORDINARY_SESSION_KM``; kept sessions are then served in priority
+    order (each up to its own planned distance, never above it) so the others
+    keep at least the minimum.  Freed volume is never redistributed upward.
+    """
+    originals = {i: sessions[i] for i in mutable}
+    if sum(float(s.distance_km) for s in originals.values()) <= allowed + 1e-9:
+        return
+
+    def drop(i: int) -> None:
+        sessions[i] = _make_rest(
+            originals[i].day, ("WEEKLY_BUDGET_SESSION_DROPPED", "ORDINARY_SESSION_MIN_KM_NOT_MET")
+        )
+        codes.extend(["WEEKLY_BUDGET_SESSION_DROPPED", "ORDINARY_SESSION_MIN_KM_NOT_MET"])
+
+    keep = [i for i in mutable if float(originals[i].distance_km) >= MIN_ORDINARY_SESSION_KM - 1e-9]
+    for i in mutable:
+        if i not in keep:
+            drop(i)
+
+    while keep:
+        order = sorted(keep, key=lambda i: _keep_key(originals[i], i), reverse=True)
+        if MIN_ORDINARY_SESSION_KM * len(order) > allowed + 1e-9:
+            drop(order[-1])
+            keep.remove(order[-1])
+            continue
+        km: dict[int, float] = {}
+        left = allowed
+        for pos, i in enumerate(order):
+            reserve = MIN_ORDINARY_SESSION_KM * (len(order) - pos - 1)
+            km[i] = _floor_tenth(min(float(originals[i].distance_km), left - reserve))
+            left -= km[i]
+
+        fitted: dict[int, WorkoutPrescription] = {}
+        extras: list[str] = []
+        failed: Optional[int] = None
+        for i in order:
+            original = originals[i]
+            if km[i] >= float(original.distance_km) - 1e-9:
+                fitted[i] = original
+                continue
+            session, extra = _fit_session(original, km[i], plan_goal, periodization)
+            if session.workout_type == "rest":
+                failed = i
+                break
+            fitted[i] = session
+            if extra:
+                extras.append(extra)
+        if failed is not None:
+            drop(failed)
+            keep.remove(failed)
+            continue
+
+        longest_other = lambda i: max((km[j] for j in keep if j != i), default=0.0)
+        for i, session in list(fitted.items()):
+            if (
+                session.workout_type == "long_easy"
+                and km[i] < float(originals[i].distance_km) - 1e-9
+                and km[i] < longest_other(i) - 1e-9
+            ):
+                easy = session.model_copy(update={
+                    "workout_type": "easy",
+                    "intensity_class": "low",
+                    "reason_codes": _with_code(session.reason_codes, "LONG_RUN_DOWNGRADED_TO_EASY"),
+                })
+                if _structure_is_coherent(easy, plan_goal, periodization):
+                    fitted[i] = easy
+                    extras.append("LONG_RUN_DOWNGRADED_TO_EASY")
+                else:
+                    drop(i)
+                    keep.remove(i)
+                    fitted = {}
+                    break
+        if not fitted and keep:
+            continue
+        for i, session in fitted.items():
+            sessions[i] = session
+        codes.extend(extras)
+        if any(sessions[i] is not originals[i] for i in fitted):
+            codes.append("WEEKLY_BUDGET_APPLIED")
+        break
 
 
 def _session_km(session: WorkoutPrescription) -> float:
@@ -329,6 +497,7 @@ def apply_weekly_budget(
     plan_goal: Optional[PlanGoal] = None,
     periodization: Optional[PeriodizationSnapshot] = None,
     confirmed_intense_days: Collection[date] = (),
+    continuity_state: Optional[str] = None,
 ) -> tuple[WeeklyPlan, WeeklyVolumeBudget]:
     """Adapt not-yet-served sessions from ``reference_date`` on to the remaining budget.
 
@@ -355,9 +524,10 @@ def apply_weekly_budget(
     read from or written to storage.
     """
     frozen = {k.lower(): v for k, v in (frozen_sessions or {}).items()}
+    short_exempt = short_sessions_allowed(continuity_state)
     view = _budget_view(
         weekly_plan, activities, reference_date, frozen, plan_goal, periodization,
-        confirmed_intense_days,
+        confirmed_intense_days, short_exempt,
     )
     evidence = view.evidence
     actual_km = view.actual_km
@@ -380,7 +550,7 @@ def apply_weekly_budget(
         frozen_then = {d: p for d, p in frozen.items() if d in _DAYS and _DAYS.index(d) <= offset}
         earlier = _budget_view(
             weekly_plan, activities, week_start + timedelta(days=offset), frozen_then,
-            plan_goal, periodization, confirmed_intense_days,
+            plan_goal, periodization, confirmed_intense_days, short_exempt,
         )
         for i, current in enumerate(sessions):
             if not _is_adaptable(current, today_idx, view.ran_today, frozen):
@@ -408,7 +578,8 @@ def apply_weekly_budget(
 
     if not changed:
         return weekly_plan, WeeklyVolumeBudget(
-            planned_km, actual_km, remaining, unique_codes, adapted_remaining, evidence
+            planned_km, actual_km, remaining, unique_codes, adapted_remaining, evidence,
+            today_idx, view.ran_today,
         )
 
     training = [s for s in sessions if s.workout_type not in ("rest", "race")]
@@ -418,7 +589,8 @@ def apply_weekly_budget(
         "session_count": len(training),
     })
     return new_plan, WeeklyVolumeBudget(
-        planned_km, actual_km, remaining, unique_codes, adapted_remaining, evidence
+        planned_km, actual_km, remaining, unique_codes, adapted_remaining, evidence,
+        today_idx, view.ran_today,
     )
 
 
