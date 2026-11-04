@@ -219,3 +219,98 @@ def test_snapshot_created_saturday_equals_no_snapshot_in_earlier_views():
     before, after = _all_days(plan, OFF, SAT), _all_days(plan, OFF, SAT, frozen)
     assert after["saturday"] == 2.0
     assert after["sunday"] <= before["sunday"] + 1e-9
+
+
+_DAYIDX = {d: i for i, d in enumerate(["monday","tuesday","wednesday","thursday","friday","saturday","sunday"])}
+
+
+# ── 4. weekly target stability across race week (A) vs budget (B) vs daily session (C) ──
+
+def _canon(race, ref, cs, extra=(), goal="10K", weeks=6, cur=MON):
+    hist = _history([30] * weeks, ref=ref) + [_run(cur, 5.0, aid="cur")] + list(extra)
+    return build_canonical_weekly_plan(
+        workouts=hist, goal_type=goal, race_date=race, cycle_start_date=cs,
+        reference_date=ref, sessions_preference=3,
+    )
+
+
+def _week_days(monday, race, cs):
+    """Reference dates of the week on which the build is valid for this input."""
+    out = []
+    for i in range(7):
+        ref = monday + timedelta(days=i)
+        if cs is None and ref < race:
+            continue  # future race needs an explicit plan start (periodization rule, unchanged)
+        out.append(ref)
+    return out
+
+
+@pytest.mark.parametrize("goal", ["10K", "SEMI", "MARATHON"])
+@pytest.mark.parametrize("race_offset", [0, 2, 6])  # Monday, Wednesday, Sunday
+@pytest.mark.parametrize("explicit", [False, True])
+def test_weekly_target_is_stable_over_race_week(goal, race_offset, explicit):
+    race = MON + timedelta(days=race_offset)
+    cs = (MON - timedelta(weeks=10)) if explicit else None
+    refs = _week_days(MON, race, cs)
+    assert refs
+    targets = {_canon(race, ref, cs, goal=goal).original_target.target_km for ref in refs}
+    assert len(targets) == 1, targets
+
+
+def test_wednesday_race_day_vs_next_day_review_scenario():
+    a = _canon(RACE, RACE, None).original_target.target_km
+    b = _canon(RACE, RACE + timedelta(days=1), None).original_target.target_km
+    assert a == b
+
+
+def test_none_matches_explicit_start_within_race_week():
+    explicit = _canon(RACE, RACE, MON - timedelta(weeks=10)).original_target.target_km
+    for ref in (RACE, RACE + timedelta(days=1), RACE + timedelta(days=4)):
+        assert _canon(RACE, ref, None).original_target.target_km == explicit
+
+
+def test_new_week_after_race_recomputes_and_is_stable_inside_it():
+    next_monday = MON + timedelta(days=7)
+    race_week = _canon(RACE, RACE, None).original_target.target_km
+    week2 = {_canon(RACE, next_monday + timedelta(days=i), None, cur=next_monday).original_target.target_km
+             for i in range(7)}
+    assert len(week2) == 1
+    assert week2 != {race_week}
+
+
+@pytest.mark.parametrize("cs", [None, MON - timedelta(weeks=10)])
+def test_off_plan_run_after_race_changes_budget_not_target(cs):
+    ref = RACE + timedelta(days=2)
+    base = _canon(RACE, ref, cs)
+    extra = _canon(RACE, ref, cs, extra=[_run(RACE + timedelta(days=1), 6.0, aid="post")])
+    assert base.original_target.target_km == extra.original_target.target_km
+    assert extra.volume_budget.actual_weekly_km >= base.volume_budget.actual_weekly_km + 5.9
+    assert extra.volume_budget.remaining_budget_km < base.volume_budget.remaining_budget_km
+    # no catch-up and no preparation phase after the race
+    assert extra.periodization.phase.value == "consolidation"
+    def later(p):
+        return {s.day: s.distance_km or 0.0 for s in p.weekly_plan.sessions
+                if _DAYIDX[s.day] > ref.weekday()}
+    for day, km in later(extra).items():
+        assert km <= later(base)[day] + 1e-9
+
+
+def test_race_day_and_day_after_prescriptions_may_differ_target_does_not():
+    race_day = _canon(RACE, RACE, None)
+    after = _canon(RACE, RACE + timedelta(days=1), None)
+    assert race_day.original_target.target_km == after.original_target.target_km
+    assert race_day.periodization.phase.value == "race"
+    assert after.periodization.phase.value == "consolidation"
+
+
+def test_frozen_snapshot_stays_immutable_in_race_week():
+    plan = _canon(RACE, RACE + timedelta(days=1), None)
+    thu = next(s for s in plan.weekly_plan.sessions if s.day == "thursday")
+    frozen = thu.model_copy(update={"distance_km": 4.0, "workout_type": "easy"})
+    again = build_canonical_weekly_plan(
+        workouts=_history([30] * 6, ref=RACE + timedelta(days=1)), goal_type="10K",
+        race_date=RACE, cycle_start_date=None, reference_date=RACE + timedelta(days=1),
+        sessions_preference=3, frozen_sessions={"thursday": frozen},
+    )
+    assert next(s for s in again.weekly_plan.sessions if s.day == "thursday") == frozen
+    assert again.original_target.target_km == plan.original_target.target_km

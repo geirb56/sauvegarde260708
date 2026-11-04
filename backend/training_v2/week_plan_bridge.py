@@ -23,7 +23,11 @@ from datetime import date
 from typing import List, Optional
 
 from .domain_activity import DomainActivity, to_domain_activity
-from .periodization import PeriodizationSnapshot, build_periodization
+from .periodization import (
+    PeriodizationSnapshot,
+    build_periodization,
+    build_race_week_anchor,
+)
 from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import build_completed_week_km, build_training_history, week_start_of
@@ -275,10 +279,10 @@ def _build_weekly_context_from_workouts(
     )
     if effective_race_date and effective_race_date > anchor_date:
         if cycle_start_date is None:
-            # Race falls inside the week and no plan start was provided: a Monday
-            # anchor before the race would need an invented start, so keep the
-            # (already valid, post-race / race-day) daily periodization.
-            volume_periodization = periodization
+            # Race inside the reference week and no plan start: the weekly volume is
+            # anchored on the race week itself (taper from the Monday), never on the
+            # daily phase (race / consolidation) which would move the target day to day.
+            volume_periodization = build_race_week_anchor(plan_goal, anchor_date)
         else:
             volume_periodization = build_periodization(
                 plan_goal=plan_goal,
