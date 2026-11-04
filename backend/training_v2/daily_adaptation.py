@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict
 from .readiness_decision import ReadinessBand, ReadinessDecision
 from .training_load import TrainingLoadSnapshot
 from .training_response import RecentTrainingResponse
-from .workout_generator import WorkoutPrescription
+from .workout_generator import MIN_ORDINARY_SESSION_KM, WorkoutPrescription
 
 # PRODUCT CALIBRATION V1 — RECALIBRABLE — NOT PHYSIOLOGICAL LAW
 SHORTEN_FACTOR: float = 0.70
@@ -137,6 +137,24 @@ def _rest_workout(workout: WorkoutPrescription) -> WorkoutPrescription:
     )
 
 
+def _below_minimum(workout: WorkoutPrescription, short_sessions_allowed: bool) -> bool:
+    """True when shortening would leave a distance-based ordinary session under the minimum."""
+    if short_sessions_allowed:
+        return False
+    shortened = _shorten_workout(workout).distance_km
+    return shortened is not None and 0 < shortened < MIN_ORDINARY_SESSION_KM
+
+
+def _rest_below_minimum(workout: WorkoutPrescription, reasons: list[str]) -> DailyAdaptationResult:
+    reasons.append("ORDINARY_SESSION_MIN_KM_NOT_MET")
+    return DailyAdaptationResult(
+        action=DailyAdaptationAction.REST,
+        original_workout=workout,
+        adapted_workout=_rest_workout(workout),
+        reason_codes=_dedupe_codes(reasons),
+    )
+
+
 def _should_reduce_for_load(readiness_band: ReadinessBand, load_status: str) -> bool:
     if load_status == "high":
         return readiness_band != ReadinessBand.FAVORABLE
@@ -151,8 +169,15 @@ def build_daily_adaptation(
     readiness_decision: Optional[ReadinessDecision],
     training_load: Optional[TrainingLoadSnapshot],
     recent_response: Optional[RecentTrainingResponse],
+    short_sessions_allowed: bool = False,
 ) -> DailyAdaptationResult:
-    """Decide whether to keep or reduce today's workout without rebuilding the plan."""
+    """Decide whether to keep or reduce today's workout without rebuilding the plan.
+
+    C399: a SHORTEN that would leave an ordinary session under
+    ``MIN_ORDINARY_SESSION_KM`` becomes REST, unless ``short_sessions_allowed``
+    (explicit structured reprise state).  A low readiness score alone never
+    authorises a shorter ordinary session.
+    """
 
     readiness_band = (
         readiness_decision.band
@@ -221,6 +246,8 @@ def build_daily_adaptation(
         reasons.extend(
             ["LONG_EASY_PROTECTED", "WORKOUT_SHORTENED", "INTENSITY_NOT_INCREASED"]
         )
+        if _below_minimum(workout, short_sessions_allowed):
+            return _rest_below_minimum(workout, reasons)
         return DailyAdaptationResult(
             action=DailyAdaptationAction.SHORTEN,
             original_workout=workout,
@@ -230,6 +257,8 @@ def build_daily_adaptation(
 
     if workout.workout_type in ("easy", "recovery") and needs_reduction:
         reasons.extend(["WORKOUT_SHORTENED", "INTENSITY_NOT_INCREASED"])
+        if _below_minimum(workout, short_sessions_allowed):
+            return _rest_below_minimum(workout, reasons)
         return DailyAdaptationResult(
             action=DailyAdaptationAction.SHORTEN,
             original_workout=workout,

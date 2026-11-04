@@ -119,6 +119,50 @@ from .weekly_target import WeeklyTarget
 # Calibration constants — V1, recalibrable
 # ---------------------------------------------------------------------------
 
+# C399 — an ordinary session whose distance is reduced by an adaptation (weekly
+# budget or daily adaptation) must keep at least this distance, else it is
+# removed.  Not applied to sessions that no adaptation touched.
+MIN_ORDINARY_SESSION_KM: float = 4.0
+
+# Continuity states in which the engine deliberately prescribes short sessions.
+REPRISE_CONTINUITY_STATES: frozenset[str] = frozenset(
+    {"no_history", "deep_reprise", "partial_reprise"}
+)
+
+
+def short_sessions_allowed(continuity_state: Optional[str]) -> bool:
+    """True only for an explicit structured reprise state (never from names/text)."""
+    return continuity_state in REPRISE_CONTINUITY_STATES
+
+
+# Post-race recovery.  Training V2 has NO structured post-race recovery state:
+# periodization only reports ``RACE_DATE_PASSED`` (phase ``consolidation``, shared
+# with the continuous cycle, no recovery window) and ``workout_type="recovery"``
+# is an ordinary low-intensity slot.  Neither alone is evidence of a recovery
+# prescription, so the exemption requires BOTH the race-passed periodization code
+# AND an explicit ``POST_RACE_RECOVERY`` reason code on the session itself.  The
+# generator does not emit that code yet (minimal future change: emit it, bounded
+# by a recovery window, on the recovery sessions of the weeks after a race), so
+# today the exemption is inert rather than guessed.
+POST_RACE_RECOVERY_CODE = "POST_RACE_RECOVERY"
+RACE_PASSED_CODE = "RACE_DATE_PASSED"
+
+
+def is_post_race_recovery(session: "WorkoutPrescription", periodization: object) -> bool:
+    """Strict post-race recovery predicate.
+
+    L'exception post-course est prévue dans C399 mais ne sera activée qu'après implémentation
+    d'un état structuré de récupération post-course avec fenêtre bornée (le générateur
+    n'émet pas encore POST_RACE_RECOVERY).
+    """
+    codes = getattr(periodization, "reason_codes", ()) or ()
+    return (
+        RACE_PASSED_CODE in codes
+        and session.workout_type == "recovery"
+        and POST_RACE_RECOVERY_CODE in session.reason_codes
+    )
+
+
 # Long run fraction of weekly target (distance basis).
 LONG_RUN_FRACTION: float = 0.35
 """Base fraction of weekly km to assign to the long run. Calibration V1."""
@@ -1761,4 +1805,9 @@ __all__ = [
     "LONG_RUN_MIN_FRACTION",
     "LONG_RUN_MAX_FRACTION",
     "LONG_RUN_DURATION_FRACTION",
+    "MIN_ORDINARY_SESSION_KM",
+    "REPRISE_CONTINUITY_STATES",
+    "short_sessions_allowed",
+    "is_post_race_recovery",
+    "POST_RACE_RECOVERY_CODE",
 ]

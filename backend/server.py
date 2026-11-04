@@ -3233,6 +3233,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             domain_activities_90=domain_activities_90,
             garmin_daily_metrics_docs=garmin_daily_metrics_docs,
             garmin_connected=garmin_connected,
+            continuity_state=canonical.reconciled_target.continuity_state,
+            periodization=canonical.periodization,
         )
         readiness_decision = today_final.readiness_decision
         adaptation_result = today_final.adaptation_result
@@ -3397,7 +3399,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "action": canonical.reconciliation_result.action.value,
             "reason_codes": list(canonical.reconciliation_result.reason_codes),
         },
-        "weekly_volume": canonical.volume_budget.to_response() if canonical.volume_budget else None,
+        # C399: adapted_remaining_km reflects the sessions really served (today's final one).
+        "weekly_volume": (
+            canonical.volume_budget.with_final_sessions(
+                [served_prescription if s.day.lower() == day_name.lower() else s for s in weekly_plan.sessions]
+            ).to_response()
+            if canonical.volume_budget else None
+        ),
         # vma / vma_confidence: PR228 — no longer computed in /training/today.
         # Verified: frontend does not consume vma from this endpoint.
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
@@ -3959,6 +3967,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 domain_activities_90=domain_activities_90,
                 garmin_daily_metrics_docs=garmin_daily_metrics_docs,
                 garmin_connected=garmin_connected,
+                continuity_state=weekly_target.continuity_state,
+                periodization=canonical.periodization,
             )
 
             def _structured_candidate_factory():
@@ -4231,7 +4241,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         ),
         reconciliation_action=reconciliation_result.action.value,
         reconciliation_reason_codes=list(reconciliation_result.reason_codes),
-        weekly_volume=canonical.volume_budget.to_response() if canonical.volume_budget else None,
+        # C399: adapted_remaining_km reflects the sessions really exposed above.
+        weekly_volume=(
+            canonical.volume_budget.with_final_sessions([se.session for se in execution.sessions]).to_response()
+            if canonical.volume_budget else None
+        ),
     )
 
     return response.model_dump(mode="json")
