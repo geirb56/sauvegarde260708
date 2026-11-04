@@ -536,3 +536,38 @@ def build_periodization(
         )
 
     return _compute_continuous(plan_goal, reference_date, cycle_anchor_date)
+
+
+def build_race_week_anchor(
+    plan_goal: PlanGoal,
+    anchor_date: date,
+) -> PeriodizationSnapshot:
+    """Stable weekly anchor for a race that falls inside the week of ``anchor_date``.
+
+    Used only when the plan start is unknown.  No start date is invented and
+    ``build_periodization`` validation is not bypassed: the phase is derived from
+    the race date alone.  The taper lasts at least 7 days for every race goal, and
+    a race at most 6 days after ``anchor_date`` is always inside it, so the anchor
+    is the ``taper`` phase with ``weeks_to_race = days / 7``, whatever the unknown
+    start was (the schedule gives priority to the taper over earlier phases).
+    """
+    race_date = plan_goal.race_date
+    if race_date is None or plan_goal.goal_type not in TAPER_WEEKS:
+        raise ValueError("a race goal with a race_date is required")
+    days_to_race = (race_date - anchor_date).days
+    if not 0 < days_to_race <= TAPER_WEEKS[plan_goal.goal_type] * 7:
+        raise ValueError(
+            f"race_date ({race_date}) must be 1..taper days after anchor_date ({anchor_date})"
+        )
+    return PeriodizationSnapshot(
+        reference_date=anchor_date,
+        phase=PeriodizationPhase.taper,
+        mode=PeriodizationMode.race_calendar,
+        weeks_to_race=round(days_to_race / _DAYS_PER_WEEK, 4),
+        phase_start_date=None,
+        phase_end_date=None,
+        cycle_week=None,
+        cycle_length_weeks=None,
+        reason_codes=("RACE_CALENDAR", "PHASE_TAPER", "RACE_WEEK_ANCHOR_NO_PLAN_START"),
+    )
+
