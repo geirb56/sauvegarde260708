@@ -545,3 +545,131 @@ def test_today_then_week_and_week_then_today_share_the_same_plan():
     week_first = apply_weekly_budget(_plan(sessions), acts, WED)
     today_after = apply_weekly_budget(_plan(sessions), acts, WED)
     assert week_first == today_after
+
+
+# ---- C399 final fix: intensity forbidden is enforced regardless of the budget --
+
+def _no_intensity(plan):
+    return plan.model_copy(update={"allow_intensity": False})
+
+
+def _quality_plan(**extra):
+    sessions = {"wednesday": ("quality", 6.0), "friday": ("easy", 5.0), "sunday": ("long_easy", 8.0)}
+    sessions.update(extra)
+    return _no_intensity(_plan(sessions))
+
+
+def _types_and_classes(plan):
+    return {s.day: (s.workout_type, s.intensity_class) for s in plan.sessions}
+
+
+def test_forbidden_intensity_with_sufficient_budget_requalifies_quality():
+    plan = _quality_plan()
+    new, b = apply_weekly_budget(plan, [], WED)            # budget fully sufficient
+    wed = _wed(new)
+    assert (wed.workout_type, wed.intensity_class) == ("easy", "low")
+    assert wed.distance_km == 6.0                          # never increased nor reduced here
+    assert wed.reason_codes.count("QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED") == 1
+    assert "QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED" in b.reason_codes
+
+
+def test_forbidden_intensity_with_insufficient_budget_leaves_no_quality():
+    plan = _quality_plan()
+    new, b = apply_weekly_budget(plan, [_run(MON, 8.0, "a")], WED)     # 19 - 8 = 11 left
+    assert not any(s.workout_type == "quality" or s.intensity_class == "high" for s in new.sessions)
+    assert sum(s.distance_km for s in _running(new)) <= 11.0 + 1e-9
+    _no_short_ordinary(new)
+
+
+def test_requalification_that_makes_budget_fit_is_kept_in_the_returned_plan():
+    # 6 + 5 = 11 total; budget exactly 11 only once quality is requalified (distance unchanged).
+    plan = _no_intensity(_plan({"wednesday": ("quality", 6.0), "friday": ("easy", 5.0)}))
+    new, b = apply_weekly_budget(plan, [_run(MON, 2.0, "a")], WED)
+    assert _wed(new).workout_type == "easy"
+    assert new != plan
+
+
+def test_forbidden_intensity_never_touches_frozen_and_reports_contradiction():
+    plan = _quality_plan()
+    frozen_wed = plan.sessions[2]
+    new, b = apply_weekly_budget(plan, [], WED, frozen_sessions={"wednesday": frozen_wed})
+    assert _wed(new) == frozen_wed and _wed(new).workout_type == "quality"
+    assert "QUALITY_FROZEN_CONTRADICTS_INTENSITY_POLICY" in b.reason_codes
+    frozen_fri = _plan({"friday": ("quality", 6.0)}).sessions[4]
+    new, b = apply_weekly_budget(_no_intensity(_plan({"friday": ("quality", 6.0)})), [], WED,
+                                 frozen_sessions={"friday": frozen_fri})
+    assert new.sessions[4] == frozen_fri
+
+
+def test_forbidden_intensity_past_and_already_run_today_are_not_modified():
+    plan = _no_intensity(_plan({"monday": ("quality", 6.0), "wednesday": ("quality", 6.0)}))
+    new, _ = apply_weekly_budget(plan, [_run(WED, 6.0, "a")], WED)
+    assert next(s for s in new.sessions if s.day == "monday").workout_type == "quality"
+    assert _wed(new).workout_type == "quality"
+
+
+def test_allowed_intensity_and_sufficient_budget_keeps_quality():
+    plan = _plan({"wednesday": ("quality", 6.0), "friday": ("easy", 5.0)})
+    new, b = apply_weekly_budget(plan, [], WED)
+    assert new == plan and _wed(new).workout_type == "quality"
+
+
+def test_incoherent_requalification_falls_back_to_rest(monkeypatch):
+    monkeypatch.setattr(wb, "_structure_is_coherent", lambda s, g, p: s.workout_type != "easy")
+    new, b = apply_weekly_budget(_quality_plan(), [], WED, plan_goal=object(), periodization=object())
+    assert _wed(new).workout_type == "rest" and _wed(new).distance_km is None
+
+
+def test_forbidden_intensity_final_structure_has_no_interval_blocks():
+    from test_weekly_volume_trajectory import _canonical, _history
+    from training_v2.structured_workout import StructuredStepType, build_structured_workout_prescription
+
+    c = _canonical(_history([30] * 6), race=WED + timedelta(weeks=12), ref=WED)
+    quality = WorkoutPrescription(day="friday", workout_type="quality", intensity_class="high",
+                                  distance_km=9.0, duration_minutes=None, reason_codes=())
+    sessions = {s.day: s.model_copy(update={"distance_km": 5.0, "duration_minutes": None})
+                if s.workout_type != "rest" else s for s in c.weekly_plan.sessions}
+    sessions["friday"] = quality
+    plan = c.weekly_plan.model_copy(update={"allow_intensity": False, "target_basis": "distance", "planned_km": 40.0,
+                                            "sessions": tuple(sessions[d] for d in DAYS)})
+    ref = date.fromisoformat(plan.reference_date.isoformat())
+    new, _ = apply_weekly_budget(plan, [], ref, plan_goal=c.plan_goal, periodization=c.periodization)
+    fri = next(s for s in new.sessions if s.day == "friday")
+    assert fri.workout_type != "quality" and fri.intensity_class != "high"
+    if fri.workout_type != "rest":
+        structured = build_structured_workout_prescription(
+            workout=fri, plan_goal=c.plan_goal, periodization=c.periodization)
+        assert structured.quality_kind is None
+        assert all(step.repetitions == 1 and step.recovery is None for step in structured.steps)
+        assert structured.workout_type == fri.workout_type
+
+
+def test_post_race_exemption_requires_every_structured_signal():
+    from training_v2.workout_generator import is_post_race_recovery
+    rec = _workout(3.5, "recovery").model_copy(update={"reason_codes": ("POST_RACE_RECOVERY",)})
+    assert is_post_race_recovery(rec, RACE_PASSED)
+    assert not is_post_race_recovery(rec.model_copy(update={"reason_codes": ()}), RACE_PASSED)
+    assert not is_post_race_recovery(rec, NO_RACE) and not is_post_race_recovery(rec, None)
+    assert not is_post_race_recovery(rec.model_copy(update={"workout_type": "easy"}), RACE_PASSED)
+    # The generator never emits the code today: the exception stays inactive.
+    import inspect, training_v2.workout_generator as g
+    src = inspect.getsource(g)
+    assert src.count('"POST_RACE_RECOVERY"') == 1 and "POST_RACE_RECOVERY_CODE" in src
+
+
+def test_property_forbidden_intensity_leaves_no_modifiable_quality():
+    rng = random.Random(7)
+    for _ in range(300):
+        ref, sess, acts = _random_case(rng)
+        if not sess:
+            continue
+        plan = _no_intensity(_plan(sess, ref))
+        new, b = apply_weekly_budget(plan, acts, ref)
+        ran_today = any(a.start_time[:10] == ref.isoformat() for a in acts)
+        for s in new.sessions:
+            i = DAYS.index(s.day)
+            if i > ref.weekday() or (i == ref.weekday() and not ran_today):
+                assert s.workout_type != "quality"
+        for s in new.sessions:
+            assert len(s.reason_codes) == len(set(s.reason_codes))
+        assert len(b.reason_codes) == len(set(b.reason_codes))

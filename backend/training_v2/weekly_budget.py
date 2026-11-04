@@ -346,6 +346,12 @@ def _budget_view(
         codes.append("WEEKLY_BUDGET_EXCEEDED_BY_FROZEN_SESSIONS")
     allowed_future = _floor_tenth(max(0.0, headroom))
 
+    _enforce_intensity_policy(
+        sessions, mutable, frozen, weekly_plan.allow_intensity, today_idx, ran_today,
+        plan_goal, periodization, codes,
+    )
+    mutable = [i for i in mutable if _is_running_session(sessions[i])]
+
     if short_exempt:
         _scale_legacy(sessions, mutable, allowed_future, plan_goal, periodization, codes)
     else:
@@ -404,6 +410,52 @@ def _scale_legacy(
                 codes.append(extra)
         codes.append("WEEKLY_BUDGET_APPLIED")
         break
+
+
+def _enforce_intensity_policy(
+    sessions: list,
+    mutable: Sequence[int],
+    frozen: Mapping[str, WorkoutPrescription],
+    allow_intensity: bool,
+    today_idx: int,
+    ran_today: bool,
+    plan_goal: Optional[PlanGoal],
+    periodization: Optional[PeriodizationSnapshot],
+    codes: list[str],
+) -> None:
+    """Training V2 forbids intensity: no modifiable quality session may remain.
+
+    Independent of the budget.  Distance is kept (never increased); the session is
+    requalified as a plain easy run only if the structured builder can close it,
+    otherwise it is dropped to rest.  Frozen / served sessions are never touched;
+    a forbidden quality session among them is only reported.
+    """
+    if allow_intensity:
+        return
+    for i in mutable:
+        s = sessions[i]
+        if s.workout_type != "quality":
+            continue
+        easy = s.model_copy(update={
+            "workout_type": "easy",
+            "intensity_class": "low",
+            "reason_codes": _with_code(s.reason_codes, "QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED"),
+        })
+        if _structure_is_coherent(easy, plan_goal, periodization):
+            sessions[i] = easy
+        else:
+            sessions[i] = _make_rest(
+                s.day, ("QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED", "WEEKLY_BUDGET_SESSION_DROPPED")
+            )
+            codes.append("WEEKLY_BUDGET_SESSION_DROPPED")
+        codes.append("QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED")
+    for s in sessions:
+        idx = _day_idx(s)
+        if (
+            s.workout_type == "quality" and s.day.lower() in frozen
+            and (idx > today_idx or (idx == today_idx and not ran_today))
+        ):
+            codes.append("QUALITY_FROZEN_CONTRADICTS_INTENSITY_POLICY")
 
 
 def _reserve_exempt(
@@ -465,15 +517,6 @@ def _arbitrate_ordinary(
     if sum(float(s.distance_km) for s in originals.values()) <= allowed + 1e-9:
         return
     intensity_ok = allow_intensity and not intensity_confirmed
-    for i, s in list(originals.items()):
-        if s.workout_type == "quality" and not allow_intensity:
-            originals[i] = s.model_copy(update={
-                "workout_type": "easy", "intensity_class": "low",
-                "reason_codes": _with_code(s.reason_codes, "QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED"),
-            })
-            codes.append("QUALITY_NOT_KEPT_INTENSITY_NOT_ALLOWED")
-    if sum(float(s.distance_km) for s in originals.values()) <= allowed + 1e-9:
-        return
 
     def drop(i: int) -> None:
         sessions[i] = _make_rest(

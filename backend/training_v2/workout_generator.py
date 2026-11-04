@@ -149,6 +149,12 @@ RACE_PASSED_CODE = "RACE_DATE_PASSED"
 
 
 def is_post_race_recovery(session: "WorkoutPrescription", periodization: object) -> bool:
+    """Strict post-race recovery predicate.
+
+    L'exception post-course est prévue dans C399 mais ne sera activée qu'après implémentation
+    d'un état structuré de récupération post-course avec fenêtre bornée (le générateur
+    n'émet pas encore POST_RACE_RECOVERY).
+    """
     codes = getattr(periodization, "reason_codes", ()) or ()
     return (
         RACE_PASSED_CODE in codes
