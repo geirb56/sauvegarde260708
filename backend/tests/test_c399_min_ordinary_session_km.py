@@ -673,3 +673,119 @@ def test_property_forbidden_intensity_leaves_no_modifiable_quality():
         for s in new.sessions:
             assert len(s.reason_codes) == len(set(s.reason_codes))
         assert len(b.reason_codes) == len(set(b.reason_codes))
+
+
+# ---- C399 review: pending frozen sessions in the long-run comparison --------
+
+def _lr_case(frozen_wed_km, long_km, *, acts=None, planned=24.0, ref=WED, frozen_day="wednesday"):
+    sessions = {"monday": ("easy", 9.0), frozen_day: ("easy", frozen_wed_km),
+                "friday": ("easy", 6.0), "sunday": ("long_easy", long_km)}
+    plan = _plan(sessions, ref).model_copy(update={"planned_km": planned})
+    frozen = next(s for s in plan.sessions if s.day == frozen_day)
+    acts = [_run(MON, 9.0, "a")] if acts is None else acts
+    new, b = apply_weekly_budget(plan, acts, ref, frozen_sessions={frozen_day: frozen})
+    return plan, frozen, new, b
+
+
+def _sun(plan):
+    return next(s for s in plan.sessions if s.day == "sunday")
+
+
+def test_long_run_shorter_than_pending_frozen_session_is_requalified():
+    plan, frozen, new, b = _lr_case(8.0, 10.0)           # Sunday ends at 7.0 < frozen 8.0
+    sun = _sun(new)
+    assert 0 < sun.distance_km < 8.0 and sun.distance_km <= 10.0
+    assert sun.workout_type == "easy" and "LONG_RUN_DOWNGRADED_TO_EASY" in sun.reason_codes
+    assert len(sun.reason_codes) == len(set(sun.reason_codes))
+    assert next(s for s in new.sessions if s.day == "wednesday") == frozen   # untouched
+    assert len(b.reason_codes) == len(set(b.reason_codes))
+
+
+def test_long_run_longer_than_pending_frozen_session_is_not_requalified():
+    plan, frozen, new, b = _lr_case(6.0, 12.0, planned=27.0)
+    sun = _sun(new)
+    assert sun.workout_type == "long_easy" and sun.distance_km >= 6.0
+    assert next(s for s in new.sessions if s.day == "wednesday") == frozen
+
+
+def test_past_frozen_longer_session_is_not_compared():
+    plan, frozen, new, _ = _lr_case(12.0, 10.0, ref=THU, frozen_day="tuesday",
+                                    acts=[_run(MON, 9.0, "a"), _run(TUE, 12.0, "t")], planned=33.0)
+    sun = _sun(new)
+    assert sun.workout_type == "long_easy"
+    assert next(s for s in new.sessions if s.day == "tuesday") == frozen
+
+
+def test_frozen_today_already_run_is_not_compared_as_future_session():
+    plan, frozen, new, _ = _lr_case(12.0, 10.0, acts=[_run(MON, 9.0, "a"), _run(WED, 12.0, "w")],
+                                    planned=33.0)
+    assert _sun(new).workout_type == "long_easy"
+    assert next(s for s in new.sessions if s.day == "wednesday") == frozen
+
+
+def test_frozen_today_not_yet_run_is_compared():
+    plan, frozen, new, _ = _lr_case(8.0, 10.0)           # today=Wed, not run yet
+    assert _sun(new).workout_type == "easy"
+
+
+def test_long_run_requalification_never_grows_or_catches_up():
+    plan, frozen, new, _ = _lr_case(8.0, 10.0)
+    for s, o in zip(new.sessions, plan.sessions):
+        if s != o and o.distance_km is not None and s.distance_km is not None:
+            assert s.distance_km <= o.distance_km
+    _no_short_ordinary(new)
+
+
+# ---- C399 review: recomputation after a real daily adaptation ----------------
+
+def _daily(session, band=ReadinessBand.LOW):
+    return build_daily_adaptation(
+        workout=session, readiness_decision=_decision(band), training_load=None, recent_response=None,
+    ).adapted_workout
+
+
+def _final_after_daily(new, day="wednesday"):
+    return [_daily(s) if s.day == day else s for s in new.sessions]
+
+
+def test_recomputation_after_daily_rest_decreases_adapted_remaining():
+    plan, new, b = _budget_case([], {"wednesday": ("easy", 5.0), "friday": ("easy", 5.0),
+                                     "sunday": ("long_easy", 8.0)})
+    wed = _wed(new)
+    assert wed.workout_type == "easy" and wed.distance_km == 5.0        # survives arbitration
+    final = _final_after_daily(new)
+    assert _wed_of(final).workout_type == "rest"                        # 5.0 * 0.7 = 3.5 < 4
+    refreshed = b.with_final_sessions(final)
+    assert b.adapted_remaining_km == 18.0 and refreshed.adapted_remaining_km == 13.0
+    assert refreshed.remaining_budget_km == b.remaining_budget_km
+    assert refreshed.adapted_remaining_km == pytest.approx(
+        sum(s.distance_km for s in _running_from(final, WED)))
+    # nothing removed is redistributed
+    for s, o in zip(final, new.sessions):
+        assert (s.distance_km or 0) <= (o.distance_km or 0)
+
+
+def test_recomputation_after_daily_shortening_reflects_shortened_distance():
+    plan, new, b = _budget_case([], {"wednesday": ("long_easy", 8.0), "friday": ("easy", 5.0)})
+    final = _final_after_daily(new)
+    wed = _wed_of(final)
+    assert wed.workout_type != "rest" and MIN <= wed.distance_km < 8.0
+    refreshed = b.with_final_sessions(final)
+    assert refreshed.adapted_remaining_km == pytest.approx(round(wed.distance_km + 5.0, 1))
+    assert refreshed.adapted_remaining_km < b.adapted_remaining_km
+
+
+def test_recomputation_is_not_a_noop(monkeypatch):
+    plan, new, b = _budget_case([], {"wednesday": ("easy", 5.0), "friday": ("easy", 5.0)})
+    final = _final_after_daily(new)
+    assert b.with_final_sessions(final).adapted_remaining_km != b.adapted_remaining_km
+    monkeypatch.setattr(wb.WeeklyVolumeBudget, "with_final_sessions", lambda self, s: self)
+    assert b.with_final_sessions(final).adapted_remaining_km == b.adapted_remaining_km  # mutant detected
+
+
+def _wed_of(sessions):
+    return next(s for s in sessions if s.day == "wednesday")
+
+
+def _running_from(sessions, ref):
+    return [s for s in sessions if s.distance_km and DAYS.index(s.day) >= ref.weekday()]

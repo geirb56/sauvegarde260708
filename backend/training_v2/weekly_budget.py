@@ -361,6 +361,11 @@ def _budget_view(
         _arbitrate_ordinary(
             sessions, ordinary, left, plan_goal, periodization, codes,
             allow_intensity=weekly_plan.allow_intensity, intensity_confirmed=bool(confirmed_days),
+            pending_frozen_km=[
+                float(s.distance_km) for s in sessions
+                if s.day.lower() in frozen and _is_running_session(s)
+                and (_day_idx(s) > today_idx or (_day_idx(s) == today_idx and not ran_today))
+            ],
         )
     return _View(sessions, codes, evidence, actual_km, remaining, ran_today, today_idx)
 
@@ -504,6 +509,7 @@ def _arbitrate_ordinary(
     codes: list[str],
     allow_intensity: bool = True,
     intensity_confirmed: bool = False,
+    pending_frozen_km: Sequence[float] = (),
 ) -> None:
     """Fewer sessions instead of many short ones (C399).
 
@@ -562,7 +568,14 @@ def _arbitrate_ordinary(
             keep.remove(failed)
             continue
 
-        longest_other = lambda i: max((km[j] for j in keep if j != i), default=0.0)
+        # Pending frozen sessions are part of the final plan: they are compared too
+        # (never modified).
+        frozen_longest = max((float(k) for k in pending_frozen_km), default=0.0)
+        longest_other = lambda i: max(
+            (km[j] for j in keep if j != i), default=0.0
+        ) if frozen_longest <= 0 else max(
+            max((km[j] for j in keep if j != i), default=0.0), frozen_longest
+        )
         for i, session in list(fitted.items()):
             if (
                 session.workout_type == "long_easy"
