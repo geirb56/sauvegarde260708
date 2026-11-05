@@ -89,6 +89,14 @@ SYSTEM_PROMPT_PLAN = """You are an elite running coach specialized in periodizat
 Respond ONLY in valid JSON, without text before or after."""
 
 
+# Shared by chat and the automatic session comment so both apply identical guards.
+_PROMPT_GUARDS = """Apply the evidence levels and permissions from your instructions to the data above; if a field needed for the answer is unavailable or low-confidence, say so plainly.
+Raw recent_workouts and workout_detail metrics are descriptive facts only and do not establish physiological intensity; HR/pace differences between sessions do not prove progress. Follow selected_workout_permissions literally.
+Training V2, readiness, load, and performance are current context; they do not establish the athlete's historical state on a selected workout date.
+recent_workouts is a bounded selection: use its coverage metadata, and if truncated do not claim to have reviewed all sessions in the period.
+Training V2 remains the sole prescription authority; Workout Analysis V2 advice is not a new prescription.
+"""
+
 # Map language code -> a strong, explicit output-language directive.
 _LANG_NAMES = {"fr": "French (français)", "en": "English", "es": "Spanish (español)"}
 
@@ -184,12 +192,7 @@ async def enrich_chat_response(
 ❓ ATHLETE'S QUESTION: {user_message}
 
 Respond in {language.upper()} as a caring and expert personal coach, answering the question directly.
-Apply the evidence levels and permissions from your instructions to the data above; if a field needed for the answer is unavailable or low-confidence, say so plainly.
-Raw recent_workouts and workout_detail metrics are descriptive facts only and do not establish physiological intensity; HR/pace differences between sessions do not prove progress. Follow selected_workout_permissions literally.
-Training V2, readiness, load, and performance are current context; they do not establish the athlete's historical state on a selected workout date.
-recent_workouts is a bounded selection: use its coverage metadata, and if truncated do not claim to have reviewed all sessions in the period.
-Training V2 remains the sole prescription authority; Workout Analysis V2 advice is not a new prescription.
-
+{_PROMPT_GUARDS}
 RESPONSE PRESENTATION DIRECTIVE:
 {_build_response_style_directive(context, conversation_history)}{_lang_directive(language)}"""
 
@@ -207,6 +210,39 @@ RESPONSE PRESENTATION DIRECTIVE:
     return await _call_gpt(
         SYSTEM_PROMPT_COACH + access_directive + _lang_directive(language),
         prompt, user_id, "chat",
+    )
+
+
+_SESSION_COMMENT_DIRECTIVE = (
+    "AUTOMATIC SESSION COMMENT: there is no athlete question. Write the coach's own initial "
+    "reading of the selected workout, shown at the top of its page. Start directly with the "
+    "takeaway: no greeting, no question to the athlete, no offer of further help. Use only facts "
+    "present in the context above; introduce no number that is absent from it. Stay consistent "
+    "with validated_workout_observations. This is presentation only: every rule and permission "
+    "above still applies."
+)
+
+
+async def generate_session_comment(
+    context: Dict,
+    user_id: str = "unknown",
+) -> Tuple[Optional[str], bool, Dict]:
+    """Initial coach comment for a selected workout, with the chat's prompt and context.
+
+    Uses the same SYSTEM_PROMPT_COACH, model and guards as enrich_chat_response, with the
+    selected_workout_initial presentation mode and no simulated athlete question.
+    """
+    language = context.get("language", "fr")
+    context_text = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    prompt = f"""COACH CONTEXT V2 JSON:
+{context_text}
+
+Respond in {language.upper()} as a caring and expert personal coach.
+{_PROMPT_GUARDS}
+RESPONSE PRESENTATION DIRECTIVE:
+{_build_response_style_directive(context, [])} {_SESSION_COMMENT_DIRECTIVE}{_lang_directive(language)}"""
+    return await _call_gpt(
+        SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "session_comment",
     )
 
 
@@ -316,6 +352,7 @@ def _clean_response(response: str, *, max_chars: int = 700) -> str:
 
 __all__ = [
     "enrich_chat_response",
+    "generate_session_comment",
     "LLM_MODEL",
     "LLM_PROVIDER"
 ]

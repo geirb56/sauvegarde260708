@@ -835,7 +835,9 @@ async def test_coach_context_v2_stats_match_training_history_v2_running_types():
 
 
 def test_analyze_with_coach_source_uses_v2_authorities_only():
-    source = inspect.getsource(server.process_coach_message)
+    # C400: context assembly lives in the helper shared by chat and the session comment.
+    source = (inspect.getsource(server.process_coach_message)
+              + inspect.getsource(server._build_coach_llm_context))
     context_source = inspect.getsource(server.build_coach_context_v2)
     analysis_loader_source = inspect.getsource(server.load_scoped_workout_analysis_v2)
     recent_normalizer_source = inspect.getsource(coach_context_v2._normalize_recent_workout)

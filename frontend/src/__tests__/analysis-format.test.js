@@ -45,3 +45,16 @@ describe("narrative contract selection", () => {
     expect(getWorkoutNarrative({ narrative_coach_v3: candidate }, "fr")).toBeNull();
   });
 });
+
+describe("C400 coach comment selection", () => {
+  const { getCoachComment } = require("@/components/workout/NarrativeWorkoutAnalysis");
+  const ok = { status: "generated", language: "fr", source: "coach_c396", text: " Bonne sortie. " };
+  test("only a generated, same-language C396 comment is shown", () => {
+    expect(getCoachComment({ coach_comment: ok }, "fr")).toBe("Bonne sortie.");
+    expect(getCoachComment({ coach_comment: ok }, "en")).toBeNull();
+    expect(getCoachComment({ coach_comment: { ...ok, status: "fallback" } }, "fr")).toBeNull();
+    expect(getCoachComment({ coach_comment: { ...ok, source: "other" } }, "fr")).toBeNull();
+    expect(getCoachComment({ coach_comment: { ...ok, text: " " } }, "fr")).toBeNull();
+    expect(getCoachComment({}, "fr")).toBeNull();
+  });
+});
