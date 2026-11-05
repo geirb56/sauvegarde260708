@@ -53,6 +53,8 @@ from workout_analysis_v2 import (
 )
 from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 from narrative_coach_v3_models import WorkoutIntelligenceV3NarrativeResponse
+import coach_session_comment
+from coach_session_comment import CoachSessionCommentResponse
 from workout_intelligence_v3_service import (
     load_scoped_workout_deterministic_narrative,
     load_scoped_workout_intelligence_v3_with_narrative,
@@ -2039,6 +2041,144 @@ def _coach_validated_workout_observations(narrative) -> Optional[dict]:
     }
 
 
+async def _assemble_coach_llm_context(
+    *, user: dict, language: str, workout, workout_analysis,
+    workout_analysis_allowed: bool, workout_id: Optional[str], now_utc: datetime,
+    load_training_payloads,
+):
+    """Context assembly shared by chat and the automatic session comment.
+
+    load_training_payloads is the only step that may differ: the chat uses the
+    Training V2 endpoints (which persist served prescriptions), the comment a
+    strictly read-only stand-in. Everything else here only reads.
+
+    Returns (llm_context, scoped_narrative); scoped_narrative is the sentinel
+    _NARRATIVE_NOT_LOADED when no workout is selected or analysis is not allowed.
+    """
+    user_id = user["id"]
+    scoped_narrative = _NARRATIVE_NOT_LOADED
+    ninety_days_ago = now_utc - timedelta(days=90)
+
+    garmin_activities_all = await db.garmin_activities.find(
+        {"user_id": user_id},
+        {"_id": 0},
+    ).to_list(2000)
+    garmin_activities_90 = [
+        doc for doc in garmin_activities_all
+        if isinstance(doc.get("start_time"), str)
+        and doc.get("start_time") >= ninety_days_ago.isoformat()
+    ]
+    domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+    domain_activities_all = mongo_garmin_activities_to_domain(garmin_activities_all)
+    reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
+    resolved_goal = await _resolve_goal_v2(user_id)
+
+    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
+    garmin_daily_metrics_docs: list = []
+    if garmin_connected:
+        try:
+            garmin_daily_metrics_docs = await (
+                db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
+                .sort("date", -1)
+                .limit(30)
+                .to_list(length=30)
+            )
+        except Exception as exc:
+            logger.warning(f"[CoachAnalyze] Garmin daily metrics fetch failed: {exc}")
+            garmin_connected = False
+
+    training_load = build_training_load(domain_activities_90, reference_date)
+    readiness_result = None
+    readiness_data_source = "unavailable"
+    if garmin_connected:
+        try:
+            readiness_result = build_readiness_v2_from_garmin_data(
+                garmin_daily_metrics_docs,
+                domain_activities_90,
+                reference_date,
+                load_snapshot=training_load,
+                hrv_supported=None,
+            )
+            if readiness_result is not None:
+                readiness_data_source = "garmin"
+        except Exception as exc:
+            logger.warning(f"[CoachAnalyze] Readiness resolution failed: {exc}")
+    readiness_decision = build_readiness_decision(readiness_result)
+
+    performance = predict_races(domain_activities_all, reference_date)
+    training_paces = await load_canonical_training_paces(
+        db,
+        user_id=user_id,
+        reference_date=reference_date,
+    )
+    week_payload, today_payload = await load_training_payloads()
+
+    context = (await build_coach_context_v2(
+        db=db,
+        user_id=user_id,
+        language=language,
+        reference_date=reference_date,
+        resolved_goal=resolved_goal,
+        domain_activities_90=domain_activities_90,
+        week_payload=week_payload,
+        today_payload=today_payload,
+        training_load=training_load,
+        readiness_decision=readiness_decision,
+        readiness_data_source=readiness_data_source,
+        training_paces=training_paces,
+        performance=performance,
+        workout=workout,
+        workout_analysis=workout_analysis,
+    )).model_dump(mode="json")
+    llm_context = build_llm_coach_context(
+        context, workout_analysis_allowed=workout_analysis_allowed,
+    )
+    if workout_id is not None and workout_analysis_allowed:
+        scoped_narrative = await _load_coach_narrative(
+            user_id=user_id, workout_id=workout_id, language=language,
+        )
+        validated = _coach_validated_workout_observations(scoped_narrative)  # None when unavailable
+        if validated is not None:
+            llm_context["validated_workout_observations"] = validated
+    return llm_context, scoped_narrative
+
+
+async def _build_coach_llm_context(
+    *, user: dict, language: str, workout, workout_analysis,
+    workout_analysis_allowed: bool, workout_id: Optional[str], now_utc: datetime,
+):
+    """Chat context (unchanged behaviour): Training V2 week/today are loaded as before."""
+    async def load_training_payloads():
+        return (await get_training_v2_week(user=user)), (await get_today_adaptive_session(user=user))
+
+    return await _assemble_coach_llm_context(
+        user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+        workout_analysis_allowed=workout_analysis_allowed, workout_id=workout_id,
+        now_utc=now_utc, load_training_payloads=load_training_payloads,
+    )
+
+
+async def _build_coach_comment_context(
+    *, user: dict, language: str, workout, workout_analysis, workout_id: str, now_utc: datetime,
+):
+    """C400 read-only context for the automatic session comment.
+
+    get_training_v2_week / get_today_adaptive_session persist served prescriptions, so
+    this path never calls them: Training V2 week/today are marked unavailable and the
+    comment relies on the selected workout facts and the C388 observations. The remaining
+    steps only read (find/find_one/count). Do not add any write-capable call here.
+    """
+    async def read_only_training_payloads():
+        return {}, {"status": "unavailable"}
+
+    return await _assemble_coach_llm_context(
+        user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+        workout_analysis_allowed=True, workout_id=workout_id, now_utc=now_utc,
+        load_training_payloads=read_only_training_payloads,
+    )
+
+
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
@@ -2096,91 +2236,13 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         ).sort("timestamp", -1).limit(COACH_HISTORY_LIMIT).to_list(COACH_HISTORY_LIMIT)
         conversation_history = list(reversed(conversation_history))  # Chronological order
 
-        ninety_days_ago = now_utc - timedelta(days=90)
-
-        garmin_activities_all = await db.garmin_activities.find(
-            {"user_id": user_id},
-            {"_id": 0},
-        ).to_list(2000)
-        garmin_activities_90 = [
-            doc for doc in garmin_activities_all
-            if isinstance(doc.get("start_time"), str)
-            and doc.get("start_time") >= ninety_days_ago.isoformat()
-        ]
-        domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
-        domain_activities_all = mongo_garmin_activities_to_domain(garmin_activities_all)
-        reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
-        resolved_goal = await _resolve_goal_v2(user_id)
-
-        garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
-        garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
-        garmin_daily_metrics_docs: list = []
-        if garmin_connected:
-            try:
-                garmin_daily_metrics_docs = await (
-                    db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
-                    .sort("date", -1)
-                    .limit(30)
-                    .to_list(length=30)
-                )
-            except Exception as exc:
-                logger.warning(f"[CoachAnalyze] Garmin daily metrics fetch failed: {exc}")
-                garmin_connected = False
-
-        training_load = build_training_load(domain_activities_90, reference_date)
-        readiness_result = None
-        readiness_data_source = "unavailable"
-        if garmin_connected:
-            try:
-                readiness_result = build_readiness_v2_from_garmin_data(
-                    garmin_daily_metrics_docs,
-                    domain_activities_90,
-                    reference_date,
-                    load_snapshot=training_load,
-                    hrv_supported=None,
-                )
-                if readiness_result is not None:
-                    readiness_data_source = "garmin"
-            except Exception as exc:
-                logger.warning(f"[CoachAnalyze] Readiness resolution failed: {exc}")
-        readiness_decision = build_readiness_decision(readiness_result)
-
-        performance = predict_races(domain_activities_all, reference_date)
-        training_paces = await load_canonical_training_paces(
-            db,
-            user_id=user_id,
-            reference_date=reference_date,
+        llm_context, loaded_narrative = await _build_coach_llm_context(
+            user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+            workout_analysis_allowed=workout_analysis_allowed, workout_id=request.workout_id,
+            now_utc=now_utc,
         )
-        week_payload = await get_training_v2_week(user=user)
-        today_payload = await get_today_adaptive_session(user=user)
-
-        context = (await build_coach_context_v2(
-            db=db,
-            user_id=user_id,
-            language=language,
-            reference_date=reference_date,
-            resolved_goal=resolved_goal,
-            domain_activities_90=domain_activities_90,
-            week_payload=week_payload,
-            today_payload=today_payload,
-            training_load=training_load,
-            readiness_decision=readiness_decision,
-            readiness_data_source=readiness_data_source,
-            training_paces=training_paces,
-            performance=performance,
-            workout=workout,
-            workout_analysis=workout_analysis,
-        )).model_dump(mode="json")
-        llm_context = build_llm_coach_context(
-            context, workout_analysis_allowed=workout_analysis_allowed,
-        )
-        if request.workout_id is not None and workout_analysis_allowed:
-            scoped_narrative = await _load_coach_narrative(
-                user_id=user_id, workout_id=request.workout_id, language=language,
-            )
-            validated = _coach_validated_workout_observations(scoped_narrative)  # None when unavailable
-            if validated is not None:
-                llm_context["validated_workout_observations"] = validated
+        if loaded_narrative is not _NARRATIVE_NOT_LOADED:
+            scoped_narrative = loaded_narrative
 
         # 6. Stocker le message utilisateur
         user_msg_id = str(uuid.uuid4())
@@ -2323,6 +2385,60 @@ async def get_workout_intelligence_v3(workout_id: str, language: str = "en", use
         workout_id=workout_id, workout_intelligence_v3=intelligence,
         narrative_coach_v3=narrative,
     )
+
+
+@api_router.get("/coach/workout-comment/{workout_id}", response_model=CoachSessionCommentResponse)
+async def get_workout_coach_comment(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
+    """C400: C396 session comment built from the chat's context; C388 stays the fallback.
+
+    Read-only (no database write). The text is never a source of truth and is
+    exposed apart from the deterministic narrative fields.
+    """
+    user_id = user["id"]
+    _, allowed = await _coach_access(user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail={
+            "error": "subscription_required",
+            "message": "Subscription required to access this feature",
+            "upgrade_url": "/subscription",
+        })
+    lang = language if language in {"fr", "en", "es"} else "en"
+
+    def respond(result: dict, cached: bool = False) -> CoachSessionCommentResponse:
+        return CoachSessionCommentResponse(workout_id=workout_id, language=lang, cached=cached, **result)
+
+    if not coach_session_comment.comment_enabled():
+        return CoachSessionCommentResponse(workout_id=workout_id, language=lang, status="disabled")
+    async def load_context():
+        selected = await load_scoped_workout_analysis_v2(
+            db=db, user_id=user_id, workout_id=workout_id, language=lang,
+        )
+        if selected is None:
+            raise LookupError("workout_not_found")
+        workout, analysis = selected
+        if analysis is None:
+            return None
+        llm_context, _ = await _build_coach_comment_context(
+            user=user, language=lang, workout=workout, workout_analysis=analysis,
+            workout_id=workout_id, now_utc=datetime.now(timezone.utc),
+        )
+        if not llm_context.get("workout_detail") or "validated_workout_observations" not in llm_context:
+            return None
+        return llm_context
+
+    try:
+        result, cached = await coach_session_comment.get_session_comment_bounded(
+            user_id=user_id, workout_id=workout_id, language=lang, load_context=load_context,
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Workout not found")
+    except Exception:
+        logger.warning("[C400] session comment context unavailable")
+        return CoachSessionCommentResponse(
+            workout_id=workout_id, language=lang, status="fallback",
+            validation={"rejected_checks": ["context_error"]},
+        )
+    return respond(result, cached)
 
 
 # ========== CARDIO COACH RUNNING SCREEN ==========

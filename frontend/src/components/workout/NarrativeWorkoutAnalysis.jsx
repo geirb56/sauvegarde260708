@@ -16,9 +16,16 @@ const classificationTypes = [
 ];
 const reliable = (confidence) => ["high", "medium"].includes(confidence);
 
+export const getCoachComment = (data, lang) => {
+  const comment = data?.coach_comment;
+  return comment?.status === "generated" && comment.language === lang
+    && comment.source === "coach_c396" && hasText(comment.text) ? comment.text.trim() : null;
+};
+
 export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, children, detailsAvailable = true }) {
   const narrative = getWorkoutNarrative(data, lang);
   if (!narrative) return null;
+  const coachComment = getCoachComment(data, lang);
 
   const facts = data?.workout_intelligence_v3?.version === "v3" ? data.workout_intelligence_v3 : null;
   const classification = facts?.session_classification;
@@ -72,11 +79,18 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
   return (
     <div className="min-w-0 space-y-4 break-words">
       <section className="space-y-3 rounded-xl border border-border bg-card p-4" data-testid="narrative-coach" aria-labelledby="narrative-coach-title">
-        <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{text("coach")}</p>
-        <h2 id="narrative-coach-title" className="font-heading text-xl font-semibold leading-tight">{narrative.headline}</h2>
-        <p className="text-sm leading-relaxed">{narrative.analysis}</p>
-        <p className="text-sm leading-relaxed">{narrative.interpretation}</p>
-        {hasText(narrative.recommendation) && <p className="text-sm leading-relaxed" data-testid="narrative-recommendation">{narrative.recommendation}</p>}
+        {coachComment
+          ? <>
+            <h2 id="narrative-coach-title" className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{text("coach")}</h2>
+            <p className="text-sm leading-relaxed" data-testid="coach-session-comment">{coachComment}</p>
+          </>
+          : <>
+            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{text("coach")}</p>
+            <h2 id="narrative-coach-title" className="font-heading text-xl font-semibold leading-tight">{narrative.headline}</h2>
+            <p className="text-sm leading-relaxed">{narrative.analysis}</p>
+            <p className="text-sm leading-relaxed">{narrative.interpretation}</p>
+            {hasText(narrative.recommendation) && <p className="text-sm leading-relaxed" data-testid="narrative-recommendation">{narrative.recommendation}</p>}
+          </>}
         {limitations.length > 0 && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="narrative-limitation">{limitations[0]}</p>}
       </section>
       {evidence.length > 0 && <section aria-labelledby="workout-evidence-title" data-testid="workout-evidence">
@@ -88,9 +102,14 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
           </div>)}
         </dl>
       </section>}
-      {(detailsAvailable || comparisonRows.length > 0 || limitations.length > 1) && <details className="min-w-0 rounded-xl border border-border p-3" data-testid="workout-analysis-details">
+      {(detailsAvailable || coachComment || comparisonRows.length > 0 || limitations.length > 1) && <details className="min-w-0 rounded-xl border border-border p-3" data-testid="workout-analysis-details">
         <summary className="min-h-11 cursor-pointer text-sm font-medium">{text("details")}</summary>
         <div className="space-y-4 pt-2">
+          {coachComment && <section data-testid="narrative-deterministic-facts" className="space-y-2 text-sm">
+            <p className="font-medium">{narrative.headline}</p>
+            <p>{narrative.analysis}</p>
+            <p>{narrative.interpretation}</p>
+          </section>}
           {children}
           {comparisonRows.length > 0 && <section data-testid="narrative-comparisons">
             <h3 className="mb-2 text-sm font-semibold">{text("history")}</h3>
