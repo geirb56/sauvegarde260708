@@ -2041,11 +2041,16 @@ def _coach_validated_workout_observations(narrative) -> Optional[dict]:
     }
 
 
-async def _build_coach_llm_context(
+async def _assemble_coach_llm_context(
     *, user: dict, language: str, workout, workout_analysis,
     workout_analysis_allowed: bool, workout_id: Optional[str], now_utc: datetime,
+    load_training_payloads,
 ):
-    """Shared LLM context for chat and the automatic session comment.
+    """Context assembly shared by chat and the automatic session comment.
+
+    load_training_payloads is the only step that may differ: the chat uses the
+    Training V2 endpoints (which persist served prescriptions), the comment a
+    strictly read-only stand-in. Everything else here only reads.
 
     Returns (llm_context, scoped_narrative); scoped_narrative is the sentinel
     _NARRATIVE_NOT_LOADED when no workout is selected or analysis is not allowed.
@@ -2107,8 +2112,7 @@ async def _build_coach_llm_context(
         user_id=user_id,
         reference_date=reference_date,
     )
-    week_payload = await get_training_v2_week(user=user)
-    today_payload = await get_today_adaptive_session(user=user)
+    week_payload, today_payload = await load_training_payloads()
 
     context = (await build_coach_context_v2(
         db=db,
@@ -2138,6 +2142,41 @@ async def _build_coach_llm_context(
         if validated is not None:
             llm_context["validated_workout_observations"] = validated
     return llm_context, scoped_narrative
+
+
+async def _build_coach_llm_context(
+    *, user: dict, language: str, workout, workout_analysis,
+    workout_analysis_allowed: bool, workout_id: Optional[str], now_utc: datetime,
+):
+    """Chat context (unchanged behaviour): Training V2 week/today are loaded as before."""
+    async def load_training_payloads():
+        return (await get_training_v2_week(user=user)), (await get_today_adaptive_session(user=user))
+
+    return await _assemble_coach_llm_context(
+        user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+        workout_analysis_allowed=workout_analysis_allowed, workout_id=workout_id,
+        now_utc=now_utc, load_training_payloads=load_training_payloads,
+    )
+
+
+async def _build_coach_comment_context(
+    *, user: dict, language: str, workout, workout_analysis, workout_id: str, now_utc: datetime,
+):
+    """C400 read-only context for the automatic session comment.
+
+    get_training_v2_week / get_today_adaptive_session persist served prescriptions, so
+    this path never calls them: Training V2 week/today are marked unavailable and the
+    comment relies on the selected workout facts and the C388 observations. The remaining
+    steps only read (find/find_one/count). Do not add any write-capable call here.
+    """
+    async def read_only_training_payloads():
+        return {}, {"status": "unavailable"}
+
+    return await _assemble_coach_llm_context(
+        user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+        workout_analysis_allowed=True, workout_id=workout_id, now_utc=now_utc,
+        load_training_payloads=read_only_training_payloads,
+    )
 
 
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
@@ -2370,36 +2409,35 @@ async def get_workout_coach_comment(workout_id: str, language: str = "en", user:
 
     if not coach_session_comment.comment_enabled():
         return CoachSessionCommentResponse(workout_id=workout_id, language=lang, status="disabled")
-    selected = await load_scoped_workout_analysis_v2(
-        db=db, user_id=user_id, workout_id=workout_id, language=lang,
-    )
-    if selected is None:
-        raise HTTPException(status_code=404, detail="Workout not found")
-    workout, analysis = selected
-    if analysis is None:
-        return CoachSessionCommentResponse(workout_id=workout_id, language=lang, status="unavailable")
-
-    # Same context as the chat, built once; its canonical fingerprint is the cache key.
-    try:
-        llm_context, _ = await _build_coach_llm_context(
-            user=user, language=lang, workout=workout, workout_analysis=analysis,
-            workout_analysis_allowed=True, workout_id=workout_id, now_utc=datetime.now(timezone.utc),
+    async def load_context():
+        selected = await load_scoped_workout_analysis_v2(
+            db=db, user_id=user_id, workout_id=workout_id, language=lang,
         )
+        if selected is None:
+            raise LookupError("workout_not_found")
+        workout, analysis = selected
+        if analysis is None:
+            return None
+        llm_context, _ = await _build_coach_comment_context(
+            user=user, language=lang, workout=workout, workout_analysis=analysis,
+            workout_id=workout_id, now_utc=datetime.now(timezone.utc),
+        )
+        if not llm_context.get("workout_detail") or "validated_workout_observations" not in llm_context:
+            return None
+        return llm_context
+
+    try:
+        result, cached = await coach_session_comment.get_session_comment_bounded(
+            user_id=user_id, workout_id=workout_id, language=lang, load_context=load_context,
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Workout not found")
     except Exception:
         logger.warning("[C400] session comment context unavailable")
         return CoachSessionCommentResponse(
             workout_id=workout_id, language=lang, status="fallback",
             validation={"rejected_checks": ["context_error"]},
         )
-    if not llm_context.get("workout_detail") or "validated_workout_observations" not in llm_context:
-        return CoachSessionCommentResponse(workout_id=workout_id, language=lang, status="unavailable")
-
-    key = coach_session_comment.cache_key(
-        user_id=user_id, workout_id=workout_id, language=lang, context=llm_context,
-    )
-    result, cached = await coach_session_comment.get_session_comment(
-        key=key, user_id=user_id, language=lang, context=llm_context,
-    )
     return respond(result, cached)
 
 

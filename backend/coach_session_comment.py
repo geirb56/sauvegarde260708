@@ -235,6 +235,22 @@ _PRESCRIPTION = re.compile(
 _CONTEXT_LEAK = re.compile(
     r"(objectif|\bgoal\b|objetivo|marathon|semi-marathon|half[- ]marathon|medio marat|readiness|"
     r"pr[ée]paration (?:course|à)|race day|jour de course|d[ée]but de cycle|training plan|plan d'entra)", re.I)
+# Abstention: the sentence says the position/intensity cannot be determined. Only these
+# sentences may mention thresholds, zones or intensity without structured authorization.
+_ABSTAIN = re.compile(
+    r"(impossible|pas possible|ne peut|ne peuvent|ne permet|ne permettent|indisponible|"
+    r"(?:pas|non) disponible|cannot|can't|can not|unable|not available|unavailable|not possible|"
+    r"do(?:es)? not (?:allow|let|make it possible)|no es posible|no se puede|no puedo|no podemos|"
+    r"imposible|no disponible|no permite|no permiten)", re.I)
+_ABSTAIN_SUBJECT = re.compile(
+    r"(d[ée]termin|savoir|\bdire\b|affirmer|conclure|[ée]valuer|situer|position|determine|"
+    r"tell|say|assess|conclude|know|locate|evaluate|determinar|saber|decir|afirmar|concluir|evaluar|situar)",
+    re.I)
+# Explicit non-claim about progress ("does not show progress"): allowed, unlike a bare negation word.
+_NO_PROGRESS_CLAIM = re.compile(
+    r"(?:does not|doesn't|do not|cannot|can't|ne montre pas|ne prouve pas|n'indique pas|ne permet pas de|"
+    r"no muestra|no demuestra|no indica|no permite)\s+(?:\w+\s+){0,3}?"
+    r"(?:progress|improv|regress|decline|am[ée]lior|d[ée]clin|mejor|empeor|retroces)", re.I)
 _INTERNAL = re.compile(
     r"(Training V2|Workout Analysis|Coach Context|selected_workout_permissions|canonical|C388|C396)", re.I)
 
@@ -339,20 +355,30 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
     comparison_ok = bool(permissions.get("similar_comparison_available"))
     session = _build_pools(session_facts)
     compared = _build_pools(comparison_facts if comparison_ok else [])
-    facts_text = json.dumps([v for _, v in session_facts], ensure_ascii=False).lower()
+    def abstains(sentence: str) -> bool:
+        return bool(_ABSTAIN.search(sentence) and _ABSTAIN_SUBJECT.search(sentence))
 
-    def stated_in_facts(match: "re.Match") -> bool:
-        return match.group(0).lower() in facts_text
-
-    for pattern, reason in ((_UNSUPPORTED_PHYSIO, "unsupported_physiology"),
-                            (_SENSATION, "invented_sensation"),
-                            (_PRESCRIPTION, "prescription"),
-                            (_CONTEXT_LEAK, "context_as_session_fact")):
-        if any(not stated_in_facts(m) for m in pattern.finditer(text)):
-            reasons.add(reason)
-    if permissions.get("intensity_interpretation_allowed") is not True:
-        if any(not stated_in_facts(m) for m in _INTENSITY.finditer(text)):
-            reasons.add("intensity_not_allowed")
+    # Fact/limitation text never authorizes a claim: the substring "LT1" in a C388
+    # limitation does not prove the session was below LT1. Only abstention wording or an
+    # explicit structured permission lets such terms through.
+    intensity_ok = permissions.get("intensity_interpretation_allowed") is True
+    progress_ok = permissions.get("progress_regression_allowed") is True and comparison_ok
+    for sentence in _sentences(text):
+        abstention = abstains(sentence)
+        if not abstention:
+            if _UNSUPPORTED_PHYSIO.search(sentence):
+                reasons.add("unsupported_physiology")
+            if not intensity_ok and _INTENSITY.search(sentence):
+                reasons.add("intensity_not_allowed")
+        if _SENSATION.search(sentence):
+            reasons.add("invented_sensation")
+        if _PRESCRIPTION.search(sentence):
+            reasons.add("prescription")
+        if _CONTEXT_LEAK.search(sentence):
+            reasons.add("context_as_session_fact")
+        if _PROGRESS.search(sentence) and not progress_ok and not abstention \
+                and not _NO_PROGRESS_CLAIM.search(sentence):
+            reasons.add("progress_claim")
     if permissions.get("physiological_efficiency_allowed") is not True and _EFFICIENCY.search(text):
         reasons.add("efficiency_not_allowed")
     if permissions.get("causal_explanation_allowed") is not True and _CAUSAL.search(text):
@@ -370,11 +396,8 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
         reasons.add("ungrounded_date")
 
     for sentence in _sentences(text):
-        if _COMPARISON.search(sentence) and not comparison_ok:
+        if _COMPARISON.search(sentence) and not comparison_ok and not abstains(sentence):
             reasons.add("comparison_not_available")
-        if permissions.get("progress_regression_allowed") is not True \
-                and _PROGRESS.search(sentence) and not _NEGATION.search(sentence):
-            reasons.add("progress_claim")
         _check_numbers(sentence, session, compared, comparison_ok, reasons)
     return not reasons, sorted(reasons)
 
@@ -467,3 +490,56 @@ async def get_session_comment(
         _INFLIGHT[key] = task
         task.add_done_callback(lambda _t, k=key: _INFLIGHT.pop(k, None))
     return dict(await asyncio.shield(task)), False
+
+
+def _flight_key(user_id: str, workout_id: str, language: str) -> str:
+    return "flight:" + hashlib.sha256(
+        json.dumps([COACH_COMMENT_VERSION, user_id, workout_id, language]).encode()
+    ).hexdigest()
+
+
+async def get_session_comment_bounded(
+    *, user_id: str, workout_id: str, language: str, load_context,
+) -> tuple[dict, bool]:
+    """Whole pipeline under one deadline: load_context -> cache key -> LLM -> validation.
+
+    load_context is an async callable returning the LLM context, or None when no
+    comment can be produced (unavailable); it may raise (e.g. LookupError for an
+    unowned workout), which propagates and is never cached. Concurrent requests of the
+    same user/workout/language share one task; on deadline the task is cancelled and
+    dropped from _INFLIGHT, and a short-lived failure entry allows a retry after
+    FAILURE_TTL_SEC.
+    """
+    flight = _flight_key(user_id, workout_id, language)
+    failed = _cache_get(flight, user_id)
+    if failed is not None:
+        return failed, True
+    task = _INFLIGHT.get(flight)
+    if task is None:
+        async def pipeline() -> tuple[dict, bool]:
+            context = await load_context()
+            if context is None:
+                return _result("unavailable"), False
+            key = cache_key(user_id=user_id, workout_id=workout_id, language=language, context=context)
+            hit = _cache_get(key, user_id)
+            if hit is not None:
+                return hit, True
+            result = await _generate(context, language, user_id)
+            _cache_put(key, user_id, result,
+                       SUCCESS_TTL_SEC if result["status"] == "generated" else FAILURE_TTL_SEC)
+            return result, False
+
+        async def run() -> tuple[dict, bool]:
+            try:
+                return await asyncio.wait_for(pipeline(), timeout=COMMENT_TIMEOUT_SEC)
+            except asyncio.TimeoutError:
+                logger.warning("[C400] session comment deadline exceeded")
+                result = _result("fallback", reasons=["timeout"])
+                _cache_put(flight, user_id, result, FAILURE_TTL_SEC)
+                return result, False
+
+        task = asyncio.ensure_future(run())
+        _INFLIGHT[flight] = task
+        task.add_done_callback(lambda _t, k=flight: _INFLIGHT.pop(k, None))
+    result, cached = await asyncio.shield(task)
+    return dict(result), cached

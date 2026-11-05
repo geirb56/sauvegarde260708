@@ -448,3 +448,208 @@ async def test_comment_route_writes_nothing():
     with stack:
         await _get()
     assert fake_db.conversations._docs == []
+
+
+# ---------------------------------------------------------------------------
+# Final fixes: read-only context, structured claim guard, global deadline
+# ---------------------------------------------------------------------------
+_WRITE_OPS = {"insert_one", "insert_many", "update_one", "update_many", "replace_one", "delete_one",
+              "delete_many", "bulk_write", "find_one_and_update", "find_one_and_replace",
+              "find_one_and_delete", "create_index", "drop", "save"}
+
+
+class _SpyCollection:
+    def __init__(self, inner, name, log):
+        self._inner, self._name, self._log = inner, name, log
+
+    def __getattr__(self, attr):
+        if attr in _WRITE_OPS:
+            self._log.append(f"{self._name}.{attr}")
+
+            async def blocked(*a, **k):
+                raise AssertionError(f"Mongo write attempted: {self._name}.{attr}")
+            return blocked
+        return getattr(self._inner, attr)
+
+
+def _spy_db(fake_db, log):
+    for name, col in list(vars(fake_db).items()):
+        object.__setattr__(fake_db, name, _SpyCollection(col, name, log))
+
+    class _Db(type(fake_db)):
+        def __getattr__(self, name):
+            col = _SpyCollection(super().__getattr__(name), name, log)
+            object.__setattr__(self, name, col)
+            return col
+    fake_db.__class__ = _Db
+    return fake_db
+
+
+@pytest.mark.parametrize("access", [_trial_access, _premium_access])
+async def test_comment_path_never_writes_to_mongo_nor_calls_training_endpoints(access):
+    log = []
+    fake_db = _spy_db(_FakeDB(), log)
+    stack, llm = _env(fake_db, access)
+    boom = AsyncMock(side_effect=AssertionError("Training V2 endpoint reached"))
+    with stack, patch("server.get_training_v2_week", boom), patch("server.get_today_adaptive_session", boom):
+        first = await _get()                 # cache miss
+        second = await _get()                # cache hit
+        other = await _get(workout="w2")     # another (historical) workout
+        missing = await _get(workout="nope")  # 404 path
+    assert first.status_code == 200 and first.json()["status"] == "generated", first.text
+    assert second.json()["cached"] is True and other.status_code == 200
+    assert missing.status_code == 404
+    assert boom.await_count == 0
+    assert log == []
+
+
+async def test_error_paths_do_not_write_to_mongo():
+    log = []
+    fake_db = _spy_db(_FakeDB(), log)
+    stack, llm = _env(fake_db)
+    with stack, patch("server.build_coach_context_v2", AsyncMock(side_effect=RuntimeError("x"))):
+        resp = await _get()
+    assert resp.json()["status"] == "fallback" and log == []
+
+
+def test_comment_context_builder_has_no_reference_to_persisting_endpoints():
+    import inspect
+    src = inspect.getsource(server._build_coach_comment_context)
+    assert "get_training_v2_week" not in src.split('"""', 2)[2]
+    assert "get_today_adaptive_session" not in src.split('"""', 2)[2]
+
+
+# -- claim guard: limitation text must never authorize a positive claim
+def _lt1_ctx(**perm):
+    ctx = _ctx(**perm)
+    ctx["validated_workout_observations"]["limitations"] = [
+        "Reliable LT1 is unavailable.", "LT1 fiable indisponible.", "LT1 fiable no disponible."]
+    return ctx
+
+
+_LT1_ASSERT = {
+    "en": "You ran 10 km at 5:32 per km, and the whole session was below LT1 with a steady pace.",
+    "fr": "Tu as couru 10 km à 5:32 par km, et toute la séance s'est déroulée sous LT1 avec un rythme régulier.",
+    "es": "Corriste 10 km a 5:32 por km, y toda la sesión estuvo por debajo de LT1 con un ritmo regular.",
+}
+_LT1_ABSTAIN = {
+    "en": "You ran 10 km at 5:32 per km with a steady pace, but it is impossible to determine the position relative to LT1 here.",
+    "fr": "Tu as couru 10 km à 5:32 par km avec un rythme régulier, mais il est impossible de déterminer la position par rapport à LT1.",
+    "es": "Corriste 10 km a 5:32 por km con un ritmo regular, pero no es posible determinar la posición respecto a LT1.",
+}
+
+
+@pytest.mark.parametrize("lang", ["fr", "en", "es"])
+def test_lt1_assertion_rejected_even_when_limitation_mentions_lt1(lang):
+    ok, reasons = _ok(_LT1_ASSERT[lang], _lt1_ctx(), lang)
+    assert not ok and "unsupported_physiology" in reasons, reasons
+
+
+@pytest.mark.parametrize("lang", ["fr", "en", "es"])
+def test_lt1_abstention_is_accepted(lang):
+    ok, reasons = _ok(_LT1_ABSTAIN[lang], _lt1_ctx(), lang)
+    assert ok, reasons
+
+
+_INTENSITY_CLAIM = {
+    "en": "You ran 10 km at 5:32 per km and it was clearly an easy run with a steady pace.",
+    "fr": "Tu as couru 10 km à 5:32 par km et c'était clairement une sortie facile avec un rythme régulier.",
+    "es": "Corriste 10 km a 5:32 por km y fue claramente una salida fácil con un ritmo regular.",
+}
+_PROGRESS_CLAIM = {
+    "en": "You ran 10 km at 5:32 per km and your fitness improved with a steady pace over the run.",
+    "fr": "Tu as couru 10 km à 5:32 par km et ta forme s'est améliorée avec un rythme régulier sur la sortie.",
+    "es": "Corriste 10 km a 5:32 por km y tu forma mejoró con un ritmo regular a lo largo de la salida.",
+}
+
+
+@pytest.mark.parametrize("lang", ["fr", "en", "es"])
+def test_unauthorized_intensity_and_progress_claims_rejected(lang):
+    ok, reasons = _ok(_INTENSITY_CLAIM[lang], _ctx(), lang)
+    assert not ok and "intensity_not_allowed" in reasons, reasons
+    ok, reasons = _ok(_PROGRESS_CLAIM[lang], _ctx(), lang)
+    assert not ok and "progress_claim" in reasons, reasons
+    # a permission alone is not enough for progress without an available comparison
+    ok, reasons = _ok(_PROGRESS_CLAIM[lang], _ctx(progress_regression_allowed=True), lang)
+    assert not ok and "progress_claim" in reasons
+
+
+def test_authorized_intensity_and_comparison_accepted():
+    ctx = _ctx(intensity_interpretation_allowed=True, similar_comparison_available=True,
+               progress_regression_allowed=True)
+    ok, reasons = _ok("You ran 10 km at 5:32 per km, an easy run, 18 s/km faster than similar sessions.", ctx)
+    assert ok, reasons
+
+
+# -- global deadline
+async def _slow(*_a, **_k):
+    await asyncio.sleep(30)
+
+
+async def test_blocked_context_load_falls_back_within_deadline_and_retries_after_ttl(monkeypatch):
+    monkeypatch.setattr(csc, "COMMENT_TIMEOUT_SEC", 0.2)
+    calls = {"n": 0}
+
+    async def load():
+        calls["n"] += 1
+        await asyncio.sleep(30)
+
+    t0 = asyncio.get_event_loop().time()
+    a, b = await asyncio.gather(*[
+        csc.get_session_comment_bounded(user_id="u", workout_id="w", language="en", load_context=load)
+        for _ in range(2)])
+    elapsed = asyncio.get_event_loop().time() - t0
+    assert elapsed < 1.0
+    assert a[0]["status"] == b[0]["status"] == "fallback"
+    assert a[0]["validation"]["rejected_checks"] == ["timeout"]
+    assert calls["n"] == 1                      # concurrent requests shared one task
+    assert csc._INFLIGHT == {}                  # no stuck/orphan task
+    again = await csc.get_session_comment_bounded(user_id="u", workout_id="w", language="en", load_context=load)
+    assert again[1] is True and calls["n"] == 1  # failure cached
+    monkeypatch.setattr(csc, "FAILURE_TTL_SEC", 0)
+    csc._CACHE.clear()
+    await csc.get_session_comment_bounded(user_id="u", workout_id="w", language="en", load_context=load)
+    assert calls["n"] == 2                      # retry allowed after the failure entry expires
+
+
+async def test_blocked_llm_hits_the_same_global_deadline(monkeypatch):
+    monkeypatch.setattr(csc, "COMMENT_TIMEOUT_SEC", 0.2)
+    monkeypatch.setattr(llm_coach, "generate_session_comment", _slow)
+
+    async def load():
+        return _ctx()
+
+    t0 = asyncio.get_event_loop().time()
+    res, _ = await csc.get_session_comment_bounded(user_id="u", workout_id="w", language="en", load_context=load)
+    assert res["status"] == "fallback" and asyncio.get_event_loop().time() - t0 < 1.0
+    assert csc._INFLIGHT == {}
+
+
+async def test_client_cancellation_does_not_leave_orphan_task(monkeypatch):
+    monkeypatch.setattr(csc, "COMMENT_TIMEOUT_SEC", 0.3)
+
+    async def load():
+        await asyncio.sleep(30)
+
+    waiter = asyncio.ensure_future(
+        csc.get_session_comment_bounded(user_id="u", workout_id="w", language="en", load_context=load))
+    await asyncio.sleep(0.05)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    await asyncio.sleep(0.5)  # the shared task is bounded by the deadline
+    assert csc._INFLIGHT == {}
+
+
+async def test_bounded_concurrent_requests_make_one_llm_call():
+    llm = _llm()
+
+    async def load():
+        await asyncio.sleep(0.05)
+        return _ctx()
+
+    with patch.object(llm_coach, "generate_session_comment", llm):
+        results = await asyncio.gather(*[
+            csc.get_session_comment_bounded(user_id="u", workout_id="w", language="en", load_context=load)
+            for _ in range(4)])
+    assert llm.await_count == 1 and all(r[0]["status"] == "generated" for r in results)
