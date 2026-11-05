@@ -2376,27 +2376,29 @@ async def get_workout_coach_comment(workout_id: str, language: str = "en", user:
     if selected is None:
         raise HTTPException(status_code=404, detail="Workout not found")
     workout, analysis = selected
-    narrative = await _load_coach_narrative(user_id=user_id, workout_id=workout_id, language=lang)
-    validated = _coach_validated_workout_observations(narrative)
-    if analysis is None or validated is None:
+    if analysis is None:
         return CoachSessionCommentResponse(workout_id=workout_id, language=lang, status="unavailable")
 
-    key = coach_session_comment.cache_key(
-        user_id=user_id, workout_id=workout_id, language=lang,
-        facts={"workout": workout, "analysis": analysis.model_dump(mode="json"), "observations": validated},
-    )
-
-    async def build_context() -> dict:
+    # Same context as the chat, built once; its canonical fingerprint is the cache key.
+    try:
         llm_context, _ = await _build_coach_llm_context(
             user=user, language=lang, workout=workout, workout_analysis=analysis,
             workout_analysis_allowed=True, workout_id=workout_id, now_utc=datetime.now(timezone.utc),
         )
-        if not llm_context.get("workout_detail") or "validated_workout_observations" not in llm_context:
-            raise ValueError("selected workout facts unavailable")
-        return llm_context
+    except Exception:
+        logger.warning("[C400] session comment context unavailable")
+        return CoachSessionCommentResponse(
+            workout_id=workout_id, language=lang, status="fallback",
+            validation={"rejected_checks": ["context_error"]},
+        )
+    if not llm_context.get("workout_detail") or "validated_workout_observations" not in llm_context:
+        return CoachSessionCommentResponse(workout_id=workout_id, language=lang, status="unavailable")
 
+    key = coach_session_comment.cache_key(
+        user_id=user_id, workout_id=workout_id, language=lang, context=llm_context,
+    )
     result, cached = await coach_session_comment.get_session_comment(
-        key=key, user_id=user_id, language=lang, build_context=build_context,
+        key=key, user_id=user_id, language=lang, context=llm_context,
     )
     return respond(result, cached)
 
