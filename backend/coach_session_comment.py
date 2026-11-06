@@ -93,12 +93,13 @@ def _provably_prior(sessions: list, detail: dict, llm_context: dict) -> list:
         day = _parse_iso_date(item.get("date"))
         if day is None:
             continue
-        if day < selected_day:
-            kept.append(item)
-        elif day == selected_day and selected_at is not None:
-            at = _parse_exact_datetime(item.get("date"))
-            if at is not None and at < selected_at:
+        at = _parse_exact_datetime(item.get("date"))
+        if selected_at is not None and at is not None:
+            # Normalized instants (aware, UTC) decide; calendar dates of mixed offsets do not.
+            if at < selected_at:
                 kept.append(item)
+        elif day < selected_day:
+            kept.append(item)
     return kept
 
 
@@ -274,6 +275,10 @@ def _build_pools(facts: list) -> dict:
                 pools["delta"].add(abs(seconds))
                 pools["sec"].add(abs(seconds))
             continue
+        if _is(path, "count"):
+            # A tally ("sessions_with_distance_count") is a number of sessions, never a distance.
+            pools["count"].add(v)
+            continue
         if _is(path, "speed", "kmh"):
             pools["kmh"].add(v)
         elif _is(path, "distance") or (_is(path, "_km") and _has_none(path, "split")):
@@ -423,8 +428,13 @@ _GOAL_PAST = re.compile(
     r"(at the time|back then|previous goal|earlier goal|old goal|used to be|was already|"
     r"[àa] l'[ée]poque|[àa] ce moment-l[àa]|ancien objectif|objectif pr[ée]c[ée]dent|alors|"
     r"en aquel momento|en esa [ée]poca|objetivo anterior|antiguo objetivo|entonces|"
-    r"(?:were|was) (?:already )?\w+ing|that day|already|d[ée]j[àa]|ce jour-l[àa]|ese d[íi]a|"
+    r"(?:were|was) (?:already )?(?:prepar|train|target|aim|work|build|focus)\w*ing|"
     r"pr[ée]parais|entra[iî]nais|preparabas|entrenabas)", re.I)
+# Weaker past cues describe the performed session as readily as an intention: they count only in
+# the clause that also names the goal ("you were running at 5:32, relevant to your current
+# marathon goal" describes the run, it does not date the goal).
+_GOAL_PAST_CLAUSE = re.compile(
+    r"((?:were|was) (?:already )?\w+ing|that day|already|d[ée]j[àa]|ce jour-l[àa]|ese d[íi]a)", re.I)
 # Compound names are folded to one token first, so "ultra-marathon", "demi-marathon" or
 # "media maratón" are never read as an ordinary marathon.
 _GOAL_COMPOUND = [
@@ -471,21 +481,22 @@ _ABSTAIN_SUBJECT = re.compile(
     r"(d[ée]termin|savoir|\bdire\b|affirmer|conclure|[ée]valuer|situer|position|determine|"
     r"tell|say|assess|conclude|know|locate|evaluate|determinar|saber|decir|afirmar|concluir|evaluar|situar)",
     re.I)
-# Explicit non-claim about progress ("does not show progress"): allowed, unlike a bare negation word.
-_NO_PROGRESS_CLAIM = re.compile(
-    r"(?:does not|doesn't|do not|cannot|can't|ne montre pas|ne prouve pas|n'indique pas|ne permet pas de|"
-    r"no muestra|no demuestra|no indica|no permite)\s+(?:\w+\s+){0,3}?"
-    r"(?:progress|improv|regress|decline|am[ée]lior|d[ée]clin|mejor|empeor|retroces)", re.I)
 # A claim is a non-claim only when a specific "does not show / cannot conclude" cue sits just
-# before it in the same clause. A negation elsewhere in the sentence authorizes nothing.
+# before it in the same clause. A negation elsewhere in the sentence authorizes nothing, and a
+# bare "cannot" does not: "cannot deny that you improved" affirms the claim. The negated verb
+# must be one of evidence or inference.
 _NON_CLAIM_CUE = re.compile(
-    r"(?:does not|doesn't|do not|don't|cannot|can't|can not|"
+    r"(?:(?:does not|doesn't|do not|don't|cannot|can't|can not|could not|couldn't|unable to|not able to)\s+"
+    r"(?:(?!fail\b|hesitate\b|forget\b)\w+\s+){0,2}?"
+    r"(?:show|demonstrate|prove|establish|indicate|confirm|support|conclude|determine|tell|say|assess|know)\b|"
     r"(?:is|are) not (?:a |any )?(?:proof|evidence|sign|indication) of|no (?:proof|evidence|sign) of|"
     r"not (?:a |any )?(?:proof|evidence|sign|indication) of|"
     r"ne (?:montre|prouve|d[ée]montre|permet|indique)(?:nt)? pas|"
     r"n'(?:a|ont) pas (?:montr[ée]|d[ée]montr[ée]|prouv[ée])|n'(?:indique|indiquent) pas|"
+    r"ne (?:peut|peuvent|pouvons|peux) pas (?:conclure|affirmer|dire|d[ée]montrer|d[ée]terminer|prouver|savoir|[ée]tablir)|"
     r"pas (?:une )?(?:preuve|trace) de|"
-    r"no (?:muestra|demuestra|indica|permite|prueba)(?:n)?|no es (?:una )?prueba de)"
+    r"no (?:muestra|demuestra|indica|permite|prueba)(?:n)?|no es (?:una )?prueba de|"
+    r"no (?:se puede|podemos|puedo) (?:concluir|afirmar|decir|demostrar|determinar|probar|saber))"
     r"(?:\W+\w+){0,6}\W*$", re.I)
 _INTERNAL = re.compile(
     r"(Training V2|Workout Analysis|Coach Context|selected_workout_permissions|canonical|C388|C396)", re.I)
@@ -554,6 +565,53 @@ def _date_is(mention: tuple, day: Any) -> bool:
     return mention[1] == ((day.day, day.month) if mention[0] == "md" else day.isoformat())
 
 
+def _segments(sentence: str) -> list[str]:
+    """Pieces of a sentence split at comparison wording and clause breaks (a comma right after a
+    date does not cut: "On 8 January, you ran ..." keeps the date with what follows)."""
+    date_ends = {m.end() for m in _DATE_TEXT.finditer(sentence)} | {m.end() for m in _ISO_DATE.finditer(sentence)}
+    cuts = {0, len(sentence)}
+    for rx in (_COMPARISON, _SIMILAR_BASELINE):
+        cuts.update(m.start() for m in rx.finditer(sentence))
+    cuts.update(m.end() for m in _CLAUSE_BREAK.finditer(sentence)
+                if not any(e <= m.start() and not sentence[e:m.start()].strip() for e in date_ends))
+    points = sorted(cuts)
+    return [sentence[i:j] for i, j in zip(points, points[1:]) if sentence[i:j].strip()]
+
+
+def _figure_checks(masked: str):
+    """Every numeric figure of a sentence as (kind, check(pools) -> bool, reason if ungrounded)."""
+    for match in _TOKEN.finditer(masked):
+        h, m, s = match.groups()
+        seconds = int(h) * 3600 + int(m) * 60 + int(s) if s else int(h) * 60 + int(m)
+        yield "figure", (lambda pools, seconds=seconds: any(abs(seconds - t) <= 1 for t in pools["tokens"])), \
+            "ungrounded_pace_or_time"
+    masked = _TOKEN.sub(" ", masked)
+
+    for match in _HM.finditer(masked):
+        minutes = int(match.group(1)) * 60 + int(match.group(2) or 0)
+        yield "hm", (lambda pools, minutes=minutes: any(abs(minutes - c) <= 1 for c in pools["min"])), \
+            "ungrounded_duration"
+    masked = _HM.sub(" ", masked)
+
+    for match in _NUMBER_WORDS.finditer(masked):
+        unit = match.group(2)
+        value = float(_WORD_VALUE[match.group(1).lower()])
+        if value == 1 and _ONCE.match(unit):
+            continue
+        pool = next((name for rx, name in _UNIT_POOL if rx.match(unit)), "any")
+        yield "figure", (lambda pools, pool=pool, value=value: _match(value, 0, pools[pool])), "ungrounded_number"
+    masked = _NUMBER_WORDS.sub(" ", masked)
+
+    for match in _NUMBER_IN_TEXT.finditer(masked):
+        raw = match.group(0)
+        value = float(raw.replace(",", "."))
+        decimals = len(re.split(r"[.,]", raw)[1]) if re.search(r"[.,]", raw) else 0
+        rest = masked[match.end():match.end() + 18].lstrip()
+        pool = next((name for rx, name in _UNIT_POOL if rx.match(rest)), None) or "any"
+        yield "figure", (lambda pools, pool=pool, value=value, decimals=decimals:
+                         _match(value, decimals, pools[pool])), "ungrounded_number"
+
+
 def _check_numbers(sentence: str, session: dict, compared: dict, history: dict, comparison_ok: bool,
                    reasons: set, selected_date: Any = None) -> None:
     """Order of provenance: the selected session, then C388's validated comparison, then one
@@ -571,8 +629,21 @@ def _check_numbers(sentence: str, session: dict, compared: dict, history: dict, 
              and any(_date_is(m, o.get("date")) for o in history["owners"])]
     anchored = [o for o in history["owners"] if any(_date_is(m, o.get("date")) for m in dated)]
     history_framed = has_comparison_wording or bool(dated) or bool(_HISTORY_REF.search(sentence))
-    for mention in dated:
-        history_hits.append(lambda pools, mention=mention: _date_is(mention, pools.get("date")))
+    # A date proves which session is meant, never a measurement: kept apart from the figures.
+    date_hits = [(lambda pools, mention=mention: _date_is(mention, pools.get("date"))) for mention in dated]
+    if has_comparison_wording and dated:
+        # Comparing wording must not unlock figures next to a prior date: inside the segment that
+        # carries the date, every figure belongs to the dated session (the other side of the
+        # comparison is a different segment and may cite the selected session).
+        for segment in _segments(sentence):
+            in_segment = _mentioned_dates(segment)
+            owners = [o for o in history["owners"]
+                      if any(m in in_segment and _date_is(m, o.get("date")) for m in dated)]
+            if not owners:
+                continue
+            plain = _ISO_DATE.sub(" ", _DATE_TEXT.sub(" ", segment))
+            if any(not all(check(o) for o in owners) for _, check, _r in _figure_checks(plain)):
+                reasons.add("history_misattribution")
     dual_hits: list = []  # grounded in C388's baseline AND in some prior session
     baseline_hits = 0  # grounded only in C388's aggregate comparison baseline
 
@@ -605,48 +676,17 @@ def _check_numbers(sentence: str, session: dict, compared: dict, history: dict, 
             return
         reasons.add(reason)
 
-    for match in _TOKEN.finditer(masked):
-        h, m, s = match.groups()
-        seconds = int(h) * 3600 + int(m) * 60 + int(s) if s else int(h) * 60 + int(m)
-
-        def has(pools, seconds=seconds):
-            return any(abs(seconds - t) <= 1 for t in pools["tokens"])
-
-        settle(has(session), has(compared), has, "ungrounded_pace_or_time")
-    masked = _TOKEN.sub(" ", masked)
-
-    for match in _HM.finditer(masked):
-        minutes = int(match.group(1)) * 60 + int(match.group(2) or 0)
-        if not any(abs(minutes - c) <= 1 for c in session["min"]):
-            reasons.add("ungrounded_duration")
-    masked = _HM.sub(" ", masked)
-
-    def value_matcher(pool: str, value: float, decimals: int):
-        return lambda pools: _match(value, decimals, pools[pool])
-
-    for match in _NUMBER_WORDS.finditer(masked):
-        unit = match.group(2)
-        value = float(_WORD_VALUE[match.group(1).lower()])
-        if value == 1 and _ONCE.match(unit):
-            continue
-        pool = next((name for rx, name in _UNIT_POOL if rx.match(unit)), "any")
-        ok = value_matcher(pool, value, 0)
-        settle(ok(session), ok(compared), ok)
-    masked = _NUMBER_WORDS.sub(" ", masked)
-
-    for match in _NUMBER_IN_TEXT.finditer(masked):
-        raw = match.group(0)
-        value = float(raw.replace(",", "."))
-        decimals = len(re.split(r"[.,]", raw)[1]) if re.search(r"[.,]", raw) else 0
-        rest = masked[match.end():match.end() + 18].lstrip()
-        pool = next((name for rx, name in _UNIT_POOL if rx.match(rest)), None) or "any"
-        ok = value_matcher(pool, value, decimals)
-        settle(ok(session), ok(compared), ok)
+    for kind, check, reason in _figure_checks(masked):
+        if kind == "hm":
+            if not check(session):
+                reasons.add(reason)
+        else:
+            settle(check(session), check(compared), check, reason)
 
     # Baseline-only and dual values are the C388 baseline unless the sentence also cites a value
     # that only a prior session has: then they must all belong to that one session.
-    if history_hits and (baseline_hits or not any(
-            all(hit(owner) for hit in history_hits + dual_hits) for owner in history["owners"])):
+    if (history_hits or date_hits) and (baseline_hits or not any(
+            all(hit(owner) for hit in history_hits + date_hits + dual_hits) for owner in history["owners"])):
         reasons.add("history_misattribution")
     return bool(history_hits or dual_hits)
 
@@ -656,17 +696,17 @@ GAP_PACE_SEC_PER_KM = 10
 GAP_PERCENT = 10
 _METRIC_KEYS = (("pace", ("pace", "speed")), ("distance", ("distance",)), ("duration", ("duration",)),
                 ("heart_rate", ("heart", "hr")))
+# Explicit metric names (and unambiguous adjectives) identify a metric; "longer"/"shorter" and
+# their translations are ambiguous (distance or duration) and only count when no clause names one.
 _METRIC_WORDS = {
     "pace": re.compile(r"(pace|allure|ritmo|speed|vitesse|velocidad|faster|slower|plus (?:rapide|lent|vite)|"
                        r"m[áa]s (?:r[áa]pid|lent)|rapide|\bvite\b|r[áa]pid)", re.I),
-    "distance": re.compile(r"(distance|longer|shorter|farther|longue?s?\b|plus (?:long|court)|"
-                           r"m[áa]s (?:larg|cort)|larg[ao]|cort[ao])", re.I),
-    "duration": re.compile(r"(duration|dur[ée]e|duraci[óo]n|longer|shorter|plus (?:long|court)|"
-                           r"m[áa]s (?:larg|cort)|larg[ao]|cort[ao])", re.I),
+    "distance": re.compile(r"(distance|distancia|kilom[eè]tres?|kil[óo]metros?)", re.I),
+    "duration": re.compile(r"(duration|dur[ée]e|duraci[óo]n|elapsed|moving time)", re.I),
     "heart_rate": re.compile(r"(heart|cardiaque|card[ií]aca|\bFC\b|\bHR\b|bpm|pulsaciones)", re.I),
 }
-
-
+_AMBIGUOUS_LENGTH = re.compile(r"(longer|shorter|farther|longue?s?\b|plus (?:long|court)|"
+                               r"m[áa]s (?:larg|cort)|larg[ao]|cort[ao])", re.I)
 def _material_gaps(comparison_facts: list) -> set:
     """Metrics on which the compared sessions differ materially (C403).
 
@@ -711,15 +751,24 @@ def _significant_gaps(comparison_facts: list) -> bool:
 _CLAUSE_BREAK = re.compile(r"[;]|,?\s+\b(?:and|but|while|whereas|et|mais|tandis que|y|pero|mientras)\b|,", re.I)
 
 
+def _metrics_named(text: str) -> set:
+    named = {m for m, rx in _METRIC_WORDS.items() if rx.search(text)}
+    if not named and _AMBIGUOUS_LENGTH.search(text):
+        return {"distance", "duration"}
+    return named
+
+
 def _minimized_material_gap(sentence: str, gaps: set) -> bool:
-    """A minimizer ("slightly") counts only against the metric its own clause describes."""
+    """A minimizer ("slightly") counts only against the metric its own clause describes; an
+    explicit metric name wins over an ambiguous adjective, and an unidentified metric stays
+    conservative."""
     if not gaps or not (_COMPARISON.search(sentence) or _SIMILAR_BASELINE.search(sentence)):
         return False
-    sentence_metrics = {m for m, rx in _METRIC_WORDS.items() if rx.search(sentence)}
+    sentence_metrics = _metrics_named(sentence)
     for clause in _CLAUSE_BREAK.split(sentence):
         if not clause or not _MINIMIZER.search(clause):
             continue
-        metrics = {m for m, rx in _METRIC_WORDS.items() if rx.search(clause)} or sentence_metrics
+        metrics = _metrics_named(clause) or sentence_metrics
         if not metrics or metrics & gaps:
             return True
     return False
@@ -791,7 +840,9 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
                     reasons.add("goal_mismatch")
                 if _GOAL_DESIGN.search(sentence):
                     reasons.add("goal_design_claim")
-                if _GOAL_PAST.search(sentence):
+                if _GOAL_PAST.search(sentence) or any(
+                        _GOAL_PAST_CLAUSE.search(c) and _GOAL_WORD.search(c)
+                        for c in _CLAUSE_BREAK.split(sentence) if c):
                     reasons.add("goal_history_claim")
         if _ENDURANCE.search(sentence) and not _only_negated(sentence, _ENDURANCE):
             reasons.add("endurance_claim")
@@ -799,8 +850,7 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
             reasons.add("success_claim")
         if _minimized_material_gap(sentence, gaps):
             reasons.add("minimized_gap")
-        if _PROGRESS.search(sentence) and not progress_ok and not abstention \
-                and not _NO_PROGRESS_CLAIM.search(sentence) and not _only_negated(sentence, _PROGRESS):
+        if _PROGRESS.search(sentence) and not progress_ok and not _only_negated(sentence, _PROGRESS):
             reasons.add("progress_claim")
     if permissions.get("physiological_efficiency_allowed") is not True and _EFFICIENCY.search(text):
         reasons.add("efficiency_not_allowed")
@@ -821,8 +871,9 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
         compares = bool(_COMPARISON.search(sentence))
         similar = bool(_SIMILAR_BASELINE.search(sentence))
         cites_history = _check_numbers(sentence, session, compared, history, comparison_ok, reasons, selected_date)
-        # Without the C388 permission only a comparison anchored on a cited prior-session figure
-        # is tolerated; a "similar sessions" baseline is never opened by history alone.
+        # Without the C388 permission only a comparison anchored on a cited prior-session
+        # measurement is tolerated (a date is not one); a "similar sessions" baseline is never
+        # opened by history alone.
         if not comparison_ok and (similar or compares and not cites_history) and not abstains(sentence):
             reasons.add("comparison_not_available")
     return not reasons, sorted(reasons)

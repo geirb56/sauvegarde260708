@@ -434,3 +434,226 @@ def test_c388_authorised_similar_comparison_is_preserved():
 def test_insufficient_history_rejects_without_inventing_a_session():
     ok, reasons = _ok(_DESC + ".", _hist(sessions=[]))
     assert not ok and "ungrounded_date" in reasons
+
+
+# ------------------------------------------------ review round: seven Copilot alerts on PR #390
+
+def _rejects(text, ctx, reason, lang="en"):
+    ok, reasons = csc.validate_session_comment(text, ctx, lang)
+    assert not ok and reason in reasons, reasons
+
+
+def _accepts(text, ctx, lang="en"):
+    ok, reasons = csc.validate_session_comment(text, ctx, lang)
+    assert ok, reasons
+
+
+# 1. timestamps and time zones
+
+def _tz_dates(selected_at, sessions):
+    return _dates(_dated_context(selected_at[:10], selected_at, [
+        {"date": d, "type": "run", "distance_km": 5.0} for d in sessions]))
+
+
+def test_exact_instants_decide_across_time_zones():
+    # 00:30+02:00 on the 11th is 22:30Z on the 10th: earlier than 23:00Z although the date is later.
+    kept = _tz_dates("2026-01-10T23:00:00Z", ["2026-01-11T00:30:00+02:00", "2026-01-10T23:30:00Z"])
+    assert kept == ["2026-01-11T00:30:00+02:00"]
+
+
+def test_exact_instants_exclude_a_later_session_with_an_earlier_calendar_date():
+    # 2026-01-10T23:30:00-05:00 is 04:30Z on the 11th: later than 2026-01-11T01:00:00Z.
+    assert _tz_dates("2026-01-11T01:00:00Z", ["2026-01-10T23:30:00-05:00"]) == []
+
+
+def test_naive_and_aware_timestamps_never_raise_and_naive_means_utc():
+    kept = _tz_dates("2026-01-10T12:00:00+00:00", ["2026-01-10T11:00:00", "2026-01-10T13:00:00",
+                                                    "2026-01-09T20:00:00+05:00"])
+    assert kept == ["2026-01-10T11:00:00", "2026-01-09T20:00:00+05:00"]
+    assert set(_tz_dates("2026-01-10T12:00:00", ["2026-01-10T11:00:00Z", "2026-01-10T12:30:00+01:00",
+                                                  "2026-01-10T13:30:00+01:00"])) \
+        == {"2026-01-10T11:00:00Z", "2026-01-10T12:30:00+01:00"}
+
+
+def test_equal_calendar_dates_remain_no_proof_when_one_side_is_date_only():
+    assert _tz_dates("2026-01-10T12:00:00Z", ["2026-01-10", "2026-01-09"]) == ["2026-01-09"]
+    selected = _dated_context("2026-01-10", None, [{"date": "2026-01-10T01:00:00+02:00", "type": "run",
+                                                    "distance_km": 5.0}])
+    assert _dates(selected) == []
+
+
+# 2. counters are not distances
+
+_FOUR = [{"date": f"2026-01-0{i}T07:00:00", "type": "run", "distance_km": (5.0 + i if i < 4 else None)}
+         for i in range(1, 5)]
+
+
+def test_session_tally_is_a_count_not_a_distance():
+    ctx = _hist(sessions=_FOUR)
+    assert ctx["runner_profile"]["observed_training"]["sessions_with_distance_count"] == 3
+    _accepts("Your history holds 3 sessions with a recorded distance, so the average rests on those only.", ctx)
+    for text in ("You covered 3 km on one of your earlier runs, which this long outing of 10 km repeats.",
+                 "You covered 3,000 m on one of your earlier runs, which this long outing of 10 km repeats.",
+                 "You covered 3 000 m on one of your earlier runs, which this long outing of 10 km repeats."):
+        ok, reasons = _ok(text, ctx)
+        assert not ok and "ungrounded_number" in reasons, text
+
+
+def test_real_historical_distances_and_known_distance_average_are_still_grounded():
+    ctx = _hist(sessions=_FOUR)
+    _accepts("Your sessions with a known distance usually cover 7.0 km, "
+             "so this run of 10 km at 5:32 per km was longer than usual.", ctx)
+
+
+# 3. past progressive describes the run, not the goal
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "You were running at 5:32 per km over 10 km, which is generally relevant to your current marathon goal."),
+    ("fr", "Tu courais à 5:32/km sur 10 km, ce qui est généralement pertinent pour ton objectif marathon actuel."),
+    ("es", "Corrías a 5:32/km durante 10 km, lo que es generalmente relevante para tu objetivo actual de maratón."),
+])
+def test_past_description_of_the_run_with_current_goal_relevance_is_accepted(lang, text):
+    _accepts(text, _hist(), lang)
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "You were already preparing for your marathon that day."),
+    ("en", "You were training for the marathon on this run of 10 km at 5:32 per km."),
+    ("en", "At the time you were targeting a marathon."),
+    ("en", "Your marathon goal was already set on this run of 10 km at 5:32 per km."),
+    ("fr", "Tu préparais déjà ton marathon à l'époque."),
+    ("fr", "Ton objectif marathon était déjà fixé ce jour-là."),
+    ("es", "Ya preparabas tu maratón en esa época."),
+    ("es", "Tu objetivo de maratón ya existía ese día."),
+])
+def test_unproven_historical_goal_intent_stays_rejected(lang, text):
+    _rejects(text, _hist(), "goal_history_claim", lang)
+
+
+# 4. a negation must bear on the conclusion, not refuse its denial
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "We cannot conclude that your endurance improved over this run of 10 km at 5:32 per km."),
+    ("en", "This session does not demonstrate progress over this run of 10 km at 5:32 per km."),
+    ("en", "These data cannot show that you are progressing on this run of 10 km."),
+    ("fr", "On ne peut pas conclure que ton endurance s'est améliorée sur cette sortie de 10 km."),
+    ("fr", "Cette séance de 10 km à 5:32/km ne permet pas de conclure à une progression."),
+    ("es", "No se puede concluir que tu resistencia mejoró en esta salida de 10 km."),
+    ("es", "Esta salida de 10 km a 5:32/km no demuestra una progresión."),
+])
+def test_genuine_abstentions_about_progress_are_accepted(lang, text):
+    _accepts(text, _hist(), lang)
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "We cannot deny that your endurance improved over this run of 10 km at 5:32 per km."),
+    ("en", "We cannot deny your progress over this run of 10 km at 5:32 per km."),
+    ("en", "It is impossible not to see your progress over this run of 10 km at 5:32 per km."),
+    ("en", "This session does not fail to show your progress over this run of 10 km at 5:32 per km."),
+    ("fr", "On ne peut nier que ton endurance s'est améliorée sur cette sortie de 10 km à 5:32/km."),
+    ("es", "No se puede negar que has progresado en esta salida de 10 km a 5:32/km."),
+])
+def test_a_negation_never_authorises_the_positive_claim(lang, text):
+    ok, reasons = csc.validate_session_comment(text, _hist(), lang)
+    assert not ok and ({"progress_claim", "endurance_claim"} & set(reasons)), reasons
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "We cannot determine the intensity from this data, but you have clearly progressed over this run of 10 km."),
+    ("fr", "On ne peut pas déterminer l'intensité, mais tu as clairement progressé sur cette sortie de 10 km."),
+    ("es", "No se puede determinar la intensidad, pero has progresado claramente en esta salida de 10 km."),
+])
+def test_an_abstention_about_another_subject_does_not_open_a_progress_claim(lang, text):
+    _rejects(text, _hist(), "progress_claim", lang)
+
+
+# 5. a date keeps its values even next to comparing wording
+
+def test_values_next_to_a_historical_date_must_belong_to_that_session_despite_comparison_wording():
+    ctx = _hist(comparison=True)
+    for text in (
+            "On 8 January you ran 10 km at 5:32 per km, compared with similar sessions.",
+            "On 8 January, you ran 10 km at 5:32 per km, compared with similar sessions.",
+            "Compared with similar sessions, on 8 January you ran 10 km at 5:32 per km.",
+            "On 8 January you ran 10 km at 6:00 per km, compared with this 8 km at 5:32 per km.",
+            "This 8 km at 5:32 per km compares with 10 km at 6:00 per km on 8 January."):
+        _rejects(text, ctx, "history_misattribution")
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "This 10 km at 5:32 per km compares with 8 km at 6:00 per km on 8 January."),
+    ("en", "On 8 January you ran 8 km at 6:00 per km, compared with this 10 km at 5:32 per km."),
+    ("en", "On 8 January, you ran 8 km at 6:00 per km, compared with this 10 km at 5:32 per km."),
+    ("fr", "Cette sortie affiche 10 km à 5:32/km, contre 8 km à 6:00/km lors de ta sortie du 8 janvier."),
+    ("es", "Esta salida muestra 10 km a 5:32/km, frente a 8 km a 6:00/km en tu salida del 8 de enero."),
+])
+def test_correct_current_versus_dated_prior_comparisons_are_preserved(lang, text):
+    for permission in (False, True):
+        _accepts(text, _hist(comparison=permission), lang)
+
+
+def test_two_different_dates_in_one_segment_are_ambiguous_and_rejected():
+    ok, reasons = _ok("On 8 January or 5 January you ran 8 km at 6:00 per km, compared with this run.", _hist())
+    assert not ok and "history_misattribution" in reasons
+
+
+# 6. a date is not a measurement
+
+def test_a_date_alone_never_opens_a_performance_comparison():
+    ctx = _hist()
+    for text in ("Your run was faster than usual, and your previous run was on 8 January.",
+                 "Your previous run was on 8 January; this run was faster than usual.",
+                 "Your run was slower than your earlier one, dated 8 January."):
+        _rejects(text, ctx, "comparison_not_available")
+
+
+def test_a_date_with_its_measurement_still_anchors_the_comparison_and_plain_history_stays_allowed():
+    _accepts("This 10 km at 5:32 per km was faster than your earlier run of 8 km at 6:00 per km on 8 January.", _hist())
+    _accepts("Your previous run was on 8 January and covered 8 km at 6:00 per km.", _hist())
+    _accepts("Your previous run was on 8 January, a date given here for context only.", _hist())
+    _accepts("Your run was faster than usual, and your previous run was on 8 January.", _hist(comparison=True))
+
+
+# 7. an explicit metric name outranks an ambiguous adjective
+
+def _gaps(distance=2.0, duration=20.0, heart_rate=None, pace=None):
+    ctx = _llm_context()
+    comparison = ctx["workout_detail"]["analysis"]["comparison"]
+    comparison["similar"].pop("pace_difference_sec_per_km", None)
+    if pace:
+        comparison["similar"]["pace_difference_display"] = pace
+    comparison["distance_km"] = {"percent_change": distance}
+    comparison["duration_minutes"] = {"percent_change": duration}
+    if heart_rate is not None:
+        comparison["heart_rate"] = {"percent_change": heart_rate}
+    return csc.build_comment_context(ctx)
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "The distance was slightly longer than similar sessions, at 10 km on this run today."),
+    ("fr", "La distance était légèrement plus longue que les séances similaires, soit 10 km aujourd'hui."),
+    ("es", "La distancia fue ligeramente más larga que las sesiones similares, con 10 km hoy."),
+])
+def test_small_distance_gap_is_not_rejected_for_an_unrelated_duration_gap(lang, text):
+    _accepts(text, _gaps(), lang)
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "The duration was slightly longer than similar sessions."),
+    ("fr", "La durée était légèrement plus longue que les séances similaires."),
+    ("es", "La duración fue ligeramente más larga que las sesiones similares."),
+    ("en", "The distance was slightly longer than similar sessions."),
+    ("en", "The run was slightly longer than similar sessions."),
+])
+def test_minimizing_a_material_gap_or_an_ambiguous_metric_stays_rejected(lang, text):
+    ctx = _gaps(distance=20.0 if text.startswith("The distance") else 2.0)
+    _rejects(text, ctx, "minimized_gap", lang)
+
+
+def test_heart_rate_and_pace_are_tied_to_their_own_clause():
+    ctx = _gaps(distance=2.0, duration=2.0, heart_rate=15.0, pace="-0:18/km")
+    _accepts("The distance was barely longer than similar sessions, at 10 km on this run today.", ctx)
+    _rejects("The heart rate was slightly higher than similar sessions.", ctx, "minimized_gap")
+    _rejects("The pace was slightly faster than similar sessions.", ctx, "minimized_gap")
+    _accepts("The distance was slightly longer than similar sessions, but the pace was clearly faster.", ctx)
+    _rejects("La fréquence cardiaque était légèrement plus haute que les séances similaires.", ctx, "minimized_gap", "fr")

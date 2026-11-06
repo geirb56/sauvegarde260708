@@ -112,3 +112,39 @@ Conditions avant activation de C400 :
 **Limites résiduelles :** « contre » / « frente a » comptent comme vocabulaire comparatif, donc exigent une valeur historique exacte pour être acceptés ; l'attribution à une séance *non datée* (« ta sortie précédente ») reste heuristique ; la suite backend complète n'a pas été exécutée (dépendances privées indisponibles).
 
 **Niveaux de validation :** *déterministe* — tests ci-dessus (synthétiques) ; *runtime LLM* — non réalisée ; *humaine* — non réalisée. Le succès des tests ne prouve pas la qualité réelle des commentaires IA. C400 reste OFF ; C388, C396, Training V2 non modifiés.
+
+## Revue Copilot de la PR #390 — sept alertes
+
+**Base :** `copilot/dev` = `52c3fd3`. HEAD PR avant ce tour : `2382833`. Les sept alertes ont été reproduites sur ce code (sonde non committée) puis corrigées dans `backend/coach_session_comment.py` uniquement.
+
+| # | Fonction | Reproduction (avant) | Après | Verdict |
+|---|---|---|---|---|
+| 1 | `_provably_prior` | sélection `2026-01-10T23:00:00Z`, historique `2026-01-11T00:30:00+02:00` (= 22:30Z) : exclu | conservé ; instants normalisés comparés d'abord, date calendaire seulement en repli ; naïf = UTC (convention de `_parse_exact_datetime`), jamais de comparaison naïf/aware ; postérieurs toujours exclus | BUG CONFIRMÉ, corrigé |
+| 2 | `_build_pools` | `sessions_with_distance_count` rangé dans la métrique « distance » (`km`/`m`) avant la branche compteur | les clés `*count*` vont uniquement dans le pool `count` | BUG CONFIRMÉ (code), corrigé ; l'acceptation de « 3 km » n'a pas pu être reproduite telle quelle sur une phrase valide (rejet masqué par d'autres motifs) mais le classement fautif est démontré par le pool |
+| 3 | `_GOAL_PAST` | « You were running at 5:32 per km over 10 km, … your current marathon goal » → `goal_history_claim` | accepté ; les marqueurs faibles (`were/was …ing`, `already`, `that day`, `déjà`, `ese día`…) ne comptent que dans la proposition qui nomme l'objectif ; les verbes d'intention (`were preparing/training/targeting…`, `préparais`, `preparabas`) et « at the time/à l'époque » restent rejetés partout | BUG CONFIRMÉ (EN ; FR/ES déjà acceptés), corrigé |
+| 4 | `_NON_CLAIM_CUE`, `_NO_PROGRESS_CLAIM` | « We cannot deny that your endurance improved… » **accepté** ; aussi « We cannot deny your progress », et toute phrase contenant « We cannot determine… but you have progressed » (FR/EN/ES) via l'exemption `abstention` | « cannot/does not » ne vaut non-affirmation que suivi d'un verbe de preuve/inférence (show, demonstrate, prove, establish, indicate, confirm, support, conclude, determine, tell, say, assess, know ; `fail to`, `hesitate` exclus) ; équivalents FR/ES explicites ; `_NO_PROGRESS_CLAIM` supprimé et l'exemption `abstention` retirée du contrôle de progression : seul `_only_negated` décide | BUG CONFIRMÉ (+ interaction non signalée : abstention sur un autre sujet), corrigé |
+| 5 | `_check_numbers` | « On 8 January you ran 10 km at 5:32 per km, compared with similar sessions » **accepté** (permission C388 vraie) | dans le segment (coupé aux mots de comparaison et aux propositions) qui porte la date, toute valeur doit appartenir à la séance datée ; l'autre côté de la comparaison peut citer la séance analysée ; deux dates dans un segment = ambigu, rejeté | BUG CONFIRMÉ, corrigé |
+| 6 | `_check_numbers` (retour) | « Your run was faster than usual, and your previous run was on 8 January » **accepté** sans permission | les dates sont séparées des mesures (`date_hits`) ; seule une mesure historique ancre une comparaison | BUG CONFIRMÉ, corrigé |
+| 7 | `_minimized_material_gap` | « The distance was slightly longer than similar sessions » rejeté (distance +2 %, durée +20 %) ; idem FR/ES | un nom de métrique explicite l'emporte ; « longer/plus long/más largo » seuls restent ambigus (distance ∪ durée) donc conservateurs | BUG CONFIRMÉ, corrigé |
+
+**Refactor sans changement de comportement :** les boucles de chiffres de `_check_numbers` sont extraites dans `_figure_checks()` pour que la vérification par segment (alerte 5) réutilise exactement les mêmes contrôles de provenance ; `_segments()` est nouveau.
+
+**Tests.** `tests/test_coach_c403_session_comment.py` : +72 cas (fuseaux, naïf/aware, compteurs, FR/EN/ES, négations, segments, dates seules, métriques distance/durée/allure/FC). Sur le code précédent, 15 de ces tests échouent (un par défaut au moins) ; les autres sont des contre-exemples légitimes qui passent avant et après. Aucune assertion existante modifiée.
+
+| Suites (C400, C402, C403, Context V2, C388, Narrative V3, voix C396) | Avant (`2382833`) | Après |
+|---|---|---|
+| Passés / échecs | 662 / 0 | **713 / 0** |
+
+Cache, timeout, fallback et isolation utilisateur sont couverts par les suites C400/C402 incluses. Suite backend complète non exécutée (`emergentintegrations` et `litellm` indisponibles) : aucune validation « complète » n'est revendiquée.
+
+**Interactions contrôlées.** Date ≠ mesure (6) sans réintroduire l'attribution erronée (5) ; la comparaison directe autorisée sans permission (arbitrage précédent) reste acceptée en FR/EN/ES et le test avec et sans permission C388 passe ; une abstention sur un sujet ne couvre plus une affirmation de progression sur un autre (4) ; un compteur ne fonde plus de distance (2) tout en gardant les moyennes sur distances connues ; fuseaux (1) cohérents avec le contexte partagé (`date_inclusive` inchangé).
+
+**Limites résiduelles / nouveaux risques.**
+- Une phrase mêlant une date historique et les valeurs de la séance analysée sans mot comparatif (« Your previous run was on 8 January, … 10 km today ») reste rejetée par prudence.
+- Sans permission C388, la comparaison est tolérée si la phrase cite une mesure historique ; la pertinence de la métrique (allure vs distance) et la proposition exacte ne sont pas vérifiées.
+- Les verbes de la liste de non-affirmation sont fermés : une abstention rédigée autrement est rejetée (sens conservateur).
+- Heuristique : le garde ne prouve pas la vérité du texte.
+
+**Niveaux de validation.** Déterministe : tests ci-dessus (synthétiques). Runtime LLM : non réalisée. Humaine : non réalisée.
+
+**GO/NO-GO merge :** GO conditionnel sur ces points techniques (sept alertes corrigées, suites ciblées vertes, C388/C396/Training V2 inchangés). **Avant activation de C400** : évaluation runtime indépendante sur les cinq séances réelles de référence, relecture humaine, décision sur les limites ci-dessus. `C400_SESSION_COMMENT_ENABLED` reste OFF. SHA final : indiqué dans le message de livraison (un SHA ne peut pas figurer dans le commit qui le produit).
