@@ -216,10 +216,20 @@ RESPONSE PRESENTATION DIRECTIVE:
 _SESSION_COMMENT_DIRECTIVE = (
     "AUTOMATIC SESSION COMMENT: there is no athlete question. Write the coach's own initial "
     "reading of the selected workout, shown at the top of its page. Start directly with the "
-    "takeaway: no greeting, no question to the athlete, no offer of further help. Use only facts "
-    "present in the context above; introduce no number that is absent from it. Stay consistent "
-    "with validated_workout_observations. This is presentation only: every rule and permission "
-    "above still applies."
+    "main fact of the session (no greeting, no question, no offer of help), then explain one or "
+    "two significant elements. Add context only if it helps: history_as_of_session (sessions "
+    "before this one), runner_profile (observed habits; experience is not provided unless stated), "
+    "declared_goal (the CURRENT declared goal: it may explain why this kind of session is "
+    "generally relevant, never that this session was designed for it or that it moved the athlete "
+    "toward it. Its history is unknown (historical_goal_status): never say it was already the "
+    "goal on the session date or before). Cite prior sessions only as history, each figure tied "
+    "to the very session it comes from, one prior session per sentence; one comparison or "
+    "an isolated difference never shows progress. Use only facts present in the context above; "
+    "introduce no number that is absent from it. Stay consistent with validated_workout_observations. "
+    "Do not conclude on progress, endurance gained, physiological intensity, training effectiveness "
+    "or whether the session was a success unless selected_workout_permissions explicitly allows it; "
+    "no automatic compliments, no advice or plan for the next sessions. Natural, concise, at most "
+    "one limitation. This is presentation only: every rule and permission above still applies."
 )
 
 

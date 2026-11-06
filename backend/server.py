@@ -2044,7 +2044,7 @@ def _coach_validated_workout_observations(narrative) -> Optional[dict]:
 async def _assemble_coach_llm_context(
     *, user: dict, language: str, workout, workout_analysis,
     workout_analysis_allowed: bool, workout_id: Optional[str], now_utc: datetime,
-    load_training_payloads,
+    load_training_payloads, goal_optional: bool = False,
 ):
     """Context assembly shared by chat and the automatic session comment.
 
@@ -2071,7 +2071,19 @@ async def _assemble_coach_llm_context(
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
     domain_activities_all = mongo_garmin_activities_to_domain(garmin_activities_all)
     reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
-    resolved_goal = await _resolve_goal_v2(user_id)
+    goal_declared = True
+    try:
+        resolved_goal = await _resolve_goal_v2(user_id)
+    except HTTPException:
+        if not goal_optional:
+            raise
+        # No usable declared goal: neutral placeholder for the shared builders; the goal is
+        # removed from the context below so it is never presented as declared.
+        goal_declared = False
+        resolved_goal = _ResolvedGoal(
+            goal_type="MAINTENANCE", mapped_goal=GoalType.maintenance, cycle_start=reference_date,
+            race_date=None, target_time_sec=None, target_distance_km=None, cycle_doc={}, user_goal_doc=None,
+        )
 
     garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
@@ -2141,6 +2153,8 @@ async def _assemble_coach_llm_context(
         validated = _coach_validated_workout_observations(scoped_narrative)  # None when unavailable
         if validated is not None:
             llm_context["validated_workout_observations"] = validated
+    if not goal_declared:
+        llm_context.pop("goal", None)
     return llm_context, scoped_narrative
 
 
@@ -2166,17 +2180,20 @@ async def _build_coach_comment_context(
 
     get_training_v2_week / get_today_adaptive_session persist served prescriptions, so
     this path never calls them: Training V2 week/today are marked unavailable and the
-    comment relies on the selected workout facts and the C388 observations. The remaining
+    comment relies on the selected workout facts and the C388 observations, plus a selected
+    pre-session history, observed profile and the current declared goal (C402). The remaining
     steps only read (find/find_one/count). Do not add any write-capable call here.
     """
     async def read_only_training_payloads():
         return {}, {"status": "unavailable"}
 
-    return await _assemble_coach_llm_context(
+    llm_context, narrative = await _assemble_coach_llm_context(
         user=user, language=language, workout=workout, workout_analysis=workout_analysis,
         workout_analysis_allowed=True, workout_id=workout_id, now_utc=now_utc,
-        load_training_payloads=read_only_training_payloads,
+        load_training_payloads=read_only_training_payloads, goal_optional=True,
     )
+    # C402: the comment gets a selected, labelled context, not the whole chat context.
+    return coach_session_comment.build_comment_context(llm_context), narrative
 
 
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
