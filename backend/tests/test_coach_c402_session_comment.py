@@ -345,7 +345,9 @@ def test_session_date_clock_time_is_not_a_history_pace():
 
 
 def test_history_date_is_not_matched_so_no_correspondence_is_invented():
-    ok, r = _ok("On 8 January you ran 8 km at 6:00 per km, and this 10 km at 5:32 per km was faster.", _hist())
+    # C403: a date is accepted only when it is a prior session's own date (see C403 tests);
+    # a date that matches no session is still an invented correspondence.
+    ok, r = _ok("On 9 January you ran 8 km at 6:00 per km, and this 10 km at 5:32 per km was faster.", _hist())
     assert not ok and "ungrounded_date" in r
 
 
