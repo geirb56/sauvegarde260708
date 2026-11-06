@@ -375,16 +375,42 @@ def test_scope_excludes_context_sections():
     assert any(v == "5:50" for _, v in compared)
 
 
-# prompt unchanged / same prompt as chat
-async def test_session_comment_uses_chat_prompt_without_fake_question():
+# C405: dedicated prompt, chat prompt untouched
+async def test_session_comment_uses_dedicated_prompt_without_fake_question():
     with patch.object(llm_coach, "_call_gpt", AsyncMock(return_value=("x", True, {}))) as call:
         await llm_coach.generate_session_comment(
             {"language": "en", "workout_detail": {"distance_km": 1}}, user_id="u")
     system, prompt = call.await_args.args[0], call.await_args.args[1]
-    assert system.startswith(llm_coach.SYSTEM_PROMPT_COACH)
-    assert "ATHLETE'S QUESTION" not in prompt and "MODE: selected_workout_initial" in prompt
-    assert "AUTOMATIC SESSION COMMENT" in prompt
+    assert system.startswith(llm_coach.SYSTEM_PROMPT_SESSION_COMMENT)
+    assert not system.startswith(llm_coach.SYSTEM_PROMPT_COACH)
+    assert "ATHLETE'S QUESTION" not in prompt and "RESPONSE PRESENTATION DIRECTIVE" not in prompt
+    assert call.await_args.args[3] == "session_comment"
     assert llm_coach.LLM_MODEL == "gpt-4.1-mini"
+
+
+@pytest.mark.parametrize("lang", ["fr", "en", "es"])
+async def test_session_comment_prompt_keeps_context_and_language(lang):
+    ctx = {"language": lang, "selected_workout_permissions": {"intensity_interpretation_allowed": False},
+           "workout_detail": {"distance_km": 1}}
+    with patch.object(llm_coach, "_call_gpt", AsyncMock(return_value=("x", True, {}))) as call:
+        await llm_coach.generate_session_comment(ctx, user_id="u")
+    prompt = call.await_args.args[1]
+    assert '"selected_workout_permissions":{"intensity_interpretation_allowed":false}' in prompt
+    assert lang.upper() in prompt
+
+
+def test_session_comment_prompt_carries_factual_guardrails():
+    p = llm_coach.SYSTEM_PROMPT_SESSION_COMMENT
+    for needle in ("session_synthesis", "history_as_of_session", "similar_comparison_available",
+                   "intensity_interpretation_allowed", "LT1/LT2", "declared_goal", "never as a routine caveat"):
+        assert needle in p
+    assert llm_coach.SYSTEM_PROMPT_COACH.startswith("You are RunIndex")
+
+
+async def test_chat_keeps_chat_prompt():
+    with patch.object(llm_coach, "_call_gpt", AsyncMock(return_value=("x", True, {}))) as call:
+        await llm_coach.enrich_chat_response("q", {"language": "en"}, [], user_id="u")
+    assert call.await_args.args[0].startswith(llm_coach.SYSTEM_PROMPT_COACH)
 
 
 async def test_general_chat_never_triggers_session_comment():
