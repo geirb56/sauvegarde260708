@@ -354,7 +354,7 @@ _BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)]|#{1,6})\s", re.M)
 _COMPARISON = re.compile(
     r"(compar|\bvs\b|versus|par rapport|plus (?:rapide|lent|vite)\w* que|moins (?:rapide|vite)\w* que|"
     r"(?:faster|slower|higher|lower|better|worse) than|than (?:usual|your|before|similar|earlier)|"
-    r"en comparaci|"
+    r"en comparaci|\bcontre\b|\bfrente a\b|"
     r"d'habitude|habituellement|usual(?:ly)?|habitual|normalmente|"
     r"que d'ordinaire|que la moyenne|than average|average of your|más (?:rápid|lent)\w* que|"
     r"menos (?:rápid|lent)\w* que)", re.I)
@@ -407,7 +407,9 @@ _EFFECTIVENESS = re.compile(
     r"sortie|entra[iî]nement|sesi[óo]n|salida|pr[ée]paration|preparation|preparaci[óo]n)\b|"
     r"\b(?:session|workout|s[ée]ance|sortie|sesi[óo]n|salida)\b[^.!?]{0,30}\b(?:effective|useful|valuable|"
     r"productive|efficace|utile|[úu]til|eficaz)\b|"
-    r"\b(?:perfect for|ideal for|parfait pour|id[ée]al pour|ideal para|perfecto para)\b)", re.I)
+    r"\b(?:perfect for|ideal for|parfait pour|id[ée]al pour|ideal para|perfecto para)\b|"
+    r"\b(?:training|plan|entra[iî]nement|entrenamiento)\b[^.!?]{0,20}\b(?:works?|worked|working|"
+    r"fonctionne|marche|funciona)\b)", re.I)
 _SUCCESS = re.compile(
     r"(\b(?:success(?:ful)?|nailed|crushed|aced|r[ée]ussi[es]?|[ée]chec|failed|logr[ao]d[ao]|[ée]xito|"
     r"mission accomplie|objectif atteint|goal (?:achieved|reached|met)|target (?:hit|met|reached)|"

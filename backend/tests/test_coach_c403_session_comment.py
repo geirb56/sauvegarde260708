@@ -340,3 +340,97 @@ def test_history_selection_is_not_mutated():
     snapshot = copy.deepcopy(ctx)
     csc.build_comment_context(ctx)
     assert ctx == snapshot
+
+
+# ------------------------------------------- arbitrage: direct descriptive historical comparison
+
+_DESC = "This 10 km at 5:32 per km compares with 8 km at 6:00 per km on 8 January"
+
+
+def _day(sessions, start, comparison=False):
+    ctx = _llm_context()
+    ctx["selected_workout_permissions"]["similar_comparison_available"] = comparison
+    ctx["workout_detail"]["date"] = "2026-01-10"
+    ctx["workout_detail"]["start_time"] = start
+    ctx["recent_workouts"] = sessions
+    return csc.build_comment_context(ctx)
+
+
+def _rejected(text, ctx, reason, lang="en"):
+    ok, reasons = csc.validate_session_comment(text, ctx, lang)
+    assert not ok and reason in reasons, reasons
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", _DESC + "."),
+    ("fr", "Cette sortie affiche 10 km à 5:32/km, contre 8 km à 6:00/km lors de ta sortie du 8 janvier."),
+    ("es", "Esta salida muestra 10 km a 5:32/km, frente a 8 km a 6:00/km en tu salida del 8 de enero."),
+])
+def test_exact_descriptive_history_comparison_is_accepted_without_c388_permission(lang, text):
+    ok, reasons = csc.validate_session_comment(text, _hist(), lang)
+    assert ok, reasons
+
+
+@pytest.mark.parametrize("text", [
+    "This 10 km at 5:32 per km compares with 8 km at 5:50 per km on 8 January.",
+    "This 10 km at 5:32 per km compares with 12 km at 6:00 per km on 8 January.",
+])
+def test_history_value_attributed_to_the_wrong_session_is_rejected(text):
+    _rejected(text, _hist(), "history_misattribution")
+
+
+def test_comparison_with_a_later_session_is_rejected():
+    later = [{"date": "2026-01-12T07:00:00", "type": "run", "distance_km": 8.0, "avg_pace_display": "6:00/km"}]
+    ok, _ = _ok(_DESC.replace("on 8 January", "") + ".", _hist(sessions=later))
+    assert not ok
+
+
+def test_same_day_comparison_needs_proven_anteriority():
+    text = "This 10 km at 5:32 per km compares with your earlier run of 8 km at 6:00 per km."
+    date_only = [{"date": "2026-01-10", "type": "run", "distance_km": 8.0, "avg_pace_display": "6:00/km"}]
+    proven = [{"date": "2026-01-10T06:00:00", "type": "run", "distance_km": 8.0, "avg_pace_display": "6:00/km"}]
+    later = [{"date": "2026-01-10T09:00:00", "type": "run", "distance_km": 8.0, "avg_pace_display": "6:00/km"}]
+    assert not _ok(text, _day(date_only, None))[0]
+    assert not _ok(text, _day(later, "2026-01-10T07:30:00"))[0]
+    assert _ok(text, _day(proven, "2026-01-10T07:30:00"))[0]
+
+
+@pytest.mark.parametrize("lang,text", [
+    ("en", "You ran faster than usual."),
+    ("fr", "Tu cours plus vite que d'habitude."),
+    ("en", "This is faster than your similar sessions."),
+    ("es", "Vas más rápido que tus sesiones similares."),
+])
+def test_statistical_comparisons_stay_rejected_without_c388_permission(lang, text):
+    _rejected(text, _hist(), "comparison_not_available", lang)
+
+
+@pytest.mark.parametrize("lang,tail,reason", [
+    ("en", ", so you are progressing", "progress_claim"),
+    ("en", ", so you are more efficient at equal heart rate", "efficiency_not_allowed"),
+    ("en", ", which shows your training works", "effectiveness_not_allowed"),
+    ("en", ", showing a higher intensity for your body", "intensity_not_allowed"),
+])
+def test_exact_history_comparison_never_carries_a_conclusion(lang, tail, reason):
+    _rejected(_DESC + tail + ".", _hist(), reason, lang)
+
+
+@pytest.mark.parametrize("lang,text,reason", [
+    ("fr", "Tu progresses par rapport à tes séances précédentes.", "progress_claim"),
+    ("fr", "Tu es désormais plus efficace à fréquence cardiaque égale.", "efficiency_not_allowed"),
+    ("fr", "Cette séance montre que ton entraînement fonctionne.", "effectiveness_not_allowed"),
+    ("es", "Esta sesión muestra que tu entrenamiento funciona.", "effectiveness_not_allowed"),
+    ("en", "This session shows your training is working.", "effectiveness_not_allowed"),
+])
+def test_progress_efficiency_and_effectiveness_conclusions_are_rejected(lang, text, reason):
+    _rejected(text, _hist(), reason, lang)
+
+
+def test_c388_authorised_similar_comparison_is_preserved():
+    ok, reasons = _ok("This 10 km at 5:32 per km was faster than your similar sessions.", _hist(comparison=True))
+    assert ok, reasons
+
+
+def test_insufficient_history_rejects_without_inventing_a_session():
+    ok, reasons = _ok(_DESC + ".", _hist(sessions=[]))
+    assert not ok and "ungrounded_date" in reasons

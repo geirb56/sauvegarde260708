@@ -79,3 +79,36 @@ Conditions avant activation de C400 :
 - **VALIDATION DÉTERMINISTE** : tests synthétiques ci-dessus (aucun LLM).
 - **VALIDATION RUNTIME LLM** : **non réalisée**. Les tests mockés ne prouvent pas la fiabilité réelle.
 - **VALIDATION HUMAINE** : **non réalisée**.
+
+## Arbitrage des comparaisons historiques directes
+
+**Base :** PR #390 inchangée (HEAD précédent `6b93946`), `copilot/dev` = `52c3fd3`.
+
+**Règle métier retenue.** Une comparaison descriptive exacte avec une séance antérieure identifiable est autorisée sans permission C388 `similar_comparison_available`, si : les deux séances existent, les valeurs et unités sont exactes, la séance historique précède prouvablement la séance analysée (C403/A1), l'attribution est vérifiable, et aucune conclusion (progression, efficacité, causalité, physiologie) n'est ajoutée. Les comparaisons statistiques (« que d'habitude », « séances similaires ») restent soumises à la permission C388.
+
+**Comportement initial (code `6b93946`, sonde non committée) :**
+
+| Cas | Résultat observé |
+|---|---|
+| A. exemple FR « …10 km à 5:32/km, contre 8 km à 6:00/km lors de ta sortie du 8 janvier » | **rejeté** (`history_misattribution`) : « contre » n'était pas reconnu comme vocabulaire comparatif → écart à la règle |
+| A. équivalent ES « frente a » | **rejeté** (même cause) → écart |
+| A. EN « compares with » | accepté |
+| B. valeur attribuée à la mauvaise séance | rejeté |
+| C. séance postérieure / D. même jour d'ordre inconnu | rejeté |
+| E. même jour, antériorité prouvée | accepté |
+| F, G. « plus vite que d'habitude », « séances similaires » (FR/EN/ES) | rejeté (`comparison_not_available`) |
+| H. + progression, J. + physiologie | rejeté |
+| I. + efficacité (« plus efficace à FC égale ») | rejeté |
+| I. + « ton entraînement fonctionne / training works » (FR/EN/ES) | **accepté** → écart (`_EFFECTIVENESS` ne couvrait pas cette formulation) |
+| K. permission C388 | accepté (préservé) |
+| L. historique insuffisant | rejeté, aucune séance inventée |
+
+**Corrections (`backend/coach_session_comment.py`, 2 regex existantes étendues, pas de nouveau mécanisme) :**
+- `_COMPARISON` : ajout de `contre` et `frente a` (juxtaposition descriptive FR/ES). L'autorisation sans permission reste conditionnée à une valeur historique exacte et correctement attribuée (`_check_numbers` → `history_misattribution` sinon).
+- `_EFFECTIVENESS` : ajout de « training/plan/entraînement/entrenamiento … works/fonctionne/marche/funciona ».
+
+**Tests :** `tests/test_coach_c403_session_comment.py` + 22 cas (A–L, FR/EN/ES). Avant : 640 passés. Après : **662 passés, 0 échec** (C400, C402, C403, Context V2, C388, Narrative V3, voix C396). Aucune assertion existante modifiée. Cache, timeout, fallback et isolation utilisateur sont couverts par les suites C400/C402 incluses.
+
+**Limites résiduelles :** « contre » / « frente a » comptent comme vocabulaire comparatif, donc exigent une valeur historique exacte pour être acceptés ; l'attribution à une séance *non datée* (« ta sortie précédente ») reste heuristique ; la suite backend complète n'a pas été exécutée (dépendances privées indisponibles).
+
+**Niveaux de validation :** *déterministe* — tests ci-dessus (synthétiques) ; *runtime LLM* — non réalisée ; *humaine* — non réalisée. Le succès des tests ne prouve pas la qualité réelle des commentaires IA. C400 reste OFF ; C388, C396, Training V2 non modifiés.
