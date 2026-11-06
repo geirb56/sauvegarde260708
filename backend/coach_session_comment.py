@@ -126,9 +126,10 @@ def build_comment_context(llm_context: dict) -> dict:
         out["declared_goal"] = {
             "goal_type": goal_type,
             "status": "current_declared_goal",
-            "known_at_session_date": False,
+            "historical_goal_status": "unknown",  # no goal history is stored: neither confirmed nor excluded
             "is_race_goal": goal_type in _RACE_GOALS,
-            "usage": "general relevance only; it does not show the session was designed for it",
+            "usage": "general relevance only; it does not show the session was designed for it "
+                     "or that this goal applied on the session date",
         }
     out["reliable_physiology"] = {  # E. nothing beyond the established permissions
         "intensity_interpretation_allowed": permissions.get("intensity_interpretation_allowed") is True,
@@ -171,12 +172,20 @@ def split_session_facts(context: dict) -> tuple[list, list]:
     return session, compared
 
 
-def split_history_facts(context: dict) -> list:
-    """Facts about sessions BEFORE the selected one (C402): citable only as history."""
-    facts: list = []
-    _walk(context.get("history_as_of_session") or {}, ("history",), facts)
-    _walk((context.get("runner_profile") or {}).get("observed_training") or {}, ("history", "observed"), facts)
-    return facts
+def split_history_facts(context: dict) -> dict:
+    """Facts about sessions BEFORE the selected one, kept per session (C402).
+
+    {"sessions": [facts of session 1, ...], "aggregate": derived habit figures}. The session
+    date is left out on purpose: its clock time would otherwise look like a pace.
+    """
+    sessions: list = []
+    for item in (context.get("history_as_of_session") or {}).get("sessions") or []:
+        facts: list = []
+        _walk({k: v for k, v in item.items() if k != "date"}, ("history",), facts)
+        sessions.append(facts)
+    aggregate: list = []
+    _walk((context.get("runner_profile") or {}).get("observed_training") or {}, ("history", "observed"), aggregate)
+    return {"sessions": sessions, "aggregate": aggregate}
 
 
 _NUMBER_IN_TEXT = re.compile(r"(?<![\w:.,])\d+(?:[.,]\d+)?")
@@ -348,6 +357,11 @@ _SUCCESS = re.compile(
 _GOAL_DESIGN = re.compile(
     r"(design|built|planned|prepared specifically|specifically|on purpose|con[çc]ue?s?|pr[ée]vue?s?|"
     r"sp[ée]cifiquement|exprès|dise[ñn]ad[ao]|espec[ií]ficamente|a prop[óo]sito)", re.I)
+# The goal history is unknown: no sentence may place the goal at the session date or before.
+_GOAL_PAST = re.compile(
+    r"(at the time|back then|previous goal|earlier goal|old goal|used to be|was already|"
+    r"[àa] l'[ée]poque|[àa] ce moment-l[àa]|ancien objectif|objectif pr[ée]c[ée]dent|alors|"
+    r"en aquel momento|en esa [ée]poca|objetivo anterior|antiguo objetivo|entonces)", re.I)
 _GOAL_TERMS = {
     "marathon": re.compile(r"(?<!half )(?<!half-)(?<!medio )(?<![-\w])(?:marathon|maratón)", re.I),
     "semi": re.compile(r"semi-?marathon|half[- ]marathon|medio marat[óo]n|semi\b", re.I),
@@ -431,21 +445,47 @@ def _parse_date(value: Any):
         return None
 
 
-def _check_numbers(sentence: str, session: dict, compared: dict, comparison_ok: bool,
-                   reasons: set) -> None:
+def _check_numbers(sentence: str, session: dict, compared: dict, history: dict, comparison_ok: bool,
+                   wording_ok: bool, reasons: set) -> None:
+    """Order of provenance: the selected session, then C388's validated comparison, then one
+    prior session. Values grounded only in prior sessions must all belong to the SAME prior
+    session (or to the observed-habit aggregate): "8 km at 5:30" is rejected when 8 km and
+    5:30 come from two different sessions. A sentence citing two prior sessions is rejected
+    too: the text does not say which value goes with which session, and we do not guess.
+    """
     has_comparison_wording = bool(_COMPARISON.search(sentence))
     masked = _ISO_DATE.sub(" ", _DATE_TEXT.sub(" ", sentence))
+    history_hits: list = []  # one matcher per value grounded only in prior sessions
+    dual_hits: list = []  # grounded in C388's baseline AND in some prior session
+    baseline_hits = 0  # grounded only in C388's aggregate comparison baseline
+
+    def settle(session_ok: bool, compared_ok: bool, owner_ok, reason: str = "ungrounded_number") -> None:
+        if session_ok:
+            return
+        if comparison_ok and compared_ok:
+            if not has_comparison_wording:
+                reasons.add("comparison_value_as_session")
+            if any(owner_ok(o) for o in history["owners"]):
+                dual_hits.append(owner_ok)
+            else:
+                nonlocal baseline_hits
+                baseline_hits += 1
+            return
+        if wording_ok and any(owner_ok(o) for o in history["owners"]):
+            if not has_comparison_wording:
+                reasons.add("comparison_value_as_session")
+            history_hits.append(owner_ok)
+            return
+        reasons.add(reason)
 
     for match in _TOKEN.finditer(masked):
         h, m, s = match.groups()
         seconds = int(h) * 3600 + int(m) * 60 + int(s) if s else int(h) * 60 + int(m)
-        if any(abs(seconds - t) <= 1 for t in session["tokens"]):
-            continue
-        if comparison_ok and any(abs(seconds - t) <= 1 for t in compared["tokens"]):
-            if not has_comparison_wording:
-                reasons.add("comparison_value_as_session")
-            continue
-        reasons.add("ungrounded_pace_or_time")
+
+        def has(pools, seconds=seconds):
+            return any(abs(seconds - t) <= 1 for t in pools["tokens"])
+
+        settle(has(session), has(compared), has, "ungrounded_pace_or_time")
     masked = _TOKEN.sub(" ", masked)
 
     for match in _HM.finditer(masked):
@@ -454,19 +494,17 @@ def _check_numbers(sentence: str, session: dict, compared: dict, comparison_ok: 
             reasons.add("ungrounded_duration")
     masked = _HM.sub(" ", masked)
 
+    def value_matcher(pool: str, value: float, decimals: int):
+        return lambda pools: _match(value, decimals, pools[pool])
+
     for match in _NUMBER_WORDS.finditer(masked):
         unit = match.group(2)
         value = float(_WORD_VALUE[match.group(1).lower()])
         if value == 1 and _ONCE.match(unit):
             continue
         pool = next((name for rx, name in _UNIT_POOL if rx.match(unit)), "any")
-        if _match(value, 0, session[pool]):
-            continue
-        if comparison_ok and _match(value, 0, compared[pool]):
-            if not has_comparison_wording:
-                reasons.add("comparison_value_as_session")
-            continue
-        reasons.add("ungrounded_number")
+        ok = value_matcher(pool, value, 0)
+        settle(ok(session), ok(compared), ok)
     masked = _NUMBER_WORDS.sub(" ", masked)
 
     for match in _NUMBER_IN_TEXT.finditer(masked):
@@ -474,15 +512,15 @@ def _check_numbers(sentence: str, session: dict, compared: dict, comparison_ok: 
         value = float(raw.replace(",", "."))
         decimals = len(re.split(r"[.,]", raw)[1]) if re.search(r"[.,]", raw) else 0
         rest = masked[match.end():match.end() + 18].lstrip()
-        pool_name = next((name for rx, name in _UNIT_POOL if rx.match(rest)), None)
-        pool = pool_name or "any"
-        if _match(value, decimals, session[pool]):
-            continue
-        if comparison_ok and _match(value, decimals, compared[pool]):
-            if not has_comparison_wording:
-                reasons.add("comparison_value_as_session")
-            continue
-        reasons.add("ungrounded_number")
+        pool = next((name for rx, name in _UNIT_POOL if rx.match(rest)), None) or "any"
+        ok = value_matcher(pool, value, decimals)
+        settle(ok(session), ok(compared), ok)
+
+    # Baseline-only and dual values are the C388 baseline unless the sentence also cites a value
+    # that only a prior session has: then they must all belong to that one session.
+    if history_hits and (baseline_hits or not any(
+            all(hit(owner) for hit in history_hits + dual_hits) for owner in history["owners"])):
+        reasons.add("history_misattribution")
 
 
 def _significant_gaps(comparison_facts: list) -> bool:
@@ -520,11 +558,13 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
     session_facts, comparison_facts = split_session_facts(context)
     comparison_ok = bool(permissions.get("similar_comparison_available"))
     history_facts = split_history_facts(context)
-    history_ok = bool((context.get("history_as_of_session") or {}).get("sessions"))
+    history_ok = bool(history_facts["sessions"])
+    history = {"owners": [_build_pools(f) for f in history_facts["sessions"]]
+               + ([_build_pools(history_facts["aggregate"])] if history_facts["aggregate"] else [])}
     # Prior-session figures are citable only as history (comparison wording required).
     wording_ok = comparison_ok or history_ok
     session = _build_pools(session_facts)
-    compared = _build_pools((comparison_facts if comparison_ok else []) + history_facts)
+    compared = _build_pools(comparison_facts if comparison_ok else [])
     goal = context.get("declared_goal") or {}
     goal_kind = _GOAL_KIND.get(str(goal.get("goal_type") or "").upper())
     gaps = _significant_gaps(comparison_facts) if comparison_ok else False
@@ -558,6 +598,8 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
                     reasons.add("goal_mismatch")
                 if _GOAL_DESIGN.search(sentence):
                     reasons.add("goal_design_claim")
+                if _GOAL_PAST.search(sentence):
+                    reasons.add("goal_history_claim")
         if _ENDURANCE.search(sentence):
             reasons.add("endurance_claim")
         if _SUCCESS.search(sentence):
@@ -588,7 +630,7 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
     for sentence in _sentences(text):
         if _COMPARISON.search(sentence) and not wording_ok and not abstains(sentence):
             reasons.add("comparison_not_available")
-        _check_numbers(sentence, session, compared, wording_ok, reasons)
+        _check_numbers(sentence, session, compared, history, comparison_ok, wording_ok, reasons)
     return not reasons, sorted(reasons)
 
 

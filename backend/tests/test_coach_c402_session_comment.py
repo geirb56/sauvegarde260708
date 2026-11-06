@@ -69,7 +69,7 @@ def test_selected_context_has_five_labelled_categories_and_drops_current_state()
 def test_declared_goal_is_current_and_never_proves_session_purpose():
     goal = _selected()["declared_goal"]
     assert goal["goal_type"] == "MARATHON" and goal["status"] == "current_declared_goal"
-    assert goal["known_at_session_date"] is False and goal["is_race_goal"] is True
+    assert goal["historical_goal_status"] == "unknown" and goal["is_race_goal"] is True
     assert "race_date" not in goal and "objective" not in goal  # free text / unreliable fields are not forwarded
 
 
@@ -271,3 +271,145 @@ async def test_route_context_is_selected_and_goal_is_current_declared():
 async def test_route_context_without_declared_goal_still_builds_and_has_no_goal():
     ctx, _ = await _build(goal_error=True)
     assert "workout_detail" in ctx and "declared_goal" not in ctx
+
+
+# ------------------------------------------------------------------ C402 follow-up: history attribution
+
+def _hist(sessions=None, truncated=False, comparison=False):
+    ctx = _llm_context()
+    ctx["selected_workout_permissions"]["similar_comparison_available"] = comparison
+    if sessions is not None:
+        ctx["recent_workouts"] = sessions
+    ctx["recent_workouts_coverage"]["truncated"] = truncated
+    return csc.build_comment_context(ctx)
+
+
+NEAR = [
+    {"date": "2026-01-08T07:00:00", "type": "run", "distance_km": 8.0, "avg_pace_display": "6:00/km"},
+    {"date": "2026-01-06T07:00:00", "type": "run", "distance_km": 8.1, "avg_pace_display": "5:40/km"},
+    {"date": "2026-01-03T07:00:00", "type": "run", "distance_km": 12.0, "avg_pace_display": "5:50/km"},
+]
+
+
+def test_history_value_attributed_to_the_right_session_is_accepted():
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run of 8 km at 6:00 per km.", _hist())
+    assert ok, r
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run of 12 km at 5:50 per km.", _hist())
+    assert ok, r
+
+
+def test_exact_value_attributed_to_another_session_is_rejected():
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run of 8 km at 5:50 per km.", _hist())
+    assert not ok and "history_misattribution" in r
+    ok, r = _ok("This 10 km at 5:32 per km was slower than your earlier run of 12 km at 6:00 per km.", _hist())
+    assert not ok and "history_misattribution" in r
+
+
+def test_value_absent_from_history_is_rejected():
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run of 9 km at 6:00 per km.", _hist())
+    assert not ok and "ungrounded_number" in r
+
+
+def test_close_sessions_are_attributed_correctly():
+    hist = _hist(NEAR)
+    assert _ok("This 10 km at 5:32 per km was faster than your earlier run of 8.1 km at 5:40 per km.", hist)[0]
+    assert _ok("This 10 km at 5:32 per km was faster than your earlier run of 8.0 km at 6:00 per km.", hist)[0]
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run of 8.0 km at 5:40 per km.", hist)
+    assert not ok and "history_misattribution" in r
+
+
+def test_two_prior_sessions_in_one_sentence_are_rejected_not_guessed():
+    ok, r = _ok("This 10 km at 5:32 per km was faster than 8 km at 6:00 per km and than 12 km at 5:50 per km.", _hist())
+    assert not ok and "history_misattribution" in r
+
+
+def test_c388_baseline_value_cannot_be_pinned_on_a_prior_session():
+    ctx = _llm_context()  # similar comparison available, baseline 5:50 (aggregate), history 8 km at 6:00
+    selected = csc.build_comment_context(ctx)
+    assert _ok("Compared with similar runs, your pace was 18 seconds per km faster, 5:32 against 5:50.", selected)[0]
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run of 8 km at 5:50 per km.", selected)
+    assert not ok and "history_misattribution" in r
+
+
+def test_validated_c388_comparison_is_preserved_with_history_present():
+    selected = csc.build_comment_context(_llm_context())
+    ok, r = _ok("Compared with similar runs you were 18 seconds per km faster over 10 km, 5:32 against 5:50.", selected)
+    assert ok, r
+
+
+def test_session_date_clock_time_is_not_a_history_pace():
+    sessions = [dict(HISTORY[0], date="2026-01-08T07:05:00")]
+    ok, r = _ok("This 10 km at 5:32 per km was faster than your earlier run, 7:05 per km, on the same loop.",
+                _hist(sessions))
+    assert not ok and "ungrounded_pace_or_time" in r
+
+
+def test_history_date_is_not_matched_so_no_correspondence_is_invented():
+    ok, r = _ok("On 8 January you ran 8 km at 6:00 per km, and this 10 km at 5:32 per km was faster.", _hist())
+    assert not ok and "ungrounded_date" in r
+
+
+def test_insufficient_history_gives_no_habit_figure_or_progress():
+    two = _hist(HISTORY[:2])
+    assert "observed_training" not in two["runner_profile"]
+    ok, r = _ok("You usually run 25 km over a few runs, so this 10 km at 5:32 per km was typical for you.", two)
+    assert not ok and "ungrounded_number" in r
+    ok, r = _ok("You improved compared with your earlier run of 8 km at 6:00 per km, over this 10 km at 5:32 per km.", two)
+    assert not ok and "progress_claim" in r
+
+
+def test_truncated_history_gives_no_aggregate_figure():
+    truncated = _hist(truncated=True)
+    assert "observed_training" not in truncated["runner_profile"] and truncated["history_as_of_session"]["truncated"]
+    ok, r = _ok("You usually run about 8.3 km per session, so this 10 km at 5:32 per km was longer than usual.", truncated)
+    assert not ok and "ungrounded_number" in r
+    assert _ok("You usually run about 8.3 km per session, so this 10 km at 5:32 per km was longer than usual.",
+               _hist())[0]
+
+
+# ------------------------------------------------------------------ C402 follow-up: goal provenance
+
+def test_goal_provenance_is_current_only_and_history_unknown():
+    goal = _selected()["declared_goal"]
+    assert goal["status"] == "current_declared_goal" and goal["historical_goal_status"] == "unknown"
+    assert "known_at_session_date" not in goal
+
+
+@pytest.mark.parametrize("text,lang", [
+    ("At the time your goal was already the marathon, and this 10 km at 5:32 per km was steady.", "en"),
+    ("À l'époque ton objectif était déjà le marathon, et ces 10 km à 5:32 par km étaient réguliers.", "fr"),
+    ("Entonces tu objetivo ya era el maratón, y estos 10 km a 5:32 por km fueron regulares y fluidos.", "es"),
+])
+def test_goal_placed_in_the_past_is_rejected(text, lang):
+    ok, r = _ok(text, lang=lang)
+    assert not ok and "goal_history_claim" in r, r
+
+
+def test_current_goal_differing_from_a_claimed_previous_goal_is_rejected():
+    ok, r = _ok("Your previous goal was the 10K, and this steady 10 km at 5:32 per km was useful for it.")
+    assert not ok and ("goal_mismatch" in r or "goal_history_claim" in r)
+
+
+def test_absent_goal_cannot_be_stated_as_declared():
+    ctx = _llm_context()
+    ctx.pop("goal")
+    selected = csc.build_comment_context(ctx)
+    assert "declared_goal" not in selected
+    ok, r = _ok("You declared the marathon as your goal, and this steady 10 km at 5:32 per km fits it.", selected)
+    assert not ok and "context_as_session_fact" in r
+
+
+def test_default_goal_is_never_forwarded_as_declared():
+    ctx = _llm_context()
+    ctx["goal"]["goal_type"] = "SOMETHING_DEFAULT"
+    assert "declared_goal" not in csc.build_comment_context(ctx)
+    ctx["goal"]["goal_type"] = ""
+    assert "declared_goal" not in csc.build_comment_context(ctx)
+
+
+def test_maintenance_goal_cannot_be_turned_into_a_race_goal():
+    ctx = _llm_context()
+    ctx["goal"]["goal_type"] = "MAINTENANCE"
+    selected = csc.build_comment_context(ctx)
+    ok, r = _ok("For your marathon goal, a steady 10 km at 5:32 per km is generally a useful run today.", selected)
+    assert not ok and "goal_mismatch" in r

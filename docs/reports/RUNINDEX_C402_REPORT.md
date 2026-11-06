@@ -46,3 +46,26 @@ Ce rapport est un instantané de preuve, pas la vérité courante.
 - Le seuil de matérialité d'un écart (10 s/km, 10 %) est un choix de conception.
 - Le contrôle sur l'historique valide les valeurs, pas leur attribution à la bonne séance.
 - Avant toute activation : exécuter les 5 générations réelles avec contexte, texte, affirmations, faits sources, verdict du validateur et verdict manuel, puis décision explicite. Si la bêta est prioritaire, garder le fallback C388.
+
+## Suivi PR #389 — correctifs post-audit indépendant
+
+- Base : `copilot/dev` = `6dce090`. HEAD avant : `ab95c6d` (inchangé depuis l'audit). HEAD après : voir PR (commit de suivi).
+- Fichiers modifiés : `backend/coach_session_comment.py`, `backend/llm_coach.py` (`_SESSION_COMMENT_DIRECTIVE` uniquement), `backend/tests/test_coach_c402_session_comment.py`, ce rapport. C388, Training V2, `SYSTEM_PROMPT_COACH`, chat C396 : non modifiés.
+
+### Défaut 1 — attribution des valeurs historiques
+- Cause : `_build_pools` fusionnait toutes les séances antérieures dans un seul ensemble ; une valeur valide d'une séance A pouvait être attribuée à une séance B.
+- Les données permettent le rattachement : `split_history_facts()` renvoie maintenant `{sessions: [faits par séance], aggregate: observed_training}`. Le validateur teste chaque séance comme propriétaire distinct.
+- Règles : toutes les valeurs « historiques » d'une phrase doivent appartenir à une même séance (ou à l'agrégat) ; sinon `history_misattribution`. Une valeur de la baseline C388 mêlée à une valeur d'historique n'appartenant pas à la même séance est rejetée. Les comparaisons C388 validées restent acceptées. Deux séances citées dans une même phrase sont rejetées (pas de devinette). Les dates historiques ne sont pas appariées (`ungrounded_date`). L'heure d'une date n'est plus lue comme une allure.
+### Défaut 2 — provenance temporelle de l'objectif
+- `training_cycles.goal` (écrit par `POST /training/set-goal`, écrasable, sans historique) est la seule source. `known_at_session_date: false` remplacé par `historical_goal_status: "unknown"`, avec `current_declared_goal` seulement si un cycle existe (pas de valeur par défaut présentée comme déclarée). Nouveau rejet `goal_history_claim` (FR/EN/ES) pour « à l'époque / at the time / entonces ». Directive C400 adaptée.
+
+### Tests
+- ~19 tests ajoutés (attribution, séances proches, baseline C388, comparaison C388 préservée, historique insuffisant/tronqué, date ambiguë, objectif absent/MAINTENANCE/défaut/passé/cause). Une assertion modifiée : `known_at_session_date is False` → `historical_goal_status == "unknown"` (changement volontaire du contrat).
+- C402 + C400 + Coach Context V2 + C392B + C394 + C388 : 315 passés, 0 échec.
+- Suite backend complète (hors `test_pr153_fallback_no_unvalidated_tss.py`, erreur de collecte préexistante) : avant 198 échecs/67 erreurs ; après 192/61 ; aucun échec nouveau (les écarts sont des tests dépendants de l'ordre).
+- Tests mockés uniquement : aucune génération LLM réelle.
+
+### Limites résiduelles
+- Validateur heuristique : ne prouve pas la vérité sémantique. Une valeur historique isolée n'est vérifiée que comme existante dans une séance antérieure ; les références pronominales inter-phrases ne sont pas attribuées ; les affirmations qualitatives sont rejetées par motifs, non vérifiées sémantiquement.
+- Données C401 indisponibles (`/tmp/c401` absent) ; aucune génération réelle (pas de clé LLM ni de réseau).
+- Recommandation : GO merge conditionnel (flag OFF maintenu) ; NO-GO activation tant que la validation runtime indépendante sur les 5 séances de référence n'est pas faite.
