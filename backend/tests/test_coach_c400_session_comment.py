@@ -101,8 +101,12 @@ async def test_comment_and_chat_receive_identical_context():
     assert resp.json()["status"] == "generated"
     chat_context = chat_llm.await_args.kwargs["context"]
     comment_context = llm.await_args.args[0]
-    assert comment_context == chat_context
-    assert "validated_workout_observations" in comment_context
+    # C402: same session facts, but a selected context (no current Training V2 / load / readiness).
+    for key in ("validated_workout_observations", "selected_workout_permissions"):
+        assert comment_context[key] == chat_context[key]
+    assert comment_context["workout_detail"]["distance_km"] == chat_context["workout_detail"]["distance_km"]
+    for chat_only in ("training_state", "readiness", "training_load", "performance", "today", "weekly_target"):
+        assert chat_only not in comment_context
 
 
 # 2. permissions / subscription
@@ -330,7 +334,7 @@ def test_unauthorised_comparison_rejected():
     ("The 10 km at 5:32 per km was steady, and the next session should be a bit faster than this.", "prescription"),
     ("This 10 km run fits your marathon goal well, and the pace of 5:32 per km was steady all along.", "context_as_session_fact"),
     ("- 10 km at 5:32 per km, and the pace was steady for the whole run that you did today.", "format"),
-    ("You did four efforts of one kilometre at a steady pace, which is what this run was all about.", "unverifiable_number_word"),
+    ("You did four efforts of one kilometre at a steady pace, which is what this run was all about.", "ungrounded_number"),
 ])
 def test_guard_rejects_unsupported_claims(text, reason):
     ok, reasons = _ok(text)
@@ -401,8 +405,7 @@ async def test_context_change_between_calls_invalidates_cache():
 
         def model_dump(self, mode="json"):
             data = super().model_dump(mode)
-            data["reference_date"] = Varying.reference
-            data["stats_7d"] = {"km": 30.0 if Varying.reference == "2026-01-15" else 42.0}
+            data["workout_detail"]["distance_km"] = 10.04 if Varying.reference == "2026-01-15" else 10.5
             return data
 
     stack, llm = _env(_FakeDB())
