@@ -129,7 +129,7 @@ Conditions avant activation de C400 :
 
 **Refactor sans changement de comportement :** les boucles de chiffres de `_check_numbers` sont extraites dans `_figure_checks()` pour que la vérification par segment (alerte 5) réutilise exactement les mêmes contrôles de provenance ; `_segments()` est nouveau.
 
-**Tests.** `tests/test_coach_c403_session_comment.py` : +72 cas (fuseaux, naïf/aware, compteurs, FR/EN/ES, négations, segments, dates seules, métriques distance/durée/allure/FC). Sur le code précédent, 15 de ces tests échouent (un par défaut au moins) ; les autres sont des contre-exemples légitimes qui passent avant et après. Aucune assertion existante modifiée.
+**Tests.** `tests/test_coach_c403_session_comment.py` : +51 cas (fuseaux, naïf/aware, compteurs, FR/EN/ES, négations, segments, dates seules, métriques distance/durée/allure/FC). Sur le code précédent, 15 de ces tests échouent (un par défaut au moins) ; les autres sont des contre-exemples légitimes qui passent avant et après. Aucune assertion existante modifiée.
 
 | Suites (C400, C402, C403, Context V2, C388, Narrative V3, voix C396) | Avant (`2382833`) | Après |
 |---|---|---|
