@@ -379,7 +379,7 @@ _TOKEN = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])")
 _HM = re.compile(
     r"(?<![\w:.,])(\d{1,2}(?:[.,]\d+)?)\s*(?:heures?|hours?|horas?|hrs?|h)(?![^\W\d_])"
     r"(?:\s*(?:et|and|y)\s+|\s*)"
-    r"(?:(\d{1,2})(?!\d|\s*(?:km|bpm|%|:)|[.,]\d)(?:\s*(?:minutes?|minutos?|mins?|mn)(?![^\W\d_]))?)?", re.I)
+    r"(?:(\d{1,2})(?!\d|\s*(?:km|bpm|%|:|secondes?|seconds?|segundos?|secs?|s(?![^\W\d_])))(?![.,]\d)(?:\s*(?:minutes?|minutos?|mins?|mn)(?![^\W\d_]))?)?", re.I)
 
 
 def hm_minutes(match: "re.Match") -> float:

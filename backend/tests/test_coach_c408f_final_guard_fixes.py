@@ -17,8 +17,9 @@ SENTENCE_END = " Le contexte disponible reste limité."
 
 
 def _intel(*, ratio=2.18, count=COUNT, kind="long_run_probable", tier="individual_history", position="low",
-           relative="used", easy_diagnosis=False, with_ratio=True):
-    evidence = {"duration_minutes": DURATION, "habitual_duration_minutes": HABITUAL,
+           relative="used", easy_diagnosis=False, with_ratio=True,
+           habitual=HABITUAL):
+    evidence = {"duration_minutes": DURATION, "habitual_duration_minutes": habitual,
                 "duration_ratio": ratio, "history_count": float(count)} if with_ratio else {}
     return {
         "session_classification": {
