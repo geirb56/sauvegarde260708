@@ -730,6 +730,9 @@ def build_evidence_contract(
             "reference_population": "most recent earlier sessions of the same sport with a distance within "
                                     f"{similar.get('distance_tolerance_pct')}% of this one",
             "activity_count": similar.get("sample_count"),
+            # The pace delta rests on the sessions with a usable pace only; never on activity_count.
+            "pace_sample_count": similar.get("pace_sample_count"),
+            "pace_difference_display": similar.get("pace_difference_display"),
             "window_days": similar.get("period_days"),
             "limits": list(similar.get("limitations") or []),
         })
