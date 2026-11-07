@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from decimal import ROUND_HALF_UP, Decimal
 from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Dict, List, Literal, Optional, Tuple
@@ -758,17 +759,22 @@ def _fmt_duration(duration_minutes: Optional[float]) -> Optional[str]:
     return f"{total_minutes} min"
 
 
+def _nearest_second(minutes: float) -> int:
+    """Display rounding only (half up, same as coach_context_v2); never feeds a calculation."""
+    return int((Decimal(str(minutes)) * 60).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def _fmt_pace(pace_min_km: Optional[float]) -> Optional[str]:
     if pace_min_km is None or pace_min_km <= 0:
         return None
-    total_seconds = int(round(float(pace_min_km) * 60))
+    total_seconds = _nearest_second(pace_min_km)
     return f"{total_seconds // 60}:{total_seconds % 60:02d}/km"
 
 
 def _fmt_pace_delta(delta_min_km: Optional[float]) -> Optional[str]:
     if delta_min_km is None:
         return None
-    total_seconds = int(round(abs(float(delta_min_km)) * 60))
+    total_seconds = _nearest_second(abs(float(delta_min_km)))
     sign = "+" if delta_min_km > 0 else ("-" if delta_min_km < 0 else "+")
     return f"{sign}{total_seconds // 60}:{total_seconds % 60:02d}/km"
 
