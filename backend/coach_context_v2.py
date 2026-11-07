@@ -23,7 +23,8 @@ from training_v2.prescription_snapshot import (
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
 from workout_analysis_v2 import WorkoutAnalysisV2Response
-from workout_intelligence_v3 import DURATION_MATCH_TOLERANCE_PCT
+from workout_analysis_v2 import SIMILAR_HISTORY_WINDOW_DAYS
+from workout_intelligence_v3 import DURATION_MATCH_TOLERANCE_PCT, LONG_RUN_MIN_HISTORY
 
 COACH_RECENT_WORKOUTS_WINDOW_DAYS = 30
 COACH_RECENT_WORKOUTS_MAX_COUNT = 30
@@ -518,6 +519,9 @@ def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
             "limitations": _text_items(coach.get("limitations"), 4),
         },
     }
+    duration_ratio = _duration_vs_habitual(classification, source)
+    if duration_ratio:
+        compact["classification"]["duration_vs_habitual"] = duration_ratio
     if comparison.get("status") == "available":
         compact["historical_comparison"]["provenance"] = _comparison_provenance(comparison, source)
     if comparison.get("status") == "available" and comparison.get("comparability") in {"strong", "moderate"}:
@@ -531,6 +535,41 @@ def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
             "hr_difference_bpm_at_comparable_pace": "bpm",
         }
     return compact
+
+
+def _duration_vs_habitual(classification: dict[str, Any], source: str) -> Optional[dict[str, Any]]:
+    """Session duration over the athlete's habitual duration, copied from V3's long-run evidence.
+
+    V3 computes it only for a long_run_probable classification: habitual = median duration of the
+    athlete's strictly earlier same-sport sessions (V3 history window, no other filter), with at
+    least LONG_RUN_MIN_HISTORY of them. Nothing is recomputed; no ratio exists for any other case.
+    """
+    evidence = classification.get("evidence") or {}
+    values = {key: _finite_number(evidence.get(key)) for key in (
+        "duration_ratio", "duration_minutes", "habitual_duration_minutes", "history_count")}
+    if classification.get("type") != "long_run_probable" or any(v is None or v <= 0 for v in values.values()):
+        return None
+    if values["history_count"] < LONG_RUN_MIN_HISTORY or values["history_count"] != int(values["history_count"]):
+        return None
+    return {
+        "source_path": f"{source}.session_classification.evidence.duration_ratio",
+        "metric": "session_duration_vs_habitual_median_duration",
+        "ratio": values["duration_ratio"],
+        "session_duration_minutes": values["duration_minutes"],
+        "habitual_duration_minutes": values["habitual_duration_minutes"],
+        "reference_count": int(values["history_count"]),
+        "reference_population": "athlete's strictly earlier sessions of the same sport within the V3 history "
+                                f"window ({SIMILAR_HISTORY_WINDOW_DAYS} days), any distance, environment or structure",
+        "habitual_definition": "median duration of the reference population",
+        "ratio_precision": "rounded to 2 decimals by V3",
+        "meaning": "a duration ratio only: not a pace or heart-rate comparison, not a physiological statement",
+    }
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 def _relative_effort_provenance(relative: dict[str, Any], classification: dict[str, Any], source: str) -> dict[str, Any]:
@@ -725,6 +764,9 @@ def build_evidence_contract(
                 ) if historical.get(key) is not None
             },
         })
+    duration_ratio = classification.get("duration_vs_habitual")
+    if isinstance(duration_ratio, dict):
+        comparisons.append(dict(duration_ratio))
     similar = ((analysis.get("comparison") or {}).get("similar") or {})
     if similar.get("available") and similar.get("sample_count"):
         comparisons.append({

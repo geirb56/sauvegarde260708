@@ -375,7 +375,16 @@ def split_history_facts(context: dict) -> dict:
 
 _NUMBER_IN_TEXT = re.compile(r"(?<![\w:.,])\d+(?:[.,]\d+)?")
 _TOKEN = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])")
-_HM = re.compile(r"\b(\d{1,2})\s*h\s*(\d{1,2})?\b", re.I)
+# "2h02", "2 h 02", "2 h 2 min", "2 heures et 2 minutes", "2 hours 2 minutes", "2 horas 2 minutos", "2,03 h".
+_HM = re.compile(
+    r"(?<![\w:.,])(\d{1,2}(?:[.,]\d+)?)\s*(?:heures?|hours?|horas?|hrs?|h)(?![^\W\d_])"
+    r"(?:\s*(?:et|and|y)\s+|\s*)"
+    r"(?:(\d{1,2})(?!\d|\s*(?:km|bpm|%|:)|[.,]\d)(?:\s*(?:minutes?|minutos?|mins?|mn)(?![^\W\d_]))?)?", re.I)
+
+
+def hm_minutes(match: "re.Match") -> float:
+    """Minutes expressed by an _HM match."""
+    return float(match.group(1).replace(",", ".")) * 60 + int(match.group(2) or 0)
 
 
 def _is(path: tuple, *needles: str) -> bool:
@@ -738,7 +747,7 @@ def _figure_checks(masked: str):
     masked = _TOKEN.sub(" ", masked)
 
     for match in _HM.finditer(masked):
-        minutes = int(match.group(1)) * 60 + int(match.group(2) or 0)
+        minutes = hm_minutes(match)
         yield "hm", (lambda pools, minutes=minutes: any(abs(minutes - c) <= 1 for c in pools["min"])), \
             "ungrounded_duration"
     masked = _HM.sub(" ", masked)
