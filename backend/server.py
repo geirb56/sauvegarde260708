@@ -93,7 +93,7 @@ from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
 from training_v2.training_paces_authority import load_canonical_training_paces
 from training_v2.snapshot_persistence import invalidate_future_snapshots
-from coach_context_v2 import build_coach_context_v2, build_llm_coach_context
+from coach_context_v2 import build_coach_context_v2, build_llm_coach_context, build_session_coaching_frame
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
@@ -2155,6 +2155,10 @@ async def _assemble_coach_llm_context(
             llm_context["validated_workout_observations"] = validated
     if not goal_declared:
         llm_context.pop("goal", None)
+    if workout_id is not None and workout_analysis_allowed:
+        frame = build_session_coaching_frame(llm_context, goal_declared=goal_declared)
+        if frame is not None:
+            llm_context["session_coaching_frame"] = frame
     return llm_context, scoped_narrative
 
 

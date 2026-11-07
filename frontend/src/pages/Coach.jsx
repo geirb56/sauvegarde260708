@@ -1,16 +1,23 @@
 import { useState, useRef, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Loader2, Trash2, X } from "lucide-react";
+import { Send, Loader2, Trash2, X, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useLanguage } from "@/context/LanguageContext";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
+
+function coachFailureKey(error) {
+  const status = error?.response?.status;
+  if (status === 404) return "coach.workoutNotFound";
+  if (status === 429) return "coach.limitReached";
+  return "coach.unavailable";
+}
 
 export default function Coach() {
   const [messages, setMessages] = useState([]);
@@ -135,7 +142,7 @@ export default function Coach() {
       toast.error(t("coach.error"));
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: t("coach.unavailable"),
+        content: t(coachFailureKey(error)),
         workout_id: workoutId,
       }]);
     } finally {
@@ -175,7 +182,7 @@ export default function Coach() {
       toast.error(t("coach.error"));
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: t("coach.unavailable"),
+        content: t(coachFailureKey(error)),
         ...(workoutId ? { workout_id: workoutId } : {}),
       }]);
     } finally {
@@ -277,6 +284,15 @@ export default function Coach() {
           <p className="min-w-0 flex-1 break-words text-sm text-muted-foreground">
             {workoutContextParts.length ? workoutContextParts.join(" · ") : t("coach.activeWorkout")}
           </p>
+          <Link
+            to={`/workout/${encodeURIComponent(activeWorkoutId)}`}
+            aria-label={t("coach.backToWorkout")}
+            title={t("coach.backToWorkout")}
+            data-testid="back-to-workout"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
           <Button
             type="button"
             variant="ghost"

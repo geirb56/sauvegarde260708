@@ -387,6 +387,52 @@ def build_llm_coach_context(
     return projected
 
 
+def build_session_coaching_frame(
+    llm_context: dict[str, Any],
+    *,
+    goal_declared: bool = True,
+) -> Optional[dict[str, Any]]:
+    """C408: compact, traceable frame for judging the selected workout.
+
+    Derived only from fields already present in the LLM context (no new calculation, no I/O).
+    It separates what is recorded, what is a current evaluation and what is unknown, so the
+    Coach never presents an intent hypothesis as a historical prescription.
+    """
+    detail = llm_context.get("workout_detail")
+    if not isinstance(detail, dict) or not detail.get("id"):
+        return None
+    analysis = detail.get("analysis") if isinstance(detail.get("analysis"), dict) else {}
+    phase_analysis = analysis.get("phase_analysis") if isinstance(analysis.get("phase_analysis"), dict) else {}
+    available = {
+        "pace": detail.get("avg_pace_min_km") is not None or bool(detail.get("avg_pace_display")),
+        "avg_hr": detail.get("avg_hr") is not None,
+        "km_splits": bool(detail.get("km_splits")),
+        "structured_phases": bool(phase_analysis.get("efforts") or phase_analysis.get("phases")),
+        "elevation": detail.get("elevation_gain_m") is not None,
+        "intensity_classification": bool(
+            ((analysis.get("signals") or {}).get("intensity") or {}).get("available")
+        ),
+    }
+    return {
+        "workout_id": detail["id"],
+        "workout_date": detail.get("date"),
+        "activity_type": detail.get("type"),
+        "data_available": available,
+        "missing_data": sorted(key for key, value in available.items() if not value),
+        "session_intent": {
+            "recorded_historical_prescription": "not_available_in_this_context",
+            "current_training_v2_evaluation": "current_training_context_only_not_historical",
+            "intent_status": "unknown_unless_supported_by_validated_observations",
+            "rule": (
+                "Never state the intended purpose of the session as fact. You may offer a probable "
+                "type only when validated observations or workout_detail.analysis support it, "
+                "worded as a hypothesis."
+            ),
+        },
+        "athlete_goal_declared": bool(goal_declared and llm_context.get("goal")),
+    }
+
+
 def _build_plan_goal(resolved_goal: Any) -> PlanGoal:
     return build_plan_goal(
         goal_type=resolved_goal.mapped_goal,
