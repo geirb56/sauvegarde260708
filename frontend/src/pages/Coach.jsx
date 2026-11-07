@@ -15,7 +15,12 @@ const API = API_BASE_URL;
 function coachFailureKey(error) {
   const status = error?.response?.status;
   if (status === 404) return "coach.workoutNotFound";
-  if (status === 429) return "coach.limitReached";
+  if (status === 429) {
+    // Only the structured backend codes tell a monthly quota from a temporary rate limit.
+    const code = error?.response?.data?.code;
+    if (code === "coach_monthly_quota_exhausted") return "coach.limitReached";
+    if (code === "rate_limit_exceeded") return "coach.rateLimited";
+  }
   return "coach.unavailable";
 }
 

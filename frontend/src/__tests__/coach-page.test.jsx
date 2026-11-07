@@ -753,12 +753,15 @@ describe("Coach page", () => {
   });
 
   test.each([
-    [404, "This workout is not accessible. Open it again from your sessions list."],
-    [429, "You have reached your monthly Coach limit. See your subscription for more."],
-    [500, "Unable to process request."],
-  ])("C408: backend status %s shows a specific message", async (status, expected) => {
+    [404, undefined, "This workout is not accessible. Open it again from your sessions list."],
+    [429, { code: "coach_monthly_quota_exhausted", detail: "monthly" }, "You have reached your monthly Coach limit. See your subscription for more."],
+    [429, { error: "Too many requests", code: "rate_limit_exceeded", retry_after: 60 }, "You are sending requests too quickly. Please wait a moment and try again."],
+    [429, { detail: "Too many coach messages this month." }, "Unable to process request."],
+    [429, undefined, "Unable to process request."],
+    [500, undefined, "Unable to process request."],
+  ])("C408-B: backend status %s %j shows a specific message", async (status, data, expected) => {
     mockWorkoutGet();
-    axios.post.mockRejectedValue({ response: { status } });
+    axios.post.mockRejectedValue({ response: { status, data } });
     renderAnalyze();
     expect(await screen.findByText(expected)).toBeInTheDocument();
   });

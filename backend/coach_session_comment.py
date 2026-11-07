@@ -175,6 +175,20 @@ def build_comment_context(llm_context: dict) -> dict:
     return out
 
 
+def build_session_chat_context(llm_context: dict) -> dict:
+    """C408-B: selected context for a question about a selected historical workout.
+
+    Same selection as the automatic comment (no today plan, readiness, load, predictions,
+    paces or free-text title), plus the C408 coaching frame (V3 evaluations, recorded
+    historical prescription, limits) and the coach-access flag.
+    """
+    out = build_comment_context(llm_context)
+    for key in ("session_coaching_frame", "coach_workout_analysis_allowed", "validated_workout_observations"):
+        if key in llm_context:
+            out[key] = copy.deepcopy(llm_context[key])
+    return out
+
+
 # ------------------------------------------------------------------ fact scope
 
 def _walk(value: Any, path: tuple, out: list) -> None:
