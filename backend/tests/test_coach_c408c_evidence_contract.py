@@ -102,7 +102,7 @@ def test_history_never_contains_another_users_marker():
 # ------------------------------------------------ 3/4. provenance
 
 def _relative(count=31, status="used"):
-    return {"status": status, "relative_position": "lower_part", "reference_count": count,
+    return {"status": status, "relative_position": "low", "reference_count": count,
             "period_start": "2026-04-20", "period_end": "2026-10-05",
             "criteria": {"window_days": 180, "duration_ratio_min": 0.5, "duration_ratio_max": 2.0}}
 
@@ -176,7 +176,7 @@ def _context(*, status="indeterminate", timing="recorded_before_session", record
     frame = {
         "evidence_contract": contract,
         "v3_assessment": {"classification": {"relative_effort": {
-            "status": "used", "relative_position": "lower_part", "reference_count": relative_count,
+            "status": "used", "relative_position": "low", "reference_count": relative_count,
             "provenance": {"activity_count": relative_count, "period_start": "2026-04-20",
                            "period_end": "2026-10-05"}}}},
         "session_intent": {"recorded_historical_prescription": (

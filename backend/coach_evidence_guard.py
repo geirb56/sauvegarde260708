@@ -75,8 +75,26 @@ def _int_set(*values: Any) -> set[int]:
     return {int(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
+_HR_WORD = re.compile(r"\b(?:FC|HR|fr[ée]quence cardiaque|heart rate|frecuencia card[ií]aca|cardiaque)\b", re.I)
+_POS_LOW = re.compile(r"(partie basse|zone basse|lower (?:part|end|range|quarter)|low end|parte baja|"
+                      r"plus basses?|lowest|bas(?:se)? de (?:votre|ton|ta|vos) )", re.I)
+_POS_HIGH = re.compile(r"(partie haute|zone haute|upper (?:part|end|range|quarter)|high end|parte alta|"
+                       r"plus hautes?|highest)", re.I)
+_COMPARABLE_EFFORT = re.compile(
+    r"(?:(?:[àa]|at|a)\s+(?:FC|HR|allure|pace|ritmo)\s+(?:comparable|similaire|similar)|comparable\s+(?:HR|FC|pace|"
+    r"allure|ritmo)|(?:HR|FC|pace|allure|ritmo)\s+(?:at|[àa]|a)\s+(?:a\s+)?comparable)", re.I)
+_HISTORY_LIST = re.compile(
+    r"(derni[èe]res? (?:\w+\s+)?(?:s[ée]ances?|sorties?)|(?:last|recent|latest|previous)\s+(?:\w+\s+)?"
+    r"(?:sessions?|runs?|workouts?)|[úu]ltimas? (?:\w+\s+)?(?:sesiones?|salidas?)|"
+    r"s[ée]ances? (?:affich|list|transmises?)|listed|shown|mostrad)", re.I)
+_BELOW_LT1 = re.compile(r"(sous (?:le |la )?(?:LT1|seuil 1|premier seuil)|below (?:the )?(?:LT1|first threshold)|"
+                        r"por debajo (?:de(?:l)? )?(?:LT1|primer umbral))", re.I)
+_ABOVE_LT2 = re.compile(r"(au[- ]dessus (?:du |de )?(?:LT2|seuil 2|second seuil)|above (?:the )?(?:LT2|second threshold)|"
+                        r"por encima (?:de(?:l)? )?(?:LT2|segundo umbral))", re.I)
+
+
 def _contract(context: dict) -> dict:
-    """What the contract says about populations and prescription, read from the chat context."""
+    """What the contract says, with every count tied to the metric and population it describes."""
     frame = context.get("session_coaching_frame") if isinstance(context.get("session_coaching_frame"), dict) else {}
     v3 = frame.get("v3_assessment") if isinstance(frame.get("v3_assessment"), dict) else {}
     relative = ((v3.get("classification") or {}).get("relative_effort")) or {}
@@ -88,29 +106,54 @@ def _contract(context: dict) -> dict:
         (c.get("activity_count") for c in contract.get("validated_comparisons") or []
          if c.get("metric") == "pace_and_hr_vs_similar_distance_sessions"), None)
     sub = ((comparison.get("provenance") or {}).get("sub_populations")) or {}
-    v3_counts = _int_set(
-        relative.get("reference_count") if relative.get("status") == "used" else None,
-        comparison.get("reference_count"),
-        *(block.get("activity_count") for block in sub.values() if isinstance(block, dict)),
-    )
+    relative_used = relative.get("status") == "used"
+    by_metric = {
+        "hr_position": _int_set(relative.get("reference_count") if relative_used else None),
+        "comparable_effort": _int_set(
+            comparison.get("reference_count"),
+            *(block.get("activity_count") for block in sub.values() if isinstance(block, dict))),
+        "similar_distance": _int_set(similar_count),
+        "history_list": _int_set(history.get("included_count"), history.get("eligible_count")),
+        "profile": _int_set(profile.get("sessions_count"), profile.get("sessions_with_distance_count")),
+    }
     recorded = (frame.get("session_intent") or {}).get("recorded_historical_prescription")
+    intensity = v3.get("intensity") or {}
     return {
-        "allowed_counts": v3_counts | _int_set(
-            history.get("included_count"), history.get("eligible_count"),
-            profile.get("sessions_count"), profile.get("sessions_with_distance_count"), similar_count, 1),
-        "v3_counts": v3_counts,
-        "similar_counts": _int_set(similar_count),
+        "by_metric": by_metric,
+        "all_counts": set().union(*by_metric.values()),
         "shown_count": history.get("included_count"),
         "population_count": profile.get("sessions_count"),
         "has_profile_stat": bool(profile),
+        "relative_used": relative_used,
+        "relative_position": relative.get("relative_position") if relative_used else None,
+        "threshold_position": intensity.get("position_vs_declared_thresholds")
+        if intensity.get("thresholds_available") else None,
         "recorded": recorded if isinstance(recorded, dict) else None,
         "has_not_demonstrated": set(contract.get("not_demonstrated") or {}),
     }
 
 
-def check_contract_claims(text: str, context: dict) -> set[str]:
+def _allowed_counts(sentence: str, c: dict) -> set[int]:
+    """Counts a sentence may cite, decided by the kind of population the sentence talks about."""
+    by = c["by_metric"]
+    if _HR_WORD.search(sentence) and (_HR_POSITION.search(sentence) or _POS_LOW.search(sentence)
+                                      or _POS_HIGH.search(sentence)):
+        return by["hr_position"]  # exclusive: an HR position is about the relative-HR population only
+    if _COMPARABLE_EFFORT.search(sentence):
+        return by["comparable_effort"]
+    if _SAME_DISTANCE.search(sentence):
+        return by["similar_distance"]
+    if _HISTORY_LIST.search(sentence):
+        return by["history_list"]
+    if c["has_profile_stat"] and _AVERAGE_WORDING.search(sentence):
+        return by["profile"] | by["history_list"]
+    return c["all_counts"] | {1}  # no stated population: a known count, but unattributed (documented limit)
+
+
+def check_contract_claims(text: str, context: dict, question: Optional[str] = None) -> set[str]:
     """Contract-based reasons for rejecting a reply; empty when no checked claim is contradicted."""
     c = _contract(context)
+    requested = _requested_counts(question, c)
     reasons: set[str] = set()
     recorded = c["recorded"]
     status = (recorded or {}).get("assessment_status")
@@ -118,16 +161,34 @@ def check_contract_claims(text: str, context: dict) -> set[str]:
         counts: list[int] = [int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(sentence)]
         counts += [csc._WORD_VALUE[m.group(1).lower()] for m in _WORD_COUNT_BEFORE_NOUN.finditer(sentence)]
         counts = [n for n in counts if n > 1]
+        allowed = _allowed_counts(sentence, c)
         for n in counts:
-            if n not in c["allowed_counts"]:
+            if n in allowed or n in requested:
+                continue
+            if n in c["all_counts"] and allowed is c["by_metric"]["hr_position"]:
+                reasons.add("hr_position_wrong_population")
+            else:
                 reasons.add("ungrounded_population_count")
         if _SAME_DISTANCE.search(sentence) and not csc._only_negated(sentence, _SAME_DISTANCE):
-            by_count = any(n in c["v3_counts"] and n not in c["similar_counts"] for n in counts)
+            by_count = any(n in c["by_metric"]["comparable_effort"] | c["by_metric"]["hr_position"]
+                           and n not in c["by_metric"]["similar_distance"] for n in counts)
             if _HR_POSITION.search(sentence) or by_count:
                 reasons.add("population_misdescribed")
+        if _HR_WORD.search(sentence) and not csc._only_negated(sentence, _HR_POSITION):
+            low, high = bool(_POS_LOW.search(sentence)), bool(_POS_HIGH.search(sentence))
+            if low or high or _HR_POSITION.search(sentence):
+                if not c["relative_used"]:
+                    reasons.add("hr_position_not_established")
+                elif (low and c["relative_position"] != "low") or (high and c["relative_position"] != "high"):
+                    reasons.add("hr_position_contradicts_v3")
+        position = c["threshold_position"]
+        if _BELOW_LT1.search(sentence) and position != "below_LT1" or \
+                _ABOVE_LT2.search(sentence) and position != "above_LT2":
+            reasons.add("threshold_position_not_established")
         if (c["has_profile_stat"] and _AVERAGE_WORDING.search(sentence)
                 and c["shown_count"] and c["population_count"] and c["shown_count"] != c["population_count"]
-                and c["shown_count"] in counts and c["population_count"] not in counts):
+                and c["shown_count"] in counts and c["population_count"] not in counts
+                and not _HISTORY_LIST.search(sentence)):
             reasons.add("statistic_on_wrong_population")
         if _NON_COMPLIANCE.search(sentence) and status != "deviation" and not csc._only_negated(
                 sentence, _NON_COMPLIANCE):
@@ -149,12 +210,26 @@ def check_contract_claims(text: str, context: dict) -> set[str]:
     return reasons
 
 
-def verify_chat_reply(text: Any, context: dict, language: str) -> dict:
-    """{"passed", "level", "rejected_checks"}: C403 heuristic guard plus the contract checks."""
+def _requested_counts(question: Optional[str], c: dict) -> set[int]:
+    """List sizes the user asked for ("my last five sessions"): honoured only up to what is really available."""
+    if not isinstance(question, str) or not question.strip():
+        return set()
+    available = c["shown_count"] if isinstance(c["shown_count"], int) else 0
+    asked = [int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(question)]
+    asked += [csc._WORD_VALUE[m.group(1).lower()] for m in _WORD_COUNT_BEFORE_NOUN.finditer(question)]
+    return {n for n in asked if 1 < n <= available}
+
+
+def verify_chat_reply(text: Any, context: dict, language: str, question: Optional[str] = None) -> dict:
+    """{"passed", "level", "rejected_checks"}: C403 heuristic guard plus the contract checks.
+
+    "format" (bullets, numbered lists) is presentation only: the chat may use them when asked,
+    so it is not a rejection reason here (it stays one for the automatic comment).
+    """
     ok, reasons = csc.validate_session_comment(text, context, language)
-    rejected = set(reasons)
+    rejected = set(reasons) - {"format"}
     if isinstance(text, str) and text.strip():
-        rejected |= check_contract_claims(text.strip(), context)
+        rejected |= check_contract_claims(text.strip(), context, question)
     return {"passed": not rejected, "level": LEVEL, "rejected_checks": sorted(rejected)}
 
 
@@ -186,8 +261,15 @@ _FALLBACK = {
         "after": "Une prescription du jour ({kind}) n'a été enregistrée qu'après la séance : ce n'est pas une "
                  "intention connue avant le départ.",
         "unknown": "Une prescription du jour ({kind}) existe, mais l'heure de son enregistrement est inconnue.",
-        "limit": "Ces données ne permettent pas de déterminer l'intensité physiologique ni une "
-                 "progression ; la récupération n'est pas mesurée.",
+        "limits": {
+            "physiological_intensity_undetermined": "L'intensité physiologique ne peut pas être déterminée "
+                                                    "(aucun seuil personnel enregistré).",
+            "progress_not_demonstrated": "Aucune progression n'est établie.",
+            "recovery_not_measured": "La récupération n'est pas mesurée.",
+        },
+        "thresholds": "Selon vos seuils enregistrés, la FC moyenne se situe {position}.",
+        "threshold_position": {"below_LT1": "sous LT1", "between_LT1_LT2": "entre LT1 et LT2",
+                               "above_LT2": "au-dessus de LT2"},
         "units": {"distance_km": "{v} km", "duration_minutes": "{v} min", "avg_hr_bpm": "FC moyenne {v} bpm",
                   "avg_pace": "allure moyenne {v}", "elevation_gain_m": "{v} m de dénivelé positif"},
     },
@@ -205,7 +287,15 @@ _FALLBACK = {
         "after": "A prescription for the day ({kind}) was only recorded after the session: it is not an intention "
                  "known before the start.",
         "unknown": "A prescription for the day ({kind}) exists, but the time it was recorded is unknown.",
-        "limit": "These data cannot establish the physiological intensity, a need for recovery or progress.",
+        "limits": {
+            "physiological_intensity_undetermined": "The physiological intensity cannot be determined "
+                                                    "(no personal threshold recorded).",
+            "progress_not_demonstrated": "No progress is established.",
+            "recovery_not_measured": "Recovery is not measured.",
+        },
+        "thresholds": "According to your recorded thresholds, the average HR sits {position}.",
+        "threshold_position": {"below_LT1": "below LT1", "between_LT1_LT2": "between LT1 and LT2",
+                               "above_LT2": "above LT2"},
         "units": {"distance_km": "{v} km", "duration_minutes": "{v} min", "avg_hr_bpm": "average HR {v} bpm",
                   "avg_pace": "average pace {v}", "elevation_gain_m": "{v} m of elevation gain"},
     },
@@ -221,8 +311,15 @@ _FALLBACK = {
         "after": "La prescripción del día ({kind}) solo se registró después de la sesión: no es una intención "
                  "conocida antes de salir.",
         "unknown": "Existe una prescripción del día ({kind}), pero se desconoce cuándo se registró.",
-        "limit": "Estos datos no permiten determinar la intensidad fisiológica, una necesidad de recuperación "
-                 "ni un progreso.",
+        "limits": {
+            "physiological_intensity_undetermined": "La intensidad fisiológica no puede determinarse "
+                                                    "(ningún umbral personal registrado).",
+            "progress_not_demonstrated": "No se establece ningún progreso.",
+            "recovery_not_measured": "La recuperación no está medida.",
+        },
+        "thresholds": "Según tus umbrales registrados, la FC media se sitúa {position}.",
+        "threshold_position": {"below_LT1": "por debajo de LT1", "between_LT1_LT2": "entre LT1 y LT2",
+                               "above_LT2": "por encima de LT2"},
         "units": {"distance_km": "{v} km", "duration_minutes": "{v} min", "avg_hr_bpm": "FC media {v} bpm",
                   "avg_pace": "ritmo medio {v}", "elevation_gain_m": "{v} m de desnivel positivo"},
     },
@@ -262,7 +359,15 @@ def build_contract_fallback(context: dict, language: str) -> Optional[str]:
         timing = {"recorded_before_session": "before", "recorded_after_session": "after"}.get(
             recorded.get("recording_timing"), "unknown")
         sentences.append(texts[timing].format(kind=recorded.get("prescribed_workout_type") or "?"))
+    intensity = ((frame.get("v3_assessment") or {}).get("intensity") or {}) if isinstance(
+        frame.get("v3_assessment"), dict) else {}
+    if intensity.get("thresholds_available") and intensity.get("position_vs_declared_thresholds") in \
+            texts["threshold_position"]:
+        sentences.append(texts["thresholds"].format(
+            position=texts["threshold_position"][intensity["position_vs_declared_thresholds"]]))
     if not sentences:
         return None
-    sentences.append(texts["limit"])
-    return " ".join(sentences)
+    # Only the limits the contract itself declares: nothing is asserted as undetermined otherwise.
+    declared = contract.get("not_demonstrated") or {}
+    limits = [text for key, text in texts["limits"].items() if key in declared]
+    return " ".join(sentences + limits)

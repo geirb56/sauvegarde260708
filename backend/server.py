@@ -2348,7 +2348,8 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         if request.workout_id is not None and workout_analysis_allowed:
             # C408-C: one deterministic check of the single generated reply; no second LLM call.
             check_started = time.perf_counter()
-            verification = coach_evidence_guard.verify_chat_reply(response_text, llm_context, language)
+            verification = coach_evidence_guard.verify_chat_reply(
+                response_text, llm_context, language, question=user_message)
             if not verification["passed"]:
                 logger.warning("[Coach] Reply rejected by evidence guard: %s", verification["rejected_checks"])
                 fallback = coach_evidence_guard.build_contract_fallback(llm_context, language)

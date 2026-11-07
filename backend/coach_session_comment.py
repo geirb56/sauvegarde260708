@@ -81,25 +81,20 @@ def _provably_prior(sessions: list, detail: dict, llm_context: dict) -> list:
     same-day session is kept only when both timestamps are known and strictly ordered.
     Unparseable or undated sessions are dropped.
     """
-    from coach_context_v2 import _parse_exact_datetime, _parse_iso_date
+    from coach_context_v2 import _provable_order, _parse_iso_date
 
     raw = detail.get("start_time") or detail.get("date") or llm_context.get("selected_workout_history_cutoff")
-    selected_day = _parse_iso_date(raw)
-    selected_at = _parse_exact_datetime(raw)
-    if selected_day is None:
+    if _parse_iso_date(raw) is None:
         return []
-    kept = []
+    kept, seen = [], set()
     for item in sessions:
-        day = _parse_iso_date(item.get("date"))
-        if day is None:
+        if _provable_order(item.get("date"), raw) != "before":
             continue
-        at = _parse_exact_datetime(item.get("date"))
-        if selected_at is not None and at is not None:
-            # Normalized instants (aware, UTC) decide; calendar dates of mixed offsets do not.
-            if at < selected_at:
-                kept.append(item)
-        elif day < selected_day:
-            kept.append(item)
+        key = str(item.get("id") or "") or (item.get("date"), item.get("distance_km"), item.get("duration_minutes"))
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(item)
     return kept
 
 
@@ -118,7 +113,13 @@ def _history_block(prior: list, shown: list, coverage: dict, llm_context: dict) 
     available, included = coverage.get("available_count"), coverage.get("included_count")
     counted = isinstance(available, int) and isinstance(included, int) and not isinstance(available, bool)
     upstream_excluded = max(0, available - included) if counted else 0
-    eligible = len(prior) + upstream_excluded
+    strict = coverage.get("strictly_prior_available_count")
+    if isinstance(strict, int) and not isinstance(strict, bool):
+        # Counted upstream before the cap with the same strict antecedence rule as `prior`.
+        eligible = max(len(prior), strict)
+        counted = True
+    else:
+        eligible = len(prior) + upstream_excluded
     population_truncated = bool(coverage.get("truncated"))
     block: dict = {
         "scope": "sessions provably before the analysed session; same-day sessions are kept only "
@@ -265,24 +266,43 @@ def _walk(value: Any, path: tuple, out: list) -> None:
         out.append((path, value))
 
 
-def _frame_facts(context: dict) -> dict:
-    """Numbers the C408 frame legitimately gives the Coach (V3 results, copied not recomputed)."""
+def _frame_facts(context: dict) -> tuple[dict, dict]:
+    """(session measures, comparison references) from the C408 frame, copied from V3 (not recomputed).
+
+    Session measures: this activity's own HR figures and the size of its reference populations.
+    Comparison references: historical quartiles/median and signed differences. They are values of
+    OTHER sessions or derived gaps, so they never join the pool that grounds "your average HR was X".
+    """
     frame = context.get("session_coaching_frame")
     if not isinstance(frame, dict) or not isinstance(frame.get("v3_assessment"), dict):
-        return {}
+        return {}, {}
     v3 = frame["v3_assessment"]
     relative = ((v3.get("classification") or {}).get("relative_effort")) or {}
     comparison = v3.get("historical_comparison") or {}
-    facts: dict = {
-        "relative_hr": {k: relative.get(k) for k in (
-            "current_hr_bpm", "reference_count", "hr_q1_bpm", "hr_median_bpm", "hr_q3_bpm")},
+    session = {
+        "relative_hr": {k: relative.get(k) for k in ("current_hr_bpm", "reference_count")},
         "comparison_count": comparison.get("reference_count"),
         "session_max_hr_bpm": (v3.get("intensity") or {}).get("session_max_hr_bpm"),
     }
+    references: dict = {
+        "relative_hr": {k: relative.get(k) for k in ("hr_q1_bpm", "hr_median_bpm", "hr_q3_bpm")},
+    }
     for key in ("pace_difference_sec_per_km_at_comparable_hr", "hr_difference_bpm_at_comparable_pace"):
         if comparison.get(key) is not None:
-            facts[key] = comparison[key]
-    return facts
+            references[key] = comparison[key]
+    return session, references
+
+
+def v3_comparison_available(context: dict) -> bool:
+    """True when V3 itself supplies a usable comparison (relative HR or comparable-effort), whatever V2 says."""
+    frame = context.get("session_coaching_frame")
+    v3 = frame.get("v3_assessment") if isinstance(frame, dict) else None
+    if not isinstance(v3, dict):
+        return False
+    relative = (v3.get("classification") or {}).get("relative_effort") or {}
+    comparison = v3.get("historical_comparison") or {}
+    return relative.get("status") == "used" or (
+        comparison.get("status") == "available" and comparison.get("comparability") in {"strong", "moderate"})
 
 
 def frame_dates(context: dict) -> list:
@@ -318,9 +338,11 @@ def split_session_facts(context: dict) -> tuple[list, list]:
     session: list = []
     _walk(detail, (), session)
     _walk(context.get("validated_workout_observations") or {}, ("observations",), session)
-    _walk(_frame_facts(context), ("observations", "frame"), session)
+    frame_session, frame_references = _frame_facts(context)
+    _walk(frame_session, ("observations", "frame"), session)
     compared: list = []
     _walk(comparison or {}, ("comparison",), compared)
+    _walk(frame_references, ("comparison", "frame"), compared)
     return session, compared
 
 
@@ -380,6 +402,10 @@ def _build_pools(facts: list) -> dict:
         if v != v or abs(v) == float("inf"):
             continue
         pools["any"].add(v)
+        if _is(path, "bpm") and _is(path, *_GAP_KEYS):
+            # a signed HR gap is cited in bpm, even when its key names the pace it was matched at
+            pools["bpm"].add(abs(v))
+            continue
         pace_like = _is(path, "pace", "per_km", "min_km", "sec_km")
         if pace_like:
             seconds = v if _is(path, "second", "sec_") and not _is(path, "min_km") else v * 60
@@ -488,6 +514,7 @@ _HISTORY_REF = re.compile(
     r"\b(earlier|previous|prior|last (?:run|session|workout)|before this|history|"
     r"pr[ée]c[ée]dent\w*|ant[ée]rieur\w*|avant (?:cette|celle)|derni[èe]re (?:sortie|s[ée]ance)|historique|"
     r"anterior\w*|antes de (?:esta|este)|[úu]ltima (?:salida|sesi[óo]n)|historial)\b", re.I)
+_THRESHOLD_TERM = re.compile(r"\bLT[12]\b|\bseuil|threshold|umbral", re.I)
 _UNSUPPORTED_PHYSIO = re.compile(
     r"(\bLT[12]\b|VO2\s?max|\bVMA\b|\bFC\s?max\b|\bHR\s?max\b|max(?:imum)?\s+heart\s+rate|"
     r"fr[ée]quence cardiaque maximale|frecuencia card[ií]aca m[aá]xima|\bseuil|threshold|umbral|"
@@ -910,7 +937,7 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
 
     permissions = context.get("selected_workout_permissions") or {}
     session_facts, comparison_facts = split_session_facts(context)
-    comparison_ok = bool(permissions.get("similar_comparison_available"))
+    comparison_ok = bool(permissions.get("similar_comparison_available")) or v3_comparison_available(context)
     history_facts = split_history_facts(context)
     owners = [{**_build_pools(f), "date": d} for f, d in zip(history_facts["sessions"], history_facts["dates"])]
     if history_facts["aggregate"]:
@@ -928,12 +955,20 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
     # Fact/limitation text never authorizes a claim: the substring "LT1" in a C388
     # limitation does not prove the session was below LT1. Only abstention wording or an
     # explicit structured permission lets such terms through.
-    intensity_ok = permissions.get("intensity_interpretation_allowed") is True
+    frame = context.get("session_coaching_frame")
+    v3_intensity = ((frame.get("v3_assessment") or {}).get("intensity") or {}) if isinstance(frame, dict) \
+        and isinstance(frame.get("v3_assessment"), dict) else {}
+    v3_thresholds = bool(v3_intensity.get("thresholds_available")) and v3_intensity.get(
+        "position_vs_declared_thresholds") in {"below_LT1", "between_LT1_LT2", "above_LT2"}
+    intensity_ok = permissions.get("intensity_interpretation_allowed") is True or v3_thresholds
     progress_ok = permissions.get("progress_regression_allowed") is True and comparison_ok
     for sentence in _sentences(text):
         abstention = abstains(sentence)
         if not abstention:
-            if _UNSUPPORTED_PHYSIO.search(sentence):
+            physio = [m.group(0) for m in _UNSUPPORTED_PHYSIO.finditer(sentence)]
+            # Personal thresholds are citable only when V3 holds them (their position is
+            # then checked by the evidence guard); every other physiological term stays refused.
+            if physio and not (v3_thresholds and all(_THRESHOLD_TERM.search(t) for t in physio)):
                 reasons.add("unsupported_physiology")
             if not intensity_ok and _INTENSITY.search(sentence):
                 reasons.add("intensity_not_allowed")

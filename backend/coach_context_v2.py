@@ -55,6 +55,9 @@ class CoachRecentWorkoutsCoverage(BaseModel):
     included_count: int
     max_count: int
     truncated: bool
+    # Sessions proven earlier than the analysed one by the same rule as the Coach history
+    # selection (strict, de-duplicated); None when there is no analysed session.
+    strictly_prior_available_count: Optional[int] = None
 
 
 class CoachWorkoutDetail(BaseModel):
@@ -242,6 +245,55 @@ def _parse_exact_datetime(value: Any) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_datetime_with_zone(value: Any) -> tuple[Optional[datetime], bool]:
+    """(datetime, has_explicit_zone). Naive values keep their wall-clock time and are NOT labelled UTC."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and ("T" in value or " " in value):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None, False
+    else:
+        return None, False
+    if parsed.tzinfo is None:
+        return parsed, False
+    return parsed.astimezone(timezone.utc), True
+
+
+_MIN_UTC_OFFSET = timedelta(hours=-12)
+_MAX_UTC_OFFSET = timedelta(hours=14)
+
+
+def _provable_order(candidate: Any, reference: Any) -> str:
+    """"before" | "after" | "unknown": is `candidate` provably earlier than `reference`?
+
+    Aware vs aware compares absolute instants. Naive vs naive compares wall-clock times (both
+    come from the same local-time source; no zone is assumed). Naive vs aware only decides when
+    the order holds for every real UTC offset (-12h..+14h). A bare date only proves order across
+    different calendar days; same-day order is unknown.
+    """
+    a, a_aware = _parse_datetime_with_zone(candidate)
+    b, b_aware = _parse_datetime_with_zone(reference)
+    if a is not None and b is not None:
+        # Naive values only get a UTC label for the arithmetic below; they are never read as UTC.
+        a = a if a_aware else a.replace(tzinfo=timezone.utc)
+        b = b if b_aware else b.replace(tzinfo=timezone.utc)
+        if a_aware == b_aware:
+            return "before" if a < b else "after" if a > b else "unknown"
+        if a_aware:  # b is a local wall-clock time of unknown zone: its instant lies in [b-14h, b+12h]
+            if a < b - _MAX_UTC_OFFSET:
+                return "before"
+            return "after" if a > b - _MIN_UTC_OFFSET else "unknown"
+        if a - _MIN_UTC_OFFSET < b:  # a naive, b aware: a's instant lies in [a-14h, a+12h]
+            return "before"
+        return "after" if a - _MAX_UTC_OFFSET > b else "unknown"
+    day_a, day_b = _parse_iso_date(candidate), _parse_iso_date(reference)
+    if day_a is None or day_b is None or day_a == day_b:
+        return "unknown"
+    return "before" if day_a < day_b else "after"
+
+
 def _format_pace_min_km(value: Any) -> Optional[str]:
     try:
         decimal_value = Decimal(str(value))
@@ -347,7 +399,7 @@ def build_llm_coach_context(
             (workout_detail.get("start_time"))
             or selected_date
         )
-        exact_cutoff = _parse_exact_datetime(raw_selected_date)
+        exact_cutoff, cutoff_has_zone = _parse_datetime_with_zone(raw_selected_date)
         projected["selected_workout_permissions"] = {
             "intensity_interpretation_allowed": intensity_available,
             "raw_hr_is_descriptive_only": True,
@@ -365,6 +417,10 @@ def build_llm_coach_context(
         projected["selected_workout_history_cutoff_precision"] = (
             "strict_timestamp_exclusive" if exact_cutoff else "date_inclusive"
         )
+        if exact_cutoff:
+            # A naive Garmin local time is kept as written: it is not an instant in UTC.
+            projected["selected_workout_history_cutoff_zone"] = (
+                "explicit" if cutoff_has_zone else "unknown_local_time")
         selected_workout_date = _parse_iso_date(raw_selected_date)
         reference_date = canonical.get("reference_date")
         projected["current_training_context"] = {
@@ -467,6 +523,10 @@ def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
         compact["historical_comparison"]["pace_difference_sec_per_km_at_comparable_hr"] = pace.get(
             "pace_difference_sec_per_km")
         compact["historical_comparison"]["hr_difference_bpm_at_comparable_pace"] = hr.get("hr_difference_bpm")
+        compact["historical_comparison"]["difference_units"] = {
+            "pace_difference_sec_per_km_at_comparable_hr": "s/km",
+            "hr_difference_bpm_at_comparable_pace": "bpm",
+        }
     return compact
 
 
@@ -541,18 +601,15 @@ def _prescription_timing(served_at: Any, session_start: Any) -> str:
     """Was the recorded prescription stored before the session started?
 
     Compares the snapshot's first-served instant with the session start; never infers an
-    intention. A bare session date (no clock) only proves ordering across different days.
+    intention. A session start without a zone (Garmin local time) is not assumed to be UTC:
+    the order is decided only when it holds for every possible UTC offset, else the timing
+    is unknown. A bare session date only proves ordering across different days.
     """
-    served = _parse_exact_datetime(served_at)
-    if served is None:
+    order = _provable_order(served_at, session_start)
+    if _parse_datetime_with_zone(served_at)[0] is None and _parse_iso_date(served_at) is None:
         return "recording_time_unknown"
-    start = _parse_exact_datetime(session_start)
-    if start is not None:
-        return "recorded_before_session" if served < start else "recorded_after_session"
-    start_day, served_day = _parse_iso_date(session_start), served.date()
-    if start_day is None or served_day == start_day:
-        return "recording_time_unknown"
-    return "recorded_before_session" if served_day < start_day else "recorded_after_session"
+    return {"before": "recorded_before_session", "after": "recorded_after_session"}.get(
+        order, "recording_time_unknown")
 
 
 _TIMING_RULES = {
@@ -657,6 +714,13 @@ def build_evidence_contract(
             "metric": "pace_and_hr_at_comparable_effort",
             "source_path": "session_coaching_frame.v3_assessment.historical_comparison",
             "provenance": "historical_comparison.provenance",
+            "values": {
+                name: {"value": historical.get(key), "unit": unit}
+                for name, key, unit in (
+                    ("pace_difference_at_comparable_hr", "pace_difference_sec_per_km_at_comparable_hr", "s/km"),
+                    ("hr_difference_at_comparable_pace", "hr_difference_bpm_at_comparable_pace", "bpm"),
+                ) if historical.get(key) is not None
+            },
         })
     similar = ((analysis.get("comparison") or {}).get("similar") or {})
     if similar.get("available") and similar.get("sample_count"):
@@ -1030,6 +1094,7 @@ def _is_before_selected_workout(
     selected_workout_id: str,
     selected_date: date,
     selected_datetime: Optional[datetime],
+    selected_raw: Any = None,
 ) -> bool:
     workout_id = recent_workout.id if isinstance(recent_workout, CoachRecentWorkout) else recent_workout.get("id")
     if str(workout_id or "") == selected_workout_id:
@@ -1043,11 +1108,27 @@ def _is_before_selected_workout(
     if workout_date is None:
         return False
     if selected_datetime is not None:
-        workout_datetime = _parse_exact_datetime(raw_date)
-        if workout_datetime is not None:
-            return workout_datetime < selected_datetime
+        selected_raw = selected_raw if selected_raw is not None else selected_datetime
+        if _parse_datetime_with_zone(raw_date)[0] is not None:
+            return _provable_order(raw_date, selected_raw) == "before"
         return workout_date < selected_date
     return workout_date <= selected_date
+
+
+def _strictly_prior_count(items: Any, selected_raw: Any, selected_workout_id: str) -> Optional[int]:
+    """Count distinct earlier sessions with the same strict rule as `coach_session_comment`."""
+    if selected_raw is None:
+        return None
+    seen: set = set()
+    for item in items:
+        if isinstance(item, CoachRecentWorkout):
+            raw, wid = item.date, item.id
+        else:
+            raw, wid = item.get("start_time") or item.get("date"), item.get("id")
+        if str(wid or "") == selected_workout_id or _provable_order(raw, selected_raw) != "before":
+            continue
+        seen.add(str(wid) if wid else str(raw))
+    return len(seen)
 
 
 def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
@@ -1253,9 +1334,8 @@ async def build_coach_context_v2(
         workout_values.get("start_time") or workout_values.get("date")
     )
     history_reference_date = selected_workout_date or reference_date
-    selected_workout_datetime = _parse_exact_datetime(
-        workout_values.get("start_time") or workout_values.get("date")
-    )
+    selected_raw_value = workout_values.get("start_time") or workout_values.get("date")
+    selected_workout_datetime = _parse_exact_datetime(selected_raw_value)
 
     if recent_workouts is None and db is not None and hasattr(db, "garmin_activities"):
         start_date = history_reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)
@@ -1284,6 +1364,7 @@ async def build_coach_context_v2(
                     selected_workout_id=selected_workout_id,
                     selected_date=selected_workout_date,
                     selected_datetime=selected_workout_datetime,
+                    selected_raw=selected_raw_value,
                 )
             )
         ]
@@ -1300,6 +1381,8 @@ async def build_coach_context_v2(
             included_count=len(recent_workouts),
             max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
             truncated=len(normalized_workouts) > COACH_RECENT_WORKOUTS_MAX_COUNT,
+            strictly_prior_available_count=_strictly_prior_count(
+                normalized_workouts, selected_raw_value, selected_workout_id),
         )
     elif recent_workouts is None:
         recent_workouts = []
@@ -1322,9 +1405,11 @@ async def build_coach_context_v2(
                     selected_workout_id=selected_workout_id,
                     selected_date=selected_workout_date,
                     selected_datetime=selected_workout_datetime,
+                    selected_raw=selected_raw_value,
                 )
             ]
         available_count = len(recent_workouts)
+        filtered_workouts = list(recent_workouts)
         recent_workouts = list(recent_workouts)[:COACH_RECENT_WORKOUTS_MAX_COUNT]
         recent_workouts_coverage = CoachRecentWorkoutsCoverage(
             window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
@@ -1334,6 +1419,8 @@ async def build_coach_context_v2(
             included_count=len(recent_workouts),
             max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
             truncated=available_count > COACH_RECENT_WORKOUTS_MAX_COUNT,
+            strictly_prior_available_count=_strictly_prior_count(
+                filtered_workouts, selected_raw_value, selected_workout_id),
         )
 
     return CoachContextV2(

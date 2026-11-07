@@ -1069,6 +1069,7 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
         "included_count": 2,
         "max_count": 30,
         "truncated": False,
+        "strictly_prior_available_count": None,
     }
     history_query = next(query for query, _ in fake_db.garmin_activities.find_calls if "start_time" in query)
     assert history_query == {
@@ -1143,6 +1144,7 @@ async def test_coach_recent_workouts_report_exact_truncated_coverage():
         "included_count": 30,
         "max_count": 30,
         "truncated": True,
+        "strictly_prior_available_count": None,
     }
     dates = [item["date"] for item in context["recent_workouts"]]
     assert dates == sorted(dates, reverse=True)

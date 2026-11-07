@@ -102,3 +102,24 @@ Test mocké : seules `conversations` et `coach_quota_counters` sont écrites. V�
 - Garde heuristique (regex) : faux négatifs possibles, faux positifs (repli) possibles sur les conseils « prochaine séance ».
 - Heure locale Garmin naïve interprétée en UTC pour la chronologie des prescriptions.
 - Prochaine étape recommandée : exécuter la campagne de 4 appels dans un environnement avec clé/Mongo, ou comparer une autre stratégie/modèle.
+
+## PR #394 review fixes (base `f6b754e`)
+
+| # | Remark | Status | Tests (`test_coach_c408c_pr394_review.py`) |
+|---|--------|--------|------|
+| 1 | Naive local time treated as UTC | Corrected: `_provable_order` (aware = instant; naive vs aware only if true for every offset −12h…+14h; date-only never orders same-day) | DST, naive/aware, date-only |
+| 2 | HR-position claims vs relative-HR population | Corrected: claims need V3 `relative_effort` status + position + its own count | contradiction FR/EN/ES, absent, wrong population |
+| 3 | Historical values in session pool | Corrected: references go to a separate `compared` pool (comparison wording required) | 145 vs 127 bpm, quartile, reference pace |
+| 4 | V3 comparisons rejected | Corrected: V3 availability accepted; counts attributed per metric | own-count test |
+| 5 | Requested lists rejected | Corrected for chat (`format` dropped; counts ≤ shown honoured when asked); kept for the automatic comment | list tests |
+| 6 | Intensity always "undetermined" | Corrected: stated only when the contract says so; V3 threshold position used | fallback FR/EN/ES |
+| 7 | `eligible_count` overstated | Corrected: `strictly_prior_available_count` computed pre-cap, same strict rule, deduplicated | same-day/later/duplicate |
+| 8 | bpm unit lost | Corrected: units serialised (`difference_units`, contract `values`); bpm pool | unit tests |
+
+28 of the 42 new tests fail on `f6b754e`; all 42 pass now.
+
+Suites: coach suites 618 passed + 42 new. Full backend: 7171 passed, 190 failed, 54 errors, 146 skipped. Against a worktree of `829f69a`, the failing set shows no new failure (the only one, `test_workout_presentation_pr328`, fails identically on baseline; failure counts vary with xdist ordering). Causes: no Mongo, no network, no live server (16 `test_coach_conversational` HTTP tests, `test_pr211` source assertion). The HTTP tests remain NOT RUN.
+
+Limits: regexes do not prove semantic truth; counts without a stated population are matched against the union of known counts; user-stated measurements are not accepted as grounding. `served_at` naive values are handled by the offset bounds (not assumed UTC).
+
+Real 4-session LLM validation: NOT RUN (no key/Mongo/network). Frontend tests: NOT RUN. Verdict: technical GO candidate pending HTTP tests; functional HOLD.
