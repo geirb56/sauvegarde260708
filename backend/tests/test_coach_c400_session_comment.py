@@ -71,9 +71,9 @@ def _env(fake_db, access=_premium_access, owned=("user-a",), llm=None, narrative
             model_dump=lambda mode="json": {"summary": "x", "language": language})
     stack.enter_context(patch("server.load_scoped_workout_analysis_v2", AsyncMock(side_effect=load)))
     stack.enter_context(patch(
-        "server._load_coach_narrative",
-        AsyncMock(side_effect=lambda **kw: narrative(kw["language"]) if callable(narrative)
-                  else _narrative(kw["language"]))))
+        "server._load_coach_evidence",
+        AsyncMock(side_effect=lambda **kw: (narrative(kw["language"]) if callable(narrative)
+                  else _narrative(kw["language"]), None))))
     llm_mock = llm or _llm()
     stack.enter_context(patch.object(llm_coach, "generate_session_comment", llm_mock))
     return stack, llm_mock
@@ -466,7 +466,7 @@ async def test_cache_key_covers_user_workout_language_and_model(monkeypatch):
 
 async def test_comment_route_builds_context_and_narrative_once():
     stack, llm = _env(_FakeDB())
-    with stack, patch("server._load_coach_narrative", AsyncMock(return_value=_narrative())) as narrative:
+    with stack, patch("server._load_coach_evidence", AsyncMock(return_value=(_narrative(), None))) as narrative:
         await _get()
     assert narrative.await_count == 1
 

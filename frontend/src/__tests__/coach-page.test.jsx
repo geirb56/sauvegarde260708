@@ -718,4 +718,48 @@ describe("Coach page", () => {
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
     expect(axios.post.mock.calls[1][1]).not.toHaveProperty("workout_id");
   });
+
+  const renderAnalyze = (strict = false) => {
+    const tree = (
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w408"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    return render(strict ? <React.StrictMode>{tree}</React.StrictMode> : tree);
+  };
+
+  const mockWorkoutGet = () => axios.get.mockImplementation(url => Promise.resolve({
+    data: String(url).includes("/coach/history") ? [] : { name: "Easy Run", distance_km: 8, date: "2026-11-01" },
+  }));
+
+  test("C408: context card links back to the workout page and keeps the exit action", async () => {
+    mockWorkoutGet();
+    axios.post.mockResolvedValue({ data: { response: "judgment" } });
+    renderAnalyze();
+    expect(await screen.findByText("judgment")).toBeInTheDocument();
+    expect(screen.getByTestId("back-to-workout")).toHaveAttribute("href", "/workout/w408");
+    expect(screen.getByTestId("back-to-workout")).toHaveAccessibleName("Back to workout");
+    expect(screen.getByTestId("close-workout-context")).toBeInTheDocument();
+  });
+
+  test("C408: a single automatic analysis even under StrictMode", async () => {
+    mockWorkoutGet();
+    axios.post.mockResolvedValue({ data: { response: "judgment" } });
+    renderAnalyze(true);
+    expect(await screen.findByText("judgment")).toBeInTheDocument();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    [404, "This workout is not accessible. Open it again from your sessions list."],
+    [429, "You have reached your monthly Coach limit. See your subscription for more."],
+    [500, "Unable to process request."],
+  ])("C408: backend status %s shows a specific message", async (status, expected) => {
+    mockWorkoutGet();
+    axios.post.mockRejectedValue({ response: { status } });
+    renderAnalyze();
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
 });

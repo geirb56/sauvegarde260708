@@ -103,8 +103,8 @@ async def test_selected_workout_failure_returns_degraded_factual_reply(name, res
     with (
         _analyze_environment(fake_db, access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative",
-              AsyncMock(return_value=_narrative())) as fallback,
+        patch("server.load_scoped_workout_coach_evidence",
+              AsyncMock(return_value=(_narrative(), None))) as fallback,
     ):
         llm = server.llm_coach.enrich_chat_response
         llm.side_effect = _llm(result)
@@ -129,8 +129,8 @@ async def test_degraded_notice_is_localized(language, fragment):
     with (
         _analyze_environment(fake_db, _trial_access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative",
-              AsyncMock(return_value=_narrative())),
+        patch("server.load_scoped_workout_coach_evidence",
+              AsyncMock(return_value=(_narrative(), None))),
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
         response = await _post({"message": "x", "workout_id": "w1", "language": language})
@@ -147,7 +147,7 @@ async def test_selected_workout_without_usable_synthesis_is_503(narrative):
     with (
         _analyze_environment(fake_db, _trial_access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative", AsyncMock(return_value=narrative)),
+        patch("server.load_scoped_workout_coach_evidence", AsyncMock(return_value=(narrative, None))),
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
         response = await _post({"message": "x", "workout_id": "w1"})
@@ -159,7 +159,7 @@ async def test_fallback_loader_exception_is_503_not_fake_success():
     with (
         _analyze_environment(fake_db, _trial_access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative",
+        patch("server.load_scoped_workout_coach_evidence",
               AsyncMock(side_effect=RuntimeError("boom"))),
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
@@ -171,7 +171,7 @@ async def test_access_denied_has_no_fallback_no_llm_no_quota():
     fake_db = _FakeDB()
     with (
         _analyze_environment(fake_db, _free_access),
-        patch("server.load_scoped_workout_deterministic_narrative", AsyncMock()) as fallback,
+        patch("server.load_scoped_workout_coach_evidence", AsyncMock()) as fallback,
     ):
         response = await _post({"message": "x", "workout_id": "w1", "language": "en"})
         assert response.status_code == 200 and response.json()["degraded"] is False
@@ -184,7 +184,7 @@ async def test_foreign_workout_never_reaches_fallback():
     fake_db = _FakeDB()
     with (
         _analyze_environment(fake_db, _trial_access),
-        patch("server.load_scoped_workout_deterministic_narrative", AsyncMock()) as fallback,
+        patch("server.load_scoped_workout_coach_evidence", AsyncMock()) as fallback,
     ):
         response = await _post({"message": "x", "workout_id": "foreign"})
     assert response.status_code == 404
