@@ -174,3 +174,45 @@ def test_detail_display_uses_unrounded_source_without_changing_values():
     detail = cc2._normalize_workout_detail({"id": "w", "date": "2026-10-12", "avg_pace_min_km": 7.342}, None)
     assert detail.avg_pace_display == "7:21/km" and detail.avg_pace_min_km == 7.34
     assert cc2._project_paces_for_llm(detail.model_dump())["avg_pace_display"] == "7:21/km"
+
+
+# --- requested list sizes never authorise a performance value -----------------------------------
+Q25 = "Analyse mes 25 dernières séances."
+Q5 = "Analyse mes 5 dernières séances."
+
+
+@pytest.mark.parametrize("question,text,accepted", [
+    (Q25, "À FC comparable, ton allure est de 25 s/km plus lente.", False),
+    (Q25, "À FC comparable, ton allure est de 8,4 s/km plus lente sur 3 séances.", True),
+    (Q25, "Ta FC moyenne est de 25 bpm.", False),
+    (Q5, "À FC comparable, ton allure est de 5 s/km plus lente.", False),
+    (Q5, "Ta FC moyenne est de 5 bpm.", False),
+    (Q5, "À FC comparable, ton allure est de 25 s/km plus lente sur 5 séances.", False),
+    (Q5, "À FC comparable, ton allure est de 8,4 s/km plus lente sur 5 séances.", False),
+    ("Quelle est mon allure à 8,4 s/km ?", "À FC comparable, ton allure est de 8,4 s/km plus lente sur 3 séances.", True),
+    ("Quelle est mon allure à 25 s/km ?", "À FC comparable, ton allure est de 25 s/km plus lente.", False),
+    ("Montre mes 5 dernières séances", "Voici tes 5 dernières séances.", True),
+])
+def test_question_never_authorises_a_metric_value(question, text, accepted):
+    ctx = _spec_ctx()
+    assert ("figure_not_attributed" not in guard.check_contract_claims(text, ctx, question)) is accepted
+    if text.startswith("Voici"):
+        return
+    out = guard.resolve_chat_reply(PREFIX + text, ctx, "fr", question)
+    assert (out["response_source"] == "llm_reply_checked") is accepted
+    if not accepted:
+        assert text not in out["text"]
+        assert guard.verify_chat_reply(out["text"], ctx, "fr", question)["passed"]
+
+
+def test_requested_count_alone_is_not_rejected():
+    assert "figure_not_attributed" not in guard.check_contract_claims(
+        "Voici tes 5 dernières séances.", _spec_ctx(), "Montre mes 5 dernières séances")
+    assert guard.check_contract_claims("Voici tes 5 dernières séances.", _spec_ctx(), None) >= set()
+
+
+def test_mixed_reply_with_requested_count_and_wrong_delta_is_repaired():
+    out = guard.resolve_chat_reply(
+        PREFIX + "Voici tes 5 dernières séances. À FC comparable, ton allure est de 5 s/km plus lente.",
+        _spec_ctx(), "fr", Q5)
+    assert " 5 s/km" not in out["text"] and "8,4 s/km" in out["text"]

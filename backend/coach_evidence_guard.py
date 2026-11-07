@@ -243,11 +243,15 @@ def _states_metric_figure(sentence: str) -> bool:
 
 
 def _requested_only(sentence: str, requested: set[int]) -> bool:
-    """A sentence whose only figures are list sizes the user asked for (already bounded by availability)."""
-    text = _PACE_RE.sub(" ", sentence)
-    figures = [float(m.group(0).replace(",", ".")) for m in _FIGURE.finditer(text)]
-    figures += [float(csc._WORD_VALUE[m.group(1).lower()]) for m in _WORD_COUNT_BEFORE_NOUN.finditer(text)]
-    return bool(figures) and all(f in requested for f in figures)
+    """True when every figure is a session count the user asked for; any other figure (unit, pace, delta) disqualifies."""
+    if _PACE_RE.search(sentence):
+        return False
+    text = sentence
+    counts = [int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(text)]
+    counts += [csc._WORD_VALUE[m.group(1).lower()] for m in _WORD_COUNT_BEFORE_NOUN.finditer(text)]
+    figures = [m for m in _FIGURE.finditer(text) if not _COUNT_AFTER.match(text[m.end():m.end() + 40])
+               or _UNIT_AFTER.match(text[m.end():m.end() + 40])]
+    return bool(counts) and not figures and all(n in requested for n in counts)
 
 
 def _requested_counts(question: Optional[str], c: dict) -> set[int]:
