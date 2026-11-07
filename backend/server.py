@@ -94,6 +94,7 @@ from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
 from training_v2.training_paces_authority import load_canonical_training_paces
 from training_v2.snapshot_persistence import invalidate_future_snapshots
+import coach_evidence_guard
 from coach_context_v2 import build_coach_context_v2, build_llm_coach_context, build_session_coaching_frame
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
@@ -652,6 +653,8 @@ class CoachResponse(BaseModel):
     response: str
     message_id: str
     degraded: bool = False
+    # C408-C: heuristic check of a selected-workout reply ("verified" never means "true").
+    verification: Optional[dict] = None
 
 
 class ConversationMessage(BaseModel):
@@ -2341,6 +2344,26 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             )
 
         response_text = llm_response
+        verification: Optional[dict] = None
+        if request.workout_id is not None and workout_analysis_allowed:
+            # C408-C: one deterministic check of the single generated reply; no second LLM call.
+            check_started = time.perf_counter()
+            verification = coach_evidence_guard.verify_chat_reply(response_text, llm_context, language)
+            if not verification["passed"]:
+                logger.warning("[Coach] Reply rejected by evidence guard: %s", verification["rejected_checks"])
+                fallback = coach_evidence_guard.build_contract_fallback(llm_context, language)
+                if fallback is None:
+                    refund_task = _start_coach_refund(reservation, user_msg_id)
+                    await asyncio.shield(refund_task)
+                    raise HTTPException(
+                        status_code=503,
+                        detail=_COACH_UNAVAILABLE.get(language, _COACH_UNAVAILABLE["en"]),
+                    )
+                response_text = fallback
+                verification["response_source"] = "contract_fallback"
+            else:
+                verification["response_source"] = "llm_reply_checked"
+            verification["check_ms"] = round((time.perf_counter() - check_started) * 1000, 2)
 
         # 8. Stocker la réponse assistant
         msg_id = str(uuid.uuid4())
@@ -2351,10 +2374,11 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             "content": response_text,
             "workout_id": request.workout_id,
             "coach_workout_analysis_allowed": workout_analysis_allowed,
+            **({"verification": verification} if verification is not None else {}),
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
-        return CoachResponse(response=response_text, message_id=msg_id)
+        return CoachResponse(response=response_text, message_id=msg_id, verification=verification)
     except BaseException:
         # One refund task per request; shield keeps it running if we are cancelled.
         if refund_task is None:

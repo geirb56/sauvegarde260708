@@ -23,6 +23,7 @@ from training_v2.prescription_snapshot import (
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
 from workout_analysis_v2 import WorkoutAnalysisV2Response
+from workout_intelligence_v3 import DURATION_MATCH_TOLERANCE_PCT
 
 COACH_RECENT_WORKOUTS_WINDOW_DAYS = 30
 COACH_RECENT_WORKOUTS_MAX_COUNT = 30
@@ -422,6 +423,7 @@ def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
             )
         })
         relative_effort["meaning"] = "position of average HR among the athlete's own comparable earlier sessions; not a physiological zone"
+        relative_effort["provenance"] = _relative_effort_provenance(relative, classification, source)
 
     compact: dict[str, Any] = {
         "source": source,
@@ -457,6 +459,8 @@ def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
             "limitations": _text_items(coach.get("limitations"), 4),
         },
     }
+    if comparison.get("status") == "available":
+        compact["historical_comparison"]["provenance"] = _comparison_provenance(comparison, source)
     if comparison.get("status") == "available" and comparison.get("comparability") in {"strong", "moderate"}:
         pace = comparison.get("pace_at_comparable_hr") or {}
         hr = comparison.get("hr_at_comparable_pace") or {}
@@ -466,14 +470,112 @@ def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def _recorded_prescription(intel: Optional[dict[str, Any]]) -> Any:
+def _relative_effort_provenance(relative: dict[str, Any], classification: dict[str, Any], source: str) -> dict[str, Any]:
+    """Where the relative HR position comes from, copied from the V3 result (nothing recomputed).
+
+    The population is defined by V3's own admissibility rules, which do not include distance:
+    it is neither "sessions of the same distance" nor the sessions listed in the history block.
+    """
+    criteria = relative.get("criteria") or {}
+    return {
+        "source_path": f"{source}.session_classification.relative_effort",
+        "metric_type": "average_hr_relative_position",
+        "reference_population": "athlete's own earlier sessions admitted by the V3 relative-effort rules",
+        "activity_count": relative.get("reference_count"),
+        "period_start": relative.get("period_start"),
+        "period_end": relative.get("period_end"),
+        "selection_criteria": {
+            "same_athlete_same_sport_same_environment": True,
+            "strictly_prior_to_analysed_session": True,
+            "window_days": criteria.get("window_days"),
+            "excludes": ["competitions", "interval_or_structured_sessions", "missing_or_aberrant_hr_or_pace"],
+            "duration_ratio_to_analysed_session": [criteria.get("duration_ratio_min"), criteria.get("duration_ratio_max")],
+            "distance_is_a_selection_criterion": False,
+            "is_the_history_block_listing": False,
+        },
+        "observed_value": {"avg_hr_bpm": relative.get("current_hr_bpm")},
+        "reference_value": {
+            "hr_q1_bpm": relative.get("hr_q1_bpm"),
+            "hr_median_bpm": relative.get("hr_median_bpm"),
+            "hr_q3_bpm": relative.get("hr_q3_bpm"),
+        },
+        "comparison_method": "position of the session average HR against the quartiles of the reference sessions' average HR",
+        "confidence": classification.get("confidence", "none"),
+        "known_limits": list(relative.get("limitations") or []),
+    }
+
+
+def _comparison_provenance(comparison: dict[str, Any], source: str) -> dict[str, Any]:
+    pace = comparison.get("pace_at_comparable_hr") or {}
+    hr = comparison.get("hr_at_comparable_pace") or {}
+    return {
+        "source_path": f"{source}.historical_comparison",
+        "metric_type": "pace_at_comparable_hr / hr_at_comparable_pace",
+        "reference_population": "earlier sessions admitted by the V3 comparison rules (comparable duration, environment, structure)",
+        "activity_count": comparison.get("reference_count"),
+        "period_start": comparison.get("period_start"),
+        "period_end": comparison.get("period_end"),
+        "sub_populations": {
+            "pace_at_comparable_hr": {
+                "activity_count": pace.get("reference_count"),
+                "hr_tolerance_bpm": pace.get("hr_tolerance_bpm"),
+            },
+            "hr_at_comparable_pace": {
+                "activity_count": hr.get("reference_count"),
+                "pace_tolerance_sec_per_km": hr.get("pace_tolerance_sec_per_km"),
+            },
+        },
+        "selection_criteria": {
+            "window_days": comparison.get("window_days"),
+            "duration_within_pct_of_analysed_session": DURATION_MATCH_TOLERANCE_PCT,
+            "distance_is_a_selection_criterion": False,
+            "is_the_history_block_listing": False,
+        },
+        "comparison_method": "mean pace of earlier sessions at comparable HR; mean HR at comparable pace",
+        "confidence": comparison.get("comparability"),
+        "known_limits": list(comparison.get("limitations") or []),
+    }
+
+
+def _prescription_timing(served_at: Any, session_start: Any) -> str:
+    """Was the recorded prescription stored before the session started?
+
+    Compares the snapshot's first-served instant with the session start; never infers an
+    intention. A bare session date (no clock) only proves ordering across different days.
+    """
+    served = _parse_exact_datetime(served_at)
+    if served is None:
+        return "recording_time_unknown"
+    start = _parse_exact_datetime(session_start)
+    if start is not None:
+        return "recorded_before_session" if served < start else "recorded_after_session"
+    start_day, served_day = _parse_iso_date(session_start), served.date()
+    if start_day is None or served_day == start_day:
+        return "recording_time_unknown"
+    return "recorded_before_session" if served_day < start_day else "recorded_after_session"
+
+
+_TIMING_RULES = {
+    "recorded_before_session": "recorded before the session started: it may be called a prescription "
+                               "recorded beforehand; whether the athlete saw or followed it is not known",
+    "recorded_after_session": "recorded after the session started: never present it as an intention known "
+                              "before the start; at most say a prescription for that day was recorded afterwards",
+    "recording_time_unknown": "the recording time is unknown: do not assert it was known before the start",
+}
+
+
+def _recorded_prescription(intel: Optional[dict[str, Any]], session_start: Any = None) -> Any:
     """Historical prescription actually recorded for the session date, else why not."""
     assessment = (intel or {}).get("prescription_assessment") or {}
     if assessment.get("prescription_id"):
+        timing = _prescription_timing(assessment.get("served_at"), session_start)
         return {
             "source": "training_prescription_snapshots (workout_intelligence_v3.prescription_assessment)",
             "assessment_status": assessment.get("status"),
             "planned_date": assessment.get("planned_date"),
+            "recorded_at": assessment.get("served_at"),
+            "recording_timing": timing,
+            "recording_timing_rule": _TIMING_RULES[timing],
             "prescribed_workout_type": assessment.get("prescribed_workout_type"),
             "prescribed_intensity_class": assessment.get("prescribed_intensity_class"),
             "prescribed_distance_km": assessment.get("prescribed_distance_km"),
@@ -495,6 +597,116 @@ def _recorded_prescription(intel: Optional[dict[str, Any]]) -> Any:
     if status == "indeterminate":
         return "unknown_session_date_cannot_look_up"
     return "not_available_in_this_context"
+
+
+def _effort_list(intel: Optional[dict[str, Any]], key: str, field: str, formatter) -> list[dict[str, Any]]:
+    block = (intel or {}).get(key) or {}
+    out = []
+    for effort in block.get("efforts") or []:
+        if isinstance(effort, dict) and effort.get("available") and effort.get(field) is not None:
+            shown = formatter(effort[field])
+            if shown is not None:
+                out.append({"effort_number": effort.get("effort_number"), "value": shown})
+    return out
+
+
+def build_evidence_contract(
+    detail: dict[str, Any],
+    analysis: dict[str, Any],
+    v3: Optional[dict[str, Any]],
+    recorded: Any,
+    intelligence: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """C408-C: compact, deterministic split between what is measured, validated, allowed and unproven.
+
+    Built only from the V2/V3 results already present; nothing is recomputed. Interpretations
+    are referenced by code and source path (their wording stays in v3_assessment), so the
+    contract adds structure, not a second copy of the text.
+    """
+    pace = detail.get("avg_pace_display") or _format_pace_min_km(detail.get("avg_pace_min_km"))
+    measured: dict[str, Any] = {
+        key: value for key, value in {
+            "distance_km": detail.get("distance_km"),
+            "duration_minutes": detail.get("duration_minutes"),
+            "avg_hr_bpm": detail.get("avg_hr"),
+            "avg_pace": pace,
+            "elevation_gain_m": detail.get("elevation_gain_m"),
+        }.items() if value is not None
+    }
+    effort_paces = _effort_list(intelligence, "effort_pace_observations", "pace_sec_per_km",
+                                lambda v: _format_pace_min_km(Decimal(str(v)) / 60))
+    effort_durations = _effort_list(intelligence, "effort_duration_observations", "duration_s",
+                                    lambda v: f"{int(round(float(v)))} s")
+    if effort_paces:
+        measured["recorded_effort_paces"] = effort_paces
+    if effort_durations:
+        measured["recorded_effort_durations"] = effort_durations
+
+    comparisons: list[dict[str, Any]] = []
+    classification = (v3 or {}).get("classification") or {}
+    relative = classification.get("relative_effort") or {}
+    if relative.get("status") == "used":
+        comparisons.append({
+            "metric": "average_hr_relative_position",
+            "source_path": "session_coaching_frame.v3_assessment.classification.relative_effort",
+            "provenance": "relative_effort.provenance",
+        })
+    historical = (v3 or {}).get("historical_comparison") or {}
+    if historical.get("provenance") and historical.get("comparability") in {"strong", "moderate"}:
+        comparisons.append({
+            "metric": "pace_and_hr_at_comparable_effort",
+            "source_path": "session_coaching_frame.v3_assessment.historical_comparison",
+            "provenance": "historical_comparison.provenance",
+        })
+    similar = ((analysis.get("comparison") or {}).get("similar") or {})
+    if similar.get("available") and similar.get("sample_count"):
+        comparisons.append({
+            "metric": "pace_and_hr_vs_similar_distance_sessions",
+            "source_path": "workout_detail.analysis.comparison.similar",
+            "reference_population": "most recent earlier sessions of the same sport with a distance within "
+                                    f"{similar.get('distance_tolerance_pct')}% of this one",
+            "activity_count": similar.get("sample_count"),
+            "window_days": similar.get("period_days"),
+            "limits": list(similar.get("limitations") or []),
+        })
+
+    coach = (v3 or {}).get("coach_assessment") or {}
+    allowed = [
+        {"code": item.get("code"), "source_path": "session_coaching_frame.v3_assessment.coach_assessment"}
+        for item in (coach.get("diagnosis") or []) + (coach.get("evidence") or [])
+        if isinstance(item, dict) and item.get("code")
+    ]
+
+    not_shown = {
+        "pace_is_not_performance": "a faster or slower pace does not show a better or worse performance",
+        "recovery_not_measured": "recovery state or need is not measured; a long, hard-looking or relatively "
+                                 "intense session does not by itself establish that recovery is needed",
+        "progress_not_demonstrated": "no progress or regression is established",
+        "sensations_unknown": "no feeling, fatigue or perceived effort is recorded",
+    }
+    if not ((v3 or {}).get("intensity") or {}).get("thresholds_available"):
+        not_shown["physiological_intensity_undetermined"] = (
+            "no personal LT1/LT2 threshold: the physiological intensity cannot be determined")
+    if relative.get("status") == "used":
+        not_shown["relative_hr_is_not_easy_effort"] = (
+            "a relatively low or high average HR is a position among the athlete's own sessions, "
+            "not proof of an easy or hard physiological effort")
+    if len(effort_paces) >= 2 or len(effort_durations) >= 2:
+        not_shown["hr_rise_is_not_external_intensity"] = (
+            "HR rising across repetitions does not show that the external intensity (pace) rose")
+    assessment_status = ((intelligence or {}).get("prescription_assessment") or {}).get("status")
+    if assessment_status not in {"consistent", "deviation"}:
+        not_shown["prescription_compliance_undetermined"] = (
+            "compliance with the prescription is not determined: an indeterminate or missing status "
+            "never shows that the prescription was not followed")
+    return {
+        "measured_facts": measured,
+        "validated_comparisons": comparisons,
+        "allowed_interpretations": allowed,
+        "not_demonstrated": not_shown,
+        "usage": "Cite measured_facts exactly. Describe a comparison only with its provenance population. "
+                 "State a not_demonstrated item as a limit, once, only when it helps the answer.",
+    }
 
 
 def build_session_coaching_frame(
@@ -526,10 +738,14 @@ def build_session_coaching_frame(
         ),
     }
     v3 = _compact_v3_assessment(intelligence) if isinstance(intelligence, dict) else None
-    recorded = _recorded_prescription(intelligence)
+    recorded = _recorded_prescription(intelligence, detail.get("start_time") or detail.get("date"))
     probable_type = ((v3 or {}).get("classification") or {}).get("probable_type", "unknown")
     if isinstance(recorded, dict):
-        intent_status = "recorded_historical_prescription"
+        intent_status = (
+            "prescription_recorded_after_session_not_a_known_intent"
+            if recorded.get("recording_timing") == "recorded_after_session"
+            else "recorded_historical_prescription"
+        )
     elif probable_type != "unknown":
         intent_status = "probable_type_from_observed_classification_not_a_prescription"
     else:
@@ -546,7 +762,7 @@ def build_session_coaching_frame(
             "intent_status": intent_status,
             "rule": (
                 "State the intended purpose as fact only when recorded_historical_prescription is a "
-                "recorded prescription. A probable type from the observed classification is a "
+                "recorded prescription whose recording_timing is recorded_before_session. A probable type from the observed classification is a "
                 "hypothesis and must be worded as one; otherwise the intent is unknown."
             ),
         },
@@ -556,6 +772,7 @@ def build_session_coaching_frame(
         frame["v3_assessment"] = v3
     else:
         frame["v3_assessment"] = "unavailable"
+    frame["evidence_contract"] = build_evidence_contract(detail, analysis, v3, recorded, intelligence)
     return frame
 
 

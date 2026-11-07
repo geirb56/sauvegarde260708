@@ -12,7 +12,7 @@ import pytest
 from access_control import Tier, UserAccess
 from narrative_coach_v3_models import NarrativeCoachV3
 from test_coach_contract_unified import (
-    _FakeDB, _analyze_environment, _free_access, _premium_access, _send_analyze_request,
+    _FakeDB, _STUB_REPLIES, _analyze_environment, _free_access, _premium_access, _send_analyze_request,
     _trial_access, _current_month_key, _month_ts,
 )
 import server
@@ -75,7 +75,7 @@ async def test_llm_success_consumes_quota_and_persists_both_messages():
     with _analyze_environment(fake_db, _free_access):
         response = await _post({"message": "hi", "language": "en"})
     assert response.status_code == 200
-    assert response.json()["response"] == "coach-response"
+    assert response.json()["response"] == _STUB_REPLIES["en"]
     assert response.json()["degraded"] is False
     assert _count(fake_db) == 1
     assert [d["role"] for d in fake_db.conversations._docs] == ["user", "assistant"]

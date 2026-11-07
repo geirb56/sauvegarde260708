@@ -229,7 +229,7 @@ async def _three_turns(goal):
 async def test_scenario_e_same_workout_on_three_turns_with_one_llm_call_each():
     fake_db, contexts, histories, calls = await _three_turns(goal=True)
     assert calls == 3
-    assert {c["session_coaching_frame"]["workout_id"] for c in contexts} == {"w1"}
+    assert all("workout_id" not in c["session_coaching_frame"] for c in contexts)  # C408-C
     assert contexts[0]["session_coaching_frame"] == contexts[2]["session_coaching_frame"]  # no factual drift
     assert [len(h) for h in histories] == [0, 2, 4]
     assert histories[2][0]["content"] == "Analyse cette séance."

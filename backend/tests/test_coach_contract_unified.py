@@ -252,8 +252,15 @@ class _ContextPayload:
         return {"canonical": {"week": "ok"}, "mode": mode}
 
 
-async def _coach_response_stub(**_kwargs):
-    return "coach-response", True, {"provider": "test"}
+_STUB_REPLIES = {
+    "fr": "Cette séance est enregistrée avec les mesures disponibles, je peux détailler le rythme ou la fréquence cardiaque si tu veux.",
+    "en": "This session is recorded with the available measurements, and I can detail the pace or the heart rate if you like.",
+}
+
+
+async def _coach_response_stub(**kwargs):
+    language = (kwargs.get("context") or {}).get("language", "en")
+    return _STUB_REPLIES.get(language, _STUB_REPLIES["en"]), True, {"provider": "test"}
 
 
 async def _free_access(_db, user_id: str):
@@ -451,7 +458,7 @@ async def test_coach_request_contract_no_longer_exposes_deep_analysis_and_respon
     request_fields = set(server.CoachRequest.model_fields)
     assert request_fields == {"message", "workout_id", "context", "language"}
     assert "deep_analysis" not in server.CoachRequest.model_json_schema().get("properties", {})
-    assert set(server.CoachResponse.model_fields) == {"response", "message_id", "degraded"}
+    assert set(server.CoachResponse.model_fields) == {"response", "message_id", "degraded", "verification"}
     assert server.CoachResponse(response="x", message_id="y").degraded is False
 
 

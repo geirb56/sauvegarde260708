@@ -402,6 +402,7 @@ class WIV3PrescriptionAssessment(BaseModel):
     prescribed_intensity_class: Optional[str] = None
     prescribed_distance_km: Optional[float] = None
     prescribed_duration_minutes: Optional[int] = None
+    served_at: Optional[str] = None  # when the snapshot was first recorded; None for legacy snapshots
     observed_classification: Optional[str] = None
     reasons: List[str] = Field(default_factory=list)
     source_paths: List[str] = Field(default_factory=list)

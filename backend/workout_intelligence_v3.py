@@ -1092,6 +1092,7 @@ def assess_prescription(
         prescription_id=snap.prescription_id, planned_date=snap.planned_date.isoformat(),
         prescribed_workout_type=snap.workout_type, prescribed_intensity_class=snap.intensity_class,
         prescribed_distance_km=snap.distance_km, prescribed_duration_minutes=snap.duration_minutes,
+        served_at=snap.served_at.isoformat() if snap.served_at is not None else None,
         observed_classification=classification.type, source_paths=paths + ["session_classification"],
     )
     expected = _EXPECTED_CLASSES.get(snap.workout_type)

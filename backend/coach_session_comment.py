@@ -103,6 +103,49 @@ def _provably_prior(sessions: list, detail: dict, llm_context: dict) -> list:
     return kept
 
 
+def _date_part(value: Any) -> Optional[str]:
+    text = str(value or "")[:10]
+    return text or None
+
+
+def _history_block(prior: list, shown: list, coverage: dict, llm_context: dict) -> dict:
+    """C408-C: counts and criteria of the history shown to the Coach, produced at the source.
+
+    The listed sessions are a bounded selection; the statistics of runner_profile use every
+    eligible session. eligible_count adds the sessions the shared context already dropped
+    upstream (its own cap) to the provably prior ones, so truncated never hides exclusions.
+    """
+    available, included = coverage.get("available_count"), coverage.get("included_count")
+    counted = isinstance(available, int) and isinstance(included, int) and not isinstance(available, bool)
+    upstream_excluded = max(0, available - included) if counted else 0
+    eligible = len(prior) + upstream_excluded
+    population_truncated = bool(coverage.get("truncated"))
+    block: dict = {
+        "scope": "sessions provably before the analysed session; same-day sessions are kept only "
+                 "when their timestamp proves they started earlier",
+        "observation_window_days": coverage.get("window_days"),
+        "eligible_count": eligible,
+        "included_count": len(shown),
+        "truncated": eligible > len(shown) or population_truncated,
+        "window": {
+            "start_date_inclusive": coverage.get("start_date_inclusive"),
+            "end": "analysed session start (exclusive)"
+                   if llm_context.get("selected_workout_history_cutoff_precision") == "strict_timestamp_exclusive"
+                   else "analysed session date",
+        },
+        "cutoff_precision": llm_context.get("selected_workout_history_cutoff_precision"),
+        "eligibility": "same athlete, any recorded activity strictly before the analysed session, "
+                       "inside the window; undated or unparseable sessions are dropped",
+        "selection": f"the {HISTORY_MAX_SESSIONS} most recent eligible sessions, listed most recent first; "
+                     "nothing else is implied about their similarity to the analysed session",
+        "sessions": [{k: w[k] for k in _HISTORY_FIELDS if w.get(k) is not None} for w in shown],
+        "trend": "not_established",
+    }
+    if population_truncated and not counted:
+        block["eligible_count_is_lower_bound"] = True
+    return block
+
+
 def build_comment_context(llm_context: dict) -> dict:
     """C402: what the automatic comment may see, in five labelled categories.
 
@@ -134,20 +177,21 @@ def build_comment_context(llm_context: dict) -> dict:
         [w for w in (llm_context.get("recent_workouts") or []) if isinstance(w, dict)],
         detail, llm_context)
     prior.sort(key=lambda w: str(w.get("date") or ""), reverse=True)
-    out["history_as_of_session"] = {  # B. only sessions before the selected one
-        "scope": "sessions provably before the analysed session; same-day sessions are kept only "
-                 "when their timestamp proves they started earlier",
-        "observation_window_days": coverage.get("window_days"),
-        "truncated": bool(coverage.get("truncated")),
-        "sessions": [{k: w[k] for k in _HISTORY_FIELDS if w.get(k) is not None}
-                     for w in prior[:HISTORY_MAX_SESSIONS]],
-        "trend": "not_established",
-    }
+    shown = prior[:HISTORY_MAX_SESSIONS]
+    out["history_as_of_session"] = _history_block(prior, shown, coverage, llm_context)  # B
     profile: dict = {"experience": "not_provided"}  # C. only what is observed
-    if len(prior) >= MIN_HISTORY_SESSIONS and not coverage.get("truncated"):
+    population_truncated = bool(coverage.get("truncated"))
+    if len(prior) >= MIN_HISTORY_SESSIONS and not population_truncated:
         kms = [float(w["distance_km"]) for w in prior
                if isinstance(w.get("distance_km"), (int, float)) and not isinstance(w["distance_km"], bool)]
         observed = {"sessions_count": len(prior)}
+        profile["population"] = {
+            "scope": "every eligible earlier session in the window, not only the sessions listed in "
+                     "history_as_of_session.sessions",
+            "sessions_count": len(prior),
+            "period_start": _date_part(prior[-1].get("date")),
+            "period_end": _date_part(prior[0].get("date")),
+        }
         # A missing distance is unknown, never zero: figures cover only the sessions that
         # record one, and only when there are enough of them to be a habit figure.
         if len(kms) >= MIN_HISTORY_SESSIONS:
@@ -175,6 +219,23 @@ def build_comment_context(llm_context: dict) -> dict:
     return out
 
 
+# Keys that only carry a database/Garmin/plan identifier. They stay in the backend (access control,
+# retrieval, traceability go through the request and the V3 loader, not through the prompt) and are
+# not repeated in the LLM prompt, where they give no sporting information.
+_ID_KEYS = {"workout_ids", "workout_id", "garmin_activity_id", "activity_id", "external_id",
+            "prescription_id", "user_id"}
+
+
+def strip_technical_ids(value: Any, selected_id: str = "") -> Any:
+    """Remove identifier-only fields; observation/source links use source_path and codes, not ids."""
+    if isinstance(value, dict):
+        return {k: strip_technical_ids(v, selected_id) for k, v in value.items()
+                if k not in _ID_KEYS and not (k == "id" and selected_id and str(v) == selected_id)}
+    if isinstance(value, list):
+        return [strip_technical_ids(v, selected_id) for v in value]
+    return value
+
+
 def build_session_chat_context(llm_context: dict) -> dict:
     """C408-B: selected context for a question about a selected historical workout.
 
@@ -186,7 +247,7 @@ def build_session_chat_context(llm_context: dict) -> dict:
     for key in ("session_coaching_frame", "coach_workout_analysis_allowed", "validated_workout_observations"):
         if key in llm_context:
             out[key] = copy.deepcopy(llm_context[key])
-    return out
+    return strip_technical_ids(out, selected_id=str((llm_context.get("workout_detail") or {}).get("id") or ""))
 
 
 # ------------------------------------------------------------------ fact scope
@@ -204,6 +265,45 @@ def _walk(value: Any, path: tuple, out: list) -> None:
         out.append((path, value))
 
 
+def _frame_facts(context: dict) -> dict:
+    """Numbers the C408 frame legitimately gives the Coach (V3 results, copied not recomputed)."""
+    frame = context.get("session_coaching_frame")
+    if not isinstance(frame, dict) or not isinstance(frame.get("v3_assessment"), dict):
+        return {}
+    v3 = frame["v3_assessment"]
+    relative = ((v3.get("classification") or {}).get("relative_effort")) or {}
+    comparison = v3.get("historical_comparison") or {}
+    facts: dict = {
+        "relative_hr": {k: relative.get(k) for k in (
+            "current_hr_bpm", "reference_count", "hr_q1_bpm", "hr_median_bpm", "hr_q3_bpm")},
+        "comparison_count": comparison.get("reference_count"),
+        "session_max_hr_bpm": (v3.get("intensity") or {}).get("session_max_hr_bpm"),
+    }
+    for key in ("pace_difference_sec_per_km_at_comparable_hr", "hr_difference_bpm_at_comparable_pace"):
+        if comparison.get(key) is not None:
+            facts[key] = comparison[key]
+    return facts
+
+
+def frame_dates(context: dict) -> list:
+    """Period boundaries of the V3 populations: citing them is grounded, not an invented date."""
+    frame = context.get("session_coaching_frame")
+    dates: list = []
+    if isinstance(frame, dict) and isinstance(frame.get("v3_assessment"), dict):
+        v3 = frame["v3_assessment"]
+        for block in (((v3.get("classification") or {}).get("relative_effort") or {}).get("provenance"),
+                      (v3.get("historical_comparison") or {}).get("provenance")):
+            for key in ("period_start", "period_end"):
+                parsed = _parse_date((block or {}).get(key))
+                if parsed is not None:
+                    dates.append(parsed)
+    for key in ("period_start", "period_end"):
+        parsed = _parse_date((context.get("runner_profile") or {}).get("population", {}).get(key))
+        if parsed is not None:
+            dates.append(parsed)
+    return dates
+
+
 def split_session_facts(context: dict) -> tuple[list, list]:
     """(session facts, comparison facts) as flattened (key path, leaf) pairs.
 
@@ -218,6 +318,7 @@ def split_session_facts(context: dict) -> tuple[list, list]:
     session: list = []
     _walk(detail, (), session)
     _walk(context.get("validated_workout_observations") or {}, ("observations",), session)
+    _walk(_frame_facts(context), ("observations", "frame"), session)
     compared: list = []
     _walk(comparison or {}, ("comparison",), compared)
     return session, compared
@@ -876,7 +977,7 @@ def validate_session_comment(text: Any, context: dict, language: str) -> tuple[b
     selected_date = _parse_date(
         (context.get("workout_detail") or {}).get("start_time")
         or (context.get("workout_detail") or {}).get("date"))
-    history_dates = history_facts["dates"]
+    history_dates = history_facts["dates"] + frame_dates(context)
     for mention in _mentioned_dates(text):
         if not (_date_is(mention, selected_date) or any(_date_is(mention, d) for d in history_dates)):
             reasons.add("ungrounded_date")
