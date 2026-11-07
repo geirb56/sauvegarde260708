@@ -34,7 +34,7 @@ async def test_validated_observations_reach_llm_context_once_without_recommendat
               AsyncMock(return_value=(_narrative(), None))) as loader,
     ):
         llm = server.llm_coach.enrich_chat_response
-        response = await _post({"message": "et la FC ?", "workout_id": "w1", "language": "fr"})
+        response = await _post({"message": "and the HR?", "workout_id": "w1", "language": "en"})
         context = llm.await_args.kwargs["context"]
     assert response.status_code == 200
     loader.assert_awaited_once()

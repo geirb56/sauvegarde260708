@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from test_coach_contract_unified import (
-    _FakeDB, _analyze_environment, _bearer, _free_access, _patch_server_db,
+    _FakeDB, _STUB_REPLIES, _analyze_environment, _bearer, _free_access, _patch_server_db,
 )
 from access_control import Tier, UserAccess, _resolve_access, get_user_access
 from coach_context_v2 import build_llm_coach_context
@@ -107,7 +107,7 @@ async def test_active_access_keeps_analysis_context_and_response(status):
     ):
         response = await _post({"message": "Analyze", "workout_id": "owned"})
         assert response.status_code == 200
-        assert response.json()["response"] == "coach-response"
+        assert response.json()["response"] == _STUB_REPLIES["en"]
         loader.assert_awaited_once_with(db=server.db, user_id="user-a",
                                        workout_id="owned", language="en")
         assert server.build_coach_context_v2.await_args.kwargs["workout_analysis"] is analysis

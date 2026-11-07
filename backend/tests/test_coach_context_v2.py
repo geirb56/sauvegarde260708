@@ -1069,6 +1069,7 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
         "included_count": 2,
         "max_count": 30,
         "truncated": False,
+        "strictly_prior_available_count": None,
     }
     history_query = next(query for query, _ in fake_db.garmin_activities.find_calls if "start_time" in query)
     assert history_query == {
@@ -1143,6 +1144,7 @@ async def test_coach_recent_workouts_report_exact_truncated_coverage():
         "included_count": 30,
         "max_count": 30,
         "truncated": True,
+        "strictly_prior_available_count": None,
     }
     dates = [item["date"] for item in context["recent_workouts"]]
     assert dates == sorted(dates, reverse=True)
@@ -1180,7 +1182,7 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     assert response.status_code == 200
     workout_detail = context.get("workout_detail")
     assert workout_detail is not None
-    assert workout_detail["id"] == "w-selected"
+    assert "id" not in workout_detail  # C408-C: technical ids are not sent to the LLM
     assert "name" not in workout_detail  # C408-B: free-text titles are not evidence (may contain a place)
     assert workout_detail["distance_km"] == 12.0
     assert workout_detail["duration_minutes"] == 60.0
@@ -1191,7 +1193,7 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     analysis = workout_detail.get("analysis")
     assert analysis is not None
     assert analysis["version"] == "v2"
-    assert analysis["workout"]["id"] == "w-selected"
+    assert "id" not in analysis["workout"]  # C408-C
     assert "summary" in analysis
     assert "signals" in analysis
     assert "physiology" in analysis
@@ -1200,7 +1202,8 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     assert "evidence" in analysis
     assert isinstance(analysis["comparison"]["similar"], dict)
     assert analysis["comparison"]["similar"]["available"] is True
-    assert "w-hist-1" in analysis["comparison"]["similar"]["workout_ids"]
+    assert "workout_ids" not in analysis["comparison"]["similar"]  # C408-C
+    assert analysis["comparison"]["similar"]["sample_count"] >= 1
 
 
 @pytest.mark.asyncio
@@ -1296,7 +1299,7 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
     )
 
     assert response.status_code == 200
-    assert context["workout_detail"]["id"] == "garmin-selected-0928"
+    assert "id" not in context["workout_detail"]  # C408-C
     assert "recent_workouts" not in context  # C408-B: selected session context, strictly prior history
     recent = context["history_as_of_session"]["sessions"]
     # Only the strictly prior session and the same-day session proven earlier by its timestamp.
@@ -1964,7 +1967,7 @@ async def test_coach_analyze_with_minimal_garmin_workout_pipeline():
     assert response.status_code == 200
     detail = context.get("workout_detail")
     assert detail is not None
-    assert detail["id"] == "garmin-real-pipeline-1"
+    assert "id" not in detail  # C408-C
     assert detail["max_heart_rate"] == 178
     assert detail["elevation_gain_m"] == 65.0
     assert detail["avg_speed_kmh"] == 12.22

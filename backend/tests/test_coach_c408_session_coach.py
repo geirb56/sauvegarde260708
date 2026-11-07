@@ -82,7 +82,7 @@ async def test_frame_and_workout_id_reach_llm_and_followup_keeps_workout():
         context = llm.await_args.kwargs["context"]
         history = llm.await_args.kwargs["conversation_history"]
     assert first.status_code == second.status_code == 200
-    assert context["session_coaching_frame"]["workout_id"] == "w1"
+    assert "workout_id" not in context["session_coaching_frame"]  # C408-C: no technical id in the prompt
     assert any(m["content"] == "Analyse cette séance" for m in history)
     assert {d["workout_id"] for d in fake_db.conversations._docs} == {"w1"}
 

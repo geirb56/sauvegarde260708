@@ -466,13 +466,14 @@ def test_exact_instants_exclude_a_later_session_with_an_earlier_calendar_date():
     assert _tz_dates("2026-01-11T01:00:00Z", ["2026-01-10T23:30:00-05:00"]) == []
 
 
-def test_naive_and_aware_timestamps_never_raise_and_naive_means_utc():
+def test_naive_and_aware_timestamps_never_raise_and_naive_is_not_utc():
+    # C408-C: a naive Garmin local time is not UTC; the order must hold for every real UTC offset.
     kept = _tz_dates("2026-01-10T12:00:00+00:00", ["2026-01-10T11:00:00", "2026-01-10T13:00:00",
-                                                    "2026-01-09T20:00:00+05:00"])
-    assert kept == ["2026-01-10T11:00:00", "2026-01-09T20:00:00+05:00"]
+                                                    "2026-01-09T20:00:00+05:00", "2026-01-08T11:00:00"])
+    assert kept == ["2026-01-09T20:00:00+05:00", "2026-01-08T11:00:00"]
     assert set(_tz_dates("2026-01-10T12:00:00", ["2026-01-10T11:00:00Z", "2026-01-10T12:30:00+01:00",
-                                                  "2026-01-10T13:30:00+01:00"])) \
-        == {"2026-01-10T11:00:00Z", "2026-01-10T12:30:00+01:00"}
+                                                  "2026-01-08T13:30:00+01:00"])) \
+        == {"2026-01-08T13:30:00+01:00"}
 
 
 def test_equal_calendar_dates_remain_no_proof_when_one_side_is_date_only():

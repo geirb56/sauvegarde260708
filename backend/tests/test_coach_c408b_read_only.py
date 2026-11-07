@@ -106,7 +106,7 @@ async def test_initial_analysis_does_not_mutate_training_v2():
     assert _training_writes(writes) == []
     assert {w[0] for w in writes} <= ALLOWED_WRITE_COLLECTIONS
     assert any(w == ("conversations", "insert_one") for w in writes)  # chat history still works
-    assert contexts[0]["session_coaching_frame"]["workout_id"] == "w1"
+    assert "workout_id" not in contexts[0]["session_coaching_frame"]  # C408-C
 
 
 async def test_rerun_on_same_session_does_not_mutate_training_v2():
