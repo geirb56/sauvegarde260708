@@ -32,7 +32,7 @@ _SAME_DISTANCE = re.compile(
     r"(m[êe]me distance|(?:s[ée]ances?|sorties?|runs?|sessions?|salidas?|sesiones?)\s+(?:similaires?|similar(?:es)?)\b|"
     r"distances? (?:similaires?|comparables?|identiques?|proche)|same distance|"
     r"(?:similar|comparable|same)[- ]distance|distance (?:similar|comparable)|misma distancia|"
-    r"distancias? (?:similares?|comparables?)|de distance (?:similaire|comparable))", re.I)
+    r"distancias? (?:similar(?:es)?|comparables?)|de distance (?:similaire|comparable))", re.I)
 _HR_POSITION = re.compile(
     r"(quartile|partie (?:basse|haute)|lower (?:part|end|quarter)|upper (?:part|end|quarter)|"
     r"parte (?:baja|alta)|m[ée]diane|median|mediana|position relative|relative position|"
@@ -174,6 +174,9 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
     for sentence in csc._sentences(text):
         if _direction_contradicted(sentence, facts):
             reasons.add("comparison_direction_contradicts")
+        if _states_metric_figure(sentence) and _attribute(sentence, facts) is None and not (
+                _requested_only(sentence, requested)):
+            reasons.add("figure_not_attributed")
         counts: list[int] = [int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(sentence)]
         counts += [csc._WORD_VALUE[m.group(1).lower()] for m in _WORD_COUNT_BEFORE_NOUN.finditer(sentence)]
         counts = [n for n in counts if n > 1]
@@ -224,6 +227,31 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
         if _RECOVERY_ADVICE.search(sentence) and not csc._only_negated(sentence, _RECOVERY_ADVICE):
             reasons.add("recovery_advice_not_supported")
     return reasons
+
+
+def _states_metric_figure(sentence: str) -> bool:
+    """True when a sentence states a pace, a unit-bearing figure, a session count or a comparison figure."""
+    if _PACE_RE.search(sentence):
+        return True
+    text = _PACE_RE.sub(" ", sentence)
+    cue = _AT_COMPARABLE_HR.search(text) or _AT_COMPARABLE_PACE.search(text) or _SAME_DISTANCE.search(text)
+    for m in _FIGURE.finditer(text):
+        tail = text[m.end():m.end() + 40]
+        if cue or _UNIT_AFTER.match(tail) or _COUNT_AFTER.match(tail):
+            return True
+    return any(csc._WORD_VALUE[m.group(1).lower()] > 1 for m in _WORD_COUNT_BEFORE_NOUN.finditer(text))
+
+
+def _requested_only(sentence: str, requested: set[int]) -> bool:
+    """True when every figure is a session count the user asked for; any other figure (unit, pace, delta) disqualifies."""
+    if _PACE_RE.search(sentence):
+        return False
+    text = sentence
+    counts = [int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(text)]
+    counts += [csc._WORD_VALUE[m.group(1).lower()] for m in _WORD_COUNT_BEFORE_NOUN.finditer(text)]
+    figures = [m for m in _FIGURE.finditer(text) if not _COUNT_AFTER.match(text[m.end():m.end() + 40])
+               or _UNIT_AFTER.match(text[m.end():m.end() + 40])]
+    return bool(counts) and not figures and all(n in requested for n in counts)
 
 
 def _requested_counts(question: Optional[str], c: dict) -> set[int]:
@@ -646,6 +674,14 @@ _INFERENCE = re.compile(
     r"confirma|porque|por lo tanto|lo que)", re.I)
 
 
+# A figure-free sentence is kept only when it states a limit of the analysis: it restricts what can be
+# concluded and asserts nothing about the session. Any other figure-free evaluation stays unproven.
+_LIMIT_STATEMENT = re.compile(
+    r"(limit[ée]e?s?\b|ne (?:peut|permet|suffit|permettent)|n'est pas (?:possible|d[ée]montr)|aucun[e]? |"
+    r"cannot|can't|limited|not (?:possible|demonstrated|enough)|does not (?:allow|show)|no (?:se )?(?:puede|permite)|"
+    r"limitad[oa]s?|no hay)", re.I)
+
+
 def _sentence_reasons(sentence: str, context: dict, language: str, question: Optional[str]) -> set[str]:
     _, local = csc.validate_session_comment(sentence, context, language)
     return (set(local) - {"format", "length", "language"}) | check_contract_claims(sentence, context, question)
@@ -689,6 +725,9 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
             continue
         ids = _attribute(sentence, facts)
         if not ids:
+            if ids is None and not _states_metric_figure(sentence) and not _FIGURE.search(sentence) \
+                    and _LIMIT_STATEMENT.search(sentence):
+                kept.append(sentence)
             continue
         kept.append(sentence)
         covered |= ids

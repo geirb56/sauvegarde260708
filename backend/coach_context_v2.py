@@ -75,6 +75,7 @@ class CoachWorkoutDetail(BaseModel):
     avg_heart_rate: Optional[float] = None
     max_heart_rate: Optional[float] = None
     avg_pace_min_km: Optional[float] = None
+    avg_pace_display: Optional[str] = None
     avg_speed_kmh: Optional[float] = None
     elevation_gain_m: Optional[float] = None
     zones: Optional[dict[str, Any]] = None
@@ -348,6 +349,8 @@ def _project_paces_for_llm(value: Any) -> Any:
             "actual_pace_min_per_km",
         }:
             if isinstance(item, dict):
+                continue
+            if key == "avg_pace_min_km" and value.get("avg_pace_display"):
                 continue
             display = _format_pace_min_km(item)
             if display is not None:
@@ -1040,6 +1043,22 @@ def _safe_pace_min_km(workout: dict[str, Any]) -> Optional[float]:
     return None
 
 
+def _pace_display_from_raw(workout: dict[str, Any]) -> Optional[str]:
+    """Display only: nearest second from the unrounded source (the 2-decimal context value is never re-used)."""
+    seconds = workout.get("pace_seconds_per_km")
+    if seconds is not None and not isinstance(seconds, bool):
+        return _format_pace_min_km(Decimal(str(seconds)) / Decimal("60")) if _is_positive(seconds) else None
+    raw = workout.get("avg_pace_min_km")
+    return _format_pace_min_km(raw) if _is_positive(raw) else None
+
+
+def _is_positive(value: Any) -> bool:
+    try:
+        return not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _safe_speed_kmh(workout: dict[str, Any]) -> Optional[float]:
     raw_speed = workout.get("avg_speed_kmh")
     if raw_speed is not None and not isinstance(raw_speed, bool):
@@ -1249,6 +1268,7 @@ def _normalize_workout_detail(
         avg_heart_rate=avg_hr,
         max_heart_rate=max_hr,
         avg_pace_min_km=avg_pace,
+        avg_pace_display=_pace_display_from_raw(raw_values),
         avg_speed_kmh=avg_speed,
         elevation_gain_m=elevation,
         zones=raw_values.get("effort_zone_distribution"),
