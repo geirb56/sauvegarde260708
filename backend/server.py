@@ -464,6 +464,7 @@ async def rate_limit_middleware(request: Request, call_next):
             status_code=429,
             content={
                 "error": "Too many requests",
+                "code": "rate_limit_exceeded",
                 "retry_after": 60,
                 **rate_limiter.get_stats(user_id)
             }
@@ -2175,7 +2176,24 @@ async def _build_coach_llm_context(
     *, user: dict, language: str, workout, workout_analysis,
     workout_analysis_allowed: bool, workout_id: Optional[str], now_utc: datetime,
 ):
-    """Chat context (unchanged behaviour): Training V2 week/today are loaded as before."""
+    """Chat context.
+
+    C408-B: a question about a selected (historical) workout is a read-only consultation.
+    It never calls get_training_v2_week / get_today_adaptive_session (they persist served
+    prescriptions and invalidate future snapshots) and receives the selected session context
+    (C402 principle) instead of today's plan. General chat keeps the Training V2 payloads.
+    """
+    if workout_id is not None and workout_analysis_allowed:
+        async def read_only_training_payloads():
+            return {}, {"status": "unavailable"}
+
+        llm_context, narrative = await _assemble_coach_llm_context(
+            user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+            workout_analysis_allowed=True, workout_id=workout_id, now_utc=now_utc,
+            load_training_payloads=read_only_training_payloads, goal_optional=True,
+        )
+        return coach_session_comment.build_session_chat_context(llm_context), narrative
+
     async def load_training_payloads():
         return (await get_training_v2_week(user=user)), (await get_today_adaptive_session(user=user))
 
@@ -2207,6 +2225,19 @@ async def _build_coach_comment_context(
     )
     # C402: the comment gets a selected, labelled context, not the whole chat context.
     return coach_session_comment.build_comment_context(llm_context), narrative
+
+
+class CoachLimitError(HTTPException):
+    """HTTP 429 of the Coach with a stable machine-readable `code` next to the legacy `detail`."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(status_code=429, detail=detail)
+        self.code = code
+
+
+@app.exception_handler(CoachLimitError)
+async def _coach_limit_error_handler(_request: Request, exc: CoachLimitError):
+    return JSONResponse(status_code=429, content={"detail": exc.detail, "code": exc.code})
 
 
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
@@ -2246,16 +2277,16 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             "timestamp": {"$gte": month_start.isoformat()},
         })
         if message_count >= CHAT_ANTIABUSE_CAP:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many coach messages this month. Please try again later.",
+            raise CoachLimitError(
+                "coach_abuse_cap_reached",
+                "Too many coach messages this month. Please try again later.",
             )
     else:
         reservation = await _reserve_free_coach_quota_slot(user_id=user_id, now_utc=now_utc)
         if reservation is None:
-            raise HTTPException(
-                status_code=429,
-                detail=f"You've reached your monthly coach limit of {CHAT_QUOTA_FREE} messages.",
+            raise CoachLimitError(
+                "coach_monthly_quota_exhausted",
+                f"You've reached your monthly coach limit of {CHAT_QUOTA_FREE} messages.",
             )
 
     try:

@@ -480,6 +480,11 @@ def _recorded_prescription(intel: Optional[dict[str, Any]]) -> Any:
             "prescribed_duration_minutes": assessment.get("prescribed_duration_minutes"),
             "observed_classification": assessment.get("observed_classification"),
             "reasons": list(assessment.get("reasons") or []),
+            "status_meaning": (
+                "no conformity verdict can be given (not a deviation); the recorded prescription "
+                "remains a historical fact" if assessment.get("status") == "indeterminate"
+                else "engine verdict on observed type versus the recorded prescription"
+            ),
         }
     status = assessment.get("status")
     reasons = set(assessment.get("reasons") or [])

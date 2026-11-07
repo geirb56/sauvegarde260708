@@ -312,6 +312,7 @@ export const translations = {
       backToWorkout: "Back to workout",
       workoutNotFound: "This workout is not accessible. Open it again from your sessions list.",
       limitReached: "You have reached your monthly Coach limit. See your subscription for more.",
+      rateLimited: "You are sending requests too quickly. Please wait a moment and try again.",
       followups: {
         compare: "How does this compare with my other runs?",
         takeaway: "What should I take away most of all?",
@@ -1351,6 +1352,7 @@ export const translations = {
       backToWorkout: "Retour à la séance",
       workoutNotFound: "Cette séance n'est pas accessible. Rouvrez-la depuis votre liste de séances.",
       limitReached: "Vous avez atteint votre limite mensuelle du Coach. Consultez votre abonnement.",
+      rateLimited: "Vous envoyez trop de demandes en peu de temps. Patientez un instant puis réessayez.",
       followups: {
         compare: "Et par rapport à mes autres sorties ?",
         takeaway: "Qu’est-ce que je dois retenir surtout ?",
@@ -2328,6 +2330,7 @@ export const translations = {
       backToWorkout: "Volver a la sesión",
       workoutNotFound: "Esta sesión no es accesible. Ábrela de nuevo desde tu lista de sesiones.",
       limitReached: "Has alcanzado tu límite mensual del Coach. Consulta tu suscripción.",
+      rateLimited: "Estás enviando solicitudes demasiado rápido. Espera un momento e inténtalo de nuevo.",
       followups: {
         compare: "¿Y en comparación con mis otras salidas?",
         takeaway: "¿Qué es lo más importante que debo recordar?",

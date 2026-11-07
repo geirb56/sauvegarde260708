@@ -64,8 +64,9 @@ def test_prompt_contract_for_coach_judgment():
         "session_coaching_frame",
         "COACH JUDGMENT",
         "Never present (3) as (1)",
-        "do not allow a conclusion",
-        "never a new workout, distance, pace or day",
+        "three levels of proof",
+        "give no priority, no rest advice and no next-session suggestion",
+        "feelings are not known",
         "do not append an artificial closing question",
         "Never present the maximum HR observed in an activity as the athlete's physiological max HR",
     ):

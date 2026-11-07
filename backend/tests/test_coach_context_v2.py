@@ -1181,7 +1181,7 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     workout_detail = context.get("workout_detail")
     assert workout_detail is not None
     assert workout_detail["id"] == "w-selected"
-    assert workout_detail["name"] == "Progression Run"
+    assert "name" not in workout_detail  # C408-B: free-text titles are not evidence (may contain a place)
     assert workout_detail["distance_km"] == 12.0
     assert workout_detail["duration_minutes"] == 60.0
     assert workout_detail["avg_heart_rate"] == 155
@@ -1297,36 +1297,15 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
 
     assert response.status_code == 200
     assert context["workout_detail"]["id"] == "garmin-selected-0928"
-    recent = context["recent_workouts"]
-    recent_ids = {item["id"] for item in recent}
-    assert "garmin-prior-0926" in recent_ids
-    assert "garmin-same-day-before" in recent_ids
-    assert "garmin-same-day-date-only" not in recent_ids
-    assert "garmin-same-day-after" not in recent_ids
-    assert "garmin-same-day-equal" not in recent_ids
-    assert "garmin-selected-0928" not in recent_ids
-    assert "garmin-future-1001" not in recent_ids
-    assert context["current_training_context"]["reference_date"] == "2026-10-03"
-    assert context["current_training_context"]["temporal_scope"] == "current_only"
-    assert context["current_training_context"]["may_include_activity_after_selected_workout"] is True
-    assert context["current_training_context"]["historical_selected_workout_evidence"] is False
-    assert context["current_training_context"]["stats_7d"]["km"] > 0
-    assert context["current_training_context"]["stats_30d"]["km"] > 0
-    assert "stats_7d" not in context
-    assert "stats_30d" not in context
-    assert (
-        "may include activity after the selected workout"
-        in context["current_training_context"]["description"]
-    )
-    assert context["recent_workouts_coverage"] == {
-        "window_days": 30,
-        "start_date_inclusive": "2026-08-30",
-        "end_date_inclusive": "2026-09-28",
-        "available_count": 2,
-        "included_count": 2,
-        "max_count": 30,
-        "truncated": False,
-    }
+    assert "recent_workouts" not in context  # C408-B: selected session context, strictly prior history
+    recent = context["history_as_of_session"]["sessions"]
+    # Only the strictly prior session and the same-day session proven earlier by its timestamp.
+    assert sorted(item["distance_km"] for item in recent) == [9.0, 10.4]
+    for current_only in ("current_training_context", "stats_7d", "stats_30d", "readiness", "performance",
+                         "recent_workouts_coverage"):
+        assert current_only not in context
+    assert context["history_as_of_session"]["observation_window_days"] == 30
+    assert context["history_as_of_session"]["truncated"] is False
     assert context["selected_workout_history_cutoff"] == "2026-09-28T10:00:00+00:00"
     assert context["selected_workout_history_cutoff_precision"] == "strict_timestamp_exclusive"
 
