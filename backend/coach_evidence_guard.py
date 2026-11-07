@@ -236,7 +236,7 @@ def verify_chat_reply(text: Any, context: dict, language: str, question: Optiona
 # ------------------------------------------------------------------ factual fallback
 
 def _num(value: float, language: str) -> str:
-    text = f"{value:.1f}".rstrip("0").rstrip(".") if value != int(value) else str(int(value))
+    text = f"{value:.2f}".rstrip("0").rstrip(".") if value != int(value) else str(int(value))
     return text.replace(".", ",") if language in {"fr", "es"} else text
 
 
@@ -249,14 +249,21 @@ def _day(value: Any, language: str) -> str:
 
 _FALLBACK = {
     "fr": {
-        "measured": "Voici ce que montrent les données de cette séance : {parts}.",
+        "measured": "Cette séance en chiffres : {parts}.",
         "efforts": "Allures des répétitions enregistrées : {paces}.",
         "position": {"low": "dans la partie basse", "intermediate": "dans la zone intermédiaire",
                      "high": "dans la partie haute"},
-        "relative": "Votre FC moyenne se situe {position} de vos {count} séances de référence ({start} au {end}), "
-                    "retenues selon les critères du moteur (même environnement, durée comparable, hors fractionné "
-                    "et compétition ; la distance n'est pas un critère). C'est une position relative dans votre "
+        "relative": "Ta FC moyenne se situe {position} de tes {count} séances de référence (même environnement, "
+                    "durée comparable, hors fractionné et compétition) : c'est une position relative dans ton "
                     "historique, pas une zone physiologique.",
+        "similar": "Par rapport à tes {count} sorties précédentes de distance similaire, ton allure est de "
+                   "{delta} s/km {direction}.",
+        "pace_at_hr": "À FC comparable, ton allure est de {delta} s/km {direction} que sur {count} séances "
+                      "antérieures.",
+        "hr_at_pace": "À allure comparable, ta FC moyenne est de {delta} bpm {direction} que sur {count} séances "
+                      "antérieures.",
+        "slower": "plus lente", "faster": "plus rapide", "slower_than": "plus lente", "faster_than": "plus rapide",
+        "higher": "plus haute", "lower": "plus basse",
         "before": "Une prescription du jour ({kind}) avait été enregistrée avant la séance ; son respect n'est pas établi.",
         "after": "Une prescription du jour ({kind}) n'a été enregistrée qu'après la séance : ce n'est pas une "
                  "intention connue avant le départ.",
@@ -267,21 +274,27 @@ _FALLBACK = {
             "progress_not_demonstrated": "Aucune progression n'est établie.",
             "recovery_not_measured": "La récupération n'est pas mesurée.",
         },
-        "thresholds": "Selon vos seuils enregistrés, la FC moyenne se situe {position}.",
+        "thresholds": "Selon tes seuils enregistrés, la FC moyenne se situe {position}.",
         "threshold_position": {"below_LT1": "sous LT1", "between_LT1_LT2": "entre LT1 et LT2",
                                "above_LT2": "au-dessus de LT2"},
         "units": {"distance_km": "{v} km", "duration_minutes": "{v} min", "avg_hr_bpm": "FC moyenne {v} bpm",
                   "avg_pace": "allure moyenne {v}", "elevation_gain_m": "{v} m de dénivelé positif"},
     },
     "en": {
-        "measured": "Here is what the data of this session show: {parts}.",
+        "measured": "This session in numbers: {parts}.",
         "efforts": "Recorded repetition paces: {paces}.",
         "position": {"low": "in the lower part", "intermediate": "in the intermediate range",
                      "high": "in the upper part"},
-        "relative": "Your average HR sits {position} of your {count} reference sessions ({start} to {end}), "
-                    "selected by the engine's criteria (same environment, comparable duration, excluding intervals "
-                    "and races; distance is not a criterion). It is a relative position in your own history, not "
-                    "a physiological zone.",
+        "relative": "Your average HR sits {position} of your {count} reference sessions (same environment, "
+                    "comparable duration, excluding intervals and races): it is a relative position in your own "
+                    "history, not a physiological zone.",
+        "similar": "Compared with your {count} previous runs of similar distance, your pace is {delta} s/km "
+                   "{direction}.",
+        "pace_at_hr": "At comparable HR, your pace is {delta} s/km {direction} than over {count} earlier sessions.",
+        "hr_at_pace": "At comparable pace, your average HR is {delta} bpm {direction} than over {count} earlier "
+                      "sessions.",
+        "slower": "slower", "faster": "faster", "slower_than": "slower", "faster_than": "faster",
+        "higher": "higher", "lower": "lower",
         "before": "A prescription for the day ({kind}) was recorded before the session; whether it was followed "
                   "is not established.",
         "after": "A prescription for the day ({kind}) was only recorded after the session: it is not an intention "
@@ -300,19 +313,26 @@ _FALLBACK = {
                   "avg_pace": "average pace {v}", "elevation_gain_m": "{v} m of elevation gain"},
     },
     "es": {
-        "measured": "Esto es lo que muestran los datos de esta sesión: {parts}.",
+        "measured": "Esta sesión en cifras: {parts}.",
         "efforts": "Ritmos de las repeticiones registradas: {paces}.",
         "position": {"low": "en la parte baja", "intermediate": "en la zona intermedia", "high": "en la parte alta"},
-        "relative": "Tu FC media se sitúa {position} de tus {count} sesiones de referencia ({start} a {end}), "
-                    "elegidas según los criterios del motor (mismo entorno, duración comparable, sin series ni "
-                    "competición; la distancia no es un criterio). Es una posición relativa en tu historial, no "
-                    "una zona fisiológica.",
+        "relative": "Tu FC media se sitúa {position} de tus {count} sesiones de referencia (mismo entorno, "
+                    "duración comparable, sin series ni competición): es una posición relativa en tu historial, "
+                    "no una zona fisiológica.",
+        "similar": "Frente a tus {count} salidas anteriores de distancia similar, tu ritmo es {delta} s/km "
+                   "{direction}.",
+        "pace_at_hr": "Con FC comparable, tu ritmo es {delta} s/km {direction} que en {count} sesiones "
+                      "anteriores.",
+        "hr_at_pace": "Con ritmo comparable, tu FC media es {delta} bpm {direction} que en {count} sesiones "
+                      "anteriores.",
+        "slower": "más lento", "faster": "más rápido", "slower_than": "más lento", "faster_than": "más rápido",
+        "higher": "más alta", "lower": "más baja",
         "before": "Se registró una prescripción del día ({kind}) antes de la sesión; no está establecido que se cumpliera.",
         "after": "La prescripción del día ({kind}) solo se registró después de la sesión: no es una intención "
                  "conocida antes de salir.",
         "unknown": "Existe una prescripción del día ({kind}), pero se desconoce cuándo se registró.",
         "limits": {
-            "physiological_intensity_undetermined": "La intensidad fisiológica no puede determinarse "
+            "physiological_intensity_undetermined": "No se puede determinar la intensidad fisiológica "
                                                     "(ningún umbral personal registrado).",
             "progress_not_demonstrated": "No se establece ningún progreso.",
             "recovery_not_measured": "La recuperación no está medida.",
@@ -325,49 +345,232 @@ _FALLBACK = {
     },
 }
 
+_DISPLAY_DELTA = re.compile(r"([+-]?)(\d+):(\d{2})")
+_LIMIT_PRIORITY = ("physiological_intensity_undetermined", "progress_not_demonstrated", "recovery_not_measured")
 
-def build_contract_fallback(context: dict, language: str) -> Optional[str]:
-    """Factual, useful reply built only from the evidence contract; None when it holds nothing."""
+
+def _signed_delta(value: Any, positive: str, negative: str, texts: dict, language: str) -> Optional[tuple[str, str]]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value in (
+            float("inf"), float("-inf")) or round(abs(value), 1) == 0:
+        return None
+    return _num(round(abs(value), 1), language), texts[positive if value > 0 else negative]
+
+
+def _similar_delta_seconds(context: dict) -> Optional[int]:
+    """Signed s/km (positive = slower) of the similar-distance comparison, parsed from its display value."""
+    similar = (((context.get("workout_detail") or {}).get("analysis") or {}).get("comparison") or {}).get("similar")
+    display = similar.get("pace_difference_display") if isinstance(similar, dict) else None
+    match = _DISPLAY_DELTA.fullmatch(display.replace("/km", "")) if isinstance(display, str) else None
+    if not match:
+        return None
+    seconds = int(match.group(2)) * 60 + int(match.group(3))
+    return -seconds if match.group(1) == "-" else seconds
+
+
+def _fallback_items(context: dict, language: str) -> list[tuple[str, set[str]]]:
+    """Ordered (sentence, figures it carries) built only from the evidence contract."""
     texts = _FALLBACK.get(language, _FALLBACK["en"])
     frame = context.get("session_coaching_frame")
     contract = (frame or {}).get("evidence_contract") if isinstance(frame, dict) else None
     if not isinstance(contract, dict):
-        return None
+        return []
+    items: list[tuple[str, set[str]]] = []
     measured = contract.get("measured_facts") or {}
-    parts = []
+    parts, figures = [], set()
     for key, template in texts["units"].items():
         value = measured.get(key)
         if isinstance(value, bool) or value is None:
             continue
-        parts.append(template.format(v=_num(value, language) if isinstance(value, (int, float)) else value))
-    sentences = []
+        shown = _num(value, language) if isinstance(value, (int, float)) else str(value)
+        parts.append(template.format(v=shown))
+        figures.add(shown)
     if parts:
-        sentences.append(texts["measured"].format(parts=", ".join(parts)))
+        items.append((texts["measured"].format(parts=", ".join(parts)), figures))
     paces = [e["value"] for e in measured.get("recorded_effort_paces") or [] if isinstance(e, dict) and e.get("value")]
     if paces:
-        sentences.append(texts["efforts"].format(paces=", ".join(paces)))
-    relative = (((frame.get("v3_assessment") or {}) if isinstance(frame.get("v3_assessment"), dict) else {})
-                .get("classification") or {}).get("relative_effort") or {}
+        items.append((texts["efforts"].format(paces=", ".join(paces)), set(paces)))
+    v3 = frame.get("v3_assessment") if isinstance(frame.get("v3_assessment"), dict) else {}
+    relative = (v3.get("classification") or {}).get("relative_effort") or {}
     provenance = relative.get("provenance") or {}
     if relative.get("status") == "used" and relative.get("relative_position") in texts["position"] \
             and provenance.get("activity_count"):
-        sentences.append(texts["relative"].format(
-            position=texts["position"][relative["relative_position"]], count=provenance["activity_count"],
-            start=_day(provenance.get("period_start"), language), end=_day(provenance.get("period_end"), language)))
+        items.append((texts["relative"].format(
+            position=texts["position"][relative["relative_position"]], count=provenance["activity_count"]),
+            {str(provenance["activity_count"])}))
+
+    permissions = context.get("selected_workout_permissions") or {}
+    similar_count = next(
+        (c.get("activity_count") for c in contract.get("validated_comparisons") or []
+         if c.get("metric") == "pace_and_hr_vs_similar_distance_sessions"), None)
+    similar_delta = _similar_delta_seconds(context)
+    if permissions.get("similar_comparison_available") and similar_count and similar_delta:
+        delta = _signed_delta(similar_delta, "slower", "faster", texts, language)
+        if delta:
+            items.append((texts["similar"].format(count=similar_count, delta=delta[0], direction=delta[1]),
+                          {str(similar_count), delta[0]}))
+    comparison = next((c for c in contract.get("validated_comparisons") or []
+                       if c.get("metric") == "pace_and_hr_at_comparable_effort"), None)
+    if comparison:
+        values = comparison.get("values") or {}
+        sub = ((v3.get("historical_comparison") or {}).get("provenance") or {}).get("sub_populations") or {}
+        pace_n = (sub.get("pace_at_comparable_hr") or {}).get("activity_count")
+        hr_n = (sub.get("hr_at_comparable_pace") or {}).get("activity_count")
+        pace_value = (values.get("pace_difference_at_comparable_hr") or {}).get("value")
+        hr_value = (values.get("hr_difference_at_comparable_pace") or {}).get("value")
+        pace = _signed_delta(pace_value, "slower_than", "faster_than", texts, language) if pace_n else None
+        if pace:
+            items.append((texts["pace_at_hr"].format(delta=pace[0], direction=pace[1], count=pace_n),
+                          {pace[0], str(pace_n)}))
+        hr = _signed_delta(hr_value, "higher", "lower", texts, language) if hr_n else None
+        if hr:
+            items.append((texts["hr_at_pace"].format(delta=hr[0], direction=hr[1], count=hr_n),
+                          {hr[0], str(hr_n)}))
+
     recorded = (frame.get("session_intent") or {}).get("recorded_historical_prescription")
     if isinstance(recorded, dict):
         timing = {"recorded_before_session": "before", "recorded_after_session": "after"}.get(
             recorded.get("recording_timing"), "unknown")
-        sentences.append(texts[timing].format(kind=recorded.get("prescribed_workout_type") or "?"))
-    intensity = ((frame.get("v3_assessment") or {}).get("intensity") or {}) if isinstance(
-        frame.get("v3_assessment"), dict) else {}
+        items.append((texts[timing].format(kind=recorded.get("prescribed_workout_type") or "?"), set()))
+    intensity = v3.get("intensity") or {}
     if intensity.get("thresholds_available") and intensity.get("position_vs_declared_thresholds") in \
             texts["threshold_position"]:
-        sentences.append(texts["thresholds"].format(
-            position=texts["threshold_position"][intensity["position_vs_declared_thresholds"]]))
-    if not sentences:
-        return None
-    # Only the limits the contract itself declares: nothing is asserted as undetermined otherwise.
+        items.append((texts["thresholds"].format(
+            position=texts["threshold_position"][intensity["position_vs_declared_thresholds"]]), set()))
+    return items
+
+
+def _fallback_limit(contract: dict, language: str) -> Optional[str]:
+    """The single most important limit the contract itself declares; nothing is asserted otherwise."""
+    texts = _FALLBACK.get(language, _FALLBACK["en"])
     declared = contract.get("not_demonstrated") or {}
-    limits = [text for key, text in texts["limits"].items() if key in declared]
-    return " ".join(sentences + limits)
+    for key in _LIMIT_PRIORITY:
+        if key in declared:
+            return texts["limits"][key]
+    return None
+
+
+def build_contract_fallback(context: dict, language: str) -> Optional[str]:
+    """Factual, useful reply built only from the evidence contract; None when it holds nothing."""
+    items = _fallback_items(context, language)
+    if not items:
+        return None
+    limit = _fallback_limit(context["session_coaching_frame"]["evidence_contract"], language)
+    return " ".join([text for text, _ in items] + ([limit] if limit else []))
+
+
+# ------------------------------------------------------------------ partial validation (C408-D)
+
+# A sentence that leans on its neighbours (pronoun, connector) or that states an inference
+# cannot be judged on its own: it never survives a partial repair.
+_DEPENDENT_START = re.compile(
+    r"^\W*(?:ce|cela|ça|c'est|ceci|il|elle|ils|elles|mais|donc|ainsi|et|or|car|du coup|en revanche|en effet|"
+    r"par conséquent|d'où|dans ce cas|this|that|these|those|it|they|but|so|therefore|thus|and|however|also|"
+    r"hence|as a result|in that case|esto|eso|ello|pero|así|por lo tanto|y|además|en ese caso)\b", re.I)
+_SESSION_SUBJECT = re.compile(
+    rf"^\W*(?:cette|this|esta|ces|these)\s+(?:\w+\s+)?{_SESSION_NOUN}\b", re.I)
+_INFERENCE = re.compile(
+    r"(ce qui|c'est (?:le )?signe|signe d|which|suggest|sugg[èe]re|indique|indicates?|shows? that|montre que|"
+    r"confirm|prouve|prove|means|signifie|implies|implique|because|parce que|puisque|\bcar\b|\bdonc\b|"
+    r"therefore|so that|reflet|reflects?|traduit|t[ée]moigne|demuestra|sugiere|\bindica\b|significa|"
+    r"confirma|porque|por lo tanto|lo que)", re.I)
+_PACE_TOKEN = re.compile(r"\d{1,2}:\d{2}")
+_FIGURE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _grounded_figures(context: dict) -> tuple[set[float], set[str]]:
+    """Every figure the contract authorises a reply to quote (numbers and m:ss paces)."""
+    c = _contract(context)
+    frame = context.get("session_coaching_frame") or {}
+    contract = frame.get("evidence_contract") or {}
+    measured = contract.get("measured_facts") or {}
+    numbers: set[float] = {float(n) for n in c["all_counts"]}
+    paces: set[str] = set()
+    for value in measured.values():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numbers.add(float(value))
+        elif isinstance(value, str):
+            paces.add(value)
+        elif isinstance(value, list):
+            paces |= {e["value"] for e in value if isinstance(e, dict) and isinstance(e.get("value"), str)
+                      and _PACE_TOKEN.fullmatch(e["value"])}
+    for comparison in contract.get("validated_comparisons") or []:
+        for block in (comparison.get("values") or {}).values():
+            value = block.get("value") if isinstance(block, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numbers.add(abs(float(value)))
+    similar = _similar_delta_seconds(context)
+    if similar is not None and (context.get("selected_workout_permissions") or {}).get(
+            "similar_comparison_available"):
+        numbers.add(float(abs(similar)))
+    return numbers, paces
+
+
+def _positively_grounded(sentence: str, numbers: set[float], paces: set[str]) -> bool:
+    """True only when the sentence carries figures and every one is authorised by the contract."""
+    sentence_paces = _PACE_TOKEN.findall(sentence)
+    if any(p not in paces for p in sentence_paces):
+        return False
+    figures = _FIGURE.findall(_PACE_TOKEN.sub(" ", sentence))
+    if not figures and not sentence_paces:
+        return False
+    return all(any(abs(float(f.replace(",", ".")) - n) <= 0.51 for n in numbers) for f in figures)
+
+
+def _sentence_reasons(sentence: str, context: dict, language: str, question: Optional[str]) -> set[str]:
+    _, local = csc.validate_session_comment(sentence, context, language)
+    return (set(local) - {"format", "length", "language"}) | check_contract_claims(sentence, context, question)
+
+
+def resolve_chat_reply(text: Any, context: dict, language: str, question: Optional[str] = None) -> dict:
+    """One deterministic pass, no second LLM call.
+
+    Returns {"passed", "level", "rejected_checks", "text", "response_source", "removed_sentences"}.
+    A reply that passes is returned unchanged. A rejected one is repaired only when every
+    rejection is attributable to whole sentences and what is kept is positively proven
+    (guard-clean, only contract-authorised figures, no dependency, no inference); the figures of
+    the removed sentences come back from the contract. Anything else gets the full contract
+    fallback. No words are ever cut out of a sentence.
+    """
+    verdict = verify_chat_reply(text, context, language, question)
+    result = {**verdict, "text": text, "response_source": "llm_reply_checked", "removed_sentences": 0}
+    if verdict["passed"]:
+        return result
+    result["text"], result["response_source"] = None, "contract_fallback"
+    fallback = build_contract_fallback(context, language)
+    items = _fallback_items(context, language)
+    full_text = text.strip() if isinstance(text, str) else ""
+    sentences = csc._sentences(full_text)
+    if not sentences or not items:
+        result["text"] = fallback
+        return result
+
+    attributed: set[str] = set()
+    kept: list[str] = []
+    numbers, paces = _grounded_figures(context)
+    for sentence in sentences:
+        reasons = _sentence_reasons(sentence, context, language, question)
+        attributed |= reasons
+        if reasons:
+            continue
+        if _DEPENDENT_START.search(sentence) and not _SESSION_SUBJECT.search(sentence):
+            continue
+        if _INFERENCE.search(sentence) or not _positively_grounded(sentence, numbers, paces):
+            continue
+        kept.append(sentence)
+    result["removed_sentences"] = len(sentences) - len(kept)
+    if not set(verdict["rejected_checks"]) <= attributed or not kept:
+        result["text"] = fallback
+        return result
+
+    # Figures of the removed sentences are restored from the contract, not from the reply.
+    joined = " ".join(kept)
+    restored = [t for t, figures in items if not figures or not all(f in joined for f in figures)]
+    contract = context["session_coaching_frame"]["evidence_contract"]
+    limit = _fallback_limit(contract, language)
+    candidate = " ".join(restored + kept + ([limit] if limit and limit not in joined else []))
+    recheck = verify_chat_reply(candidate, context, language, question)
+    if not recheck["passed"]:
+        result["text"] = fallback
+        return result
+    result["text"], result["response_source"] = candidate, "llm_reply_partially_validated"
+    return result
