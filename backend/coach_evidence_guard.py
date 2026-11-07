@@ -36,7 +36,8 @@ _SAME_DISTANCE = re.compile(
 _HR_POSITION = re.compile(
     r"(quartile|partie (?:basse|haute)|lower (?:part|end|quarter)|upper (?:part|end|quarter)|"
     r"parte (?:baja|alta)|m[ée]diane|median|mediana|position relative|relative position|"
-    r"plus basse|plus haute|lowest|highest)", re.I)
+    r"plus basse|plus haute|lowest|highest|partie interm[ée]diaire|intermediate (?:part|range)|"
+    r"parte intermedia)", re.I)
 _AVERAGE_WORDING = re.compile(
     r"(en moyenne|on average|average|moyenne|habituel|usually|d'habitude|typical|promedio|"
     r"normalmente|generalmente|m[ée]diane|median)", re.I)
@@ -78,9 +79,11 @@ def _int_set(*values: Any) -> set[int]:
 
 _HR_WORD = re.compile(r"\b(?:FC|HR|fr[ée]quence cardiaque|heart rate|frecuencia card[ií]aca|cardiaque)\b", re.I)
 _POS_LOW = re.compile(r"(partie basse|zone basse|lower (?:part|end|range|quarter)|low end|parte baja|"
-                      r"plus basses?|lowest|bas(?:se)? de (?:votre|ton|ta|vos) )", re.I)
+                      r"plus basses?|lowest|bas(?:se)? de (?:votre|ton|ta|vos) |"
+                      r"relativement (?:basse|faible)s?|relatively low|relativamente baja)", re.I)
 _POS_HIGH = re.compile(r"(partie haute|zone haute|upper (?:part|end|range|quarter)|high end|parte alta|"
-                       r"plus hautes?|highest)", re.I)
+                       r"plus hautes?|highest|relativement (?:haute|[ée]lev[ée]e)s?|relatively high|"
+                       r"relativamente alta)", re.I)
 _COMPARABLE_EFFORT = re.compile(
     r"(?:(?:[àa]|at|a)\s+(?:FC|HR|allure|pace|ritmo)\s+(?:comparable|similaire|similar)|comparable\s+(?:HR|FC|pace|"
     r"allure|ritmo)|(?:HR|FC|pace|allure|ritmo)\s+(?:at|[àa]|a)\s+(?:a\s+)?comparable)", re.I)
@@ -99,6 +102,153 @@ _ABOVE_LT2 = re.compile(r"(au[- ]dessus (?:du |de )?(?:LT2|seuil 2|second seuil)
                         r"por encima (?:de(?:l)? )?(?:LT2|segundo umbral))", re.I)
 
 
+# --- durations (C408-F) -------------------------------------------------------------------------
+_WORDS = "|".join(sorted(csc._WORD_VALUE, key=len, reverse=True))
+_MULT_QUALIFIER = (
+    r"plus (?:de |d'|du )|moins (?:de |d'|du )|au moins |environ |pr[èe]s de |presque |"
+    r"more than |over |less than |fewer than |at least |about |around |roughly |almost |nearly |"
+    r"m[áa]s (?:de |del )|menos (?:de |del )|al menos |alrededor de |casi |aproximadamente ")
+_MULTIPLE = re.compile(
+    rf"(?:(?P<q>{_MULT_QUALIFIER})\s*)?(?:(?P<n>\d+(?:[.,]\d+)?|{_WORDS})\s+(?:fois|times|veces)|"
+    r"(?:(?:le|el)\s+)?(?P<dbl>double|doble)|(?P<tw>twice))(?![\w])", re.I)
+_DURATION_NOUN = re.compile(r"\b(?:dur[ée]es?|durations?|duraci[óo]n(?:es)?|temps|tiempo)\b", re.I)
+_DISTANCE_NOUN = re.compile(r"\b(?:distances?|distancia|kilom[èe]tres?|kilometers?|kil[óo]metros?|km|kms)\b", re.I)
+_PACE_OR_HR_WORD = re.compile(
+    r"\b(?:allures?|pace|ritmo|vitesse|speed|velocidad|FC|HR|fr[ée]quence|heart|cardi\w*|frecuencia|bpm)\b", re.I)
+_METRIC_NOUN = re.compile(f"{_DURATION_NOUN.pattern}|{_DISTANCE_NOUN.pattern}|{_PACE_OR_HR_WORD.pattern}", re.I)
+# "twice as long", "deux fois plus long(ue)": the adjective is a duration cue only right after the multiple.
+_LENGTH_ADJECTIVE = re.compile(r"\s*(?:(?:as|plus|m[áa]s)\s+)?(?:long(?:ue)?s?|longer|larg[oa]s?)\b", re.I)
+_MEAN_WORD = re.compile(r"\b(?:moyenn?e?s?|average|mean|media|medias|promedio|arithm\w+)\b", re.I)
+# The reference V3 uses is the median of the athlete's own earlier sessions: only "usual"-type wording
+# names it ("moyenne" / "average" would be another statistic).
+_HABITUAL_REF = re.compile(
+    r"(habituel\w*|d'habitude|usual\w*|typical\w*|habitual\w*|m[ée]diane|median|mediana)", re.I)
+_RELATIVE_EASY = re.compile(r"\b(?:relativement|relatively|relativamente)\s+(?:facile|easy|f[áa]cil)\b", re.I)
+_RELATIVE_FRAME = re.compile(
+    r"(?:par rapport [àa] (?:tes|vos|ton|ta)|en comparaison (?:de|avec) (?:tes|ton|ta)|compared (?:to|with) your|"
+    r"relative to your|respecto a (?:tus?)|en comparaci[óo]n con (?:tus?))\s+(?:\w+\s+){0,2}?"
+    r"(?:habituel\w*|usual|typical|other|previous|own|pr[ée]c[ée]dent\w*|habitual\w*|anterior\w*|propi\w*|"
+    r"s[ée]ances?|sorties?|efforts?|sessions?|runs?|workouts?|sesiones?|salidas?|esfuerzos?)", re.I)
+# A position in the athlete's own history is never a zone, an endurance verdict or a recovery state.
+_PHYSIO_READING = re.compile(
+    r"\b(?:zones?|zona|endurance|resistencia|a[ée]rob\w*|r[ée]cup[ée]r\w*|recover\w*|recuper\w*)\b", re.I)
+_NOT_A_ZONE = re.compile(
+    r"\b(?:pas|not|no)\s+(?:une?|a|una|es una)\s+(?:(?:physiological|physiologique|fisiol[óo]gica)\s+)?"
+    r"(?:zones?|zona)(?:\s+(?:physiologique|fisiol[óo]gica))?", re.I)
+_DURATION_RATIO_METRIC = "session_duration_vs_habitual_median_duration"
+_RATIO_EPS = 1e-9
+_ALMOST_TOLERANCE = 0.25  # "presque / almost / casi N": N - 0.25 <= ratio < N
+
+
+def _qualifier_kind(text: Optional[str]) -> str:
+    q = (text or "").strip().lower()
+    if not q:
+        return "exact"
+    if q.startswith(("presque", "près", "pres", "almost", "nearly", "casi")):
+        return "almost"
+    if q.startswith(("plus", "more", "over", "más", "mas")):
+        return "more"
+    if q.startswith(("moins", "less", "fewer", "menos")):
+        return "less"
+    if q.startswith(("au moins", "at least", "al menos")):
+        return "least"
+    return "about"
+
+
+def _multiple_compatible(kind: str, value: float, decimals: int, ratio: float) -> bool:
+    """A stated multiple is accepted only when it is a true statement about the V3 ratio."""
+    if kind == "more":
+        return ratio > value + _RATIO_EPS
+    if kind == "less":
+        return ratio < value - _RATIO_EPS
+    if kind == "least":
+        return ratio >= value - _RATIO_EPS
+    if kind == "almost":  # just below the target: never at or above it
+        return value - _ALMOST_TOLERANCE - _RATIO_EPS <= ratio < value - _RATIO_EPS
+    if kind == "about":
+        return abs(ratio - value) <= 0.5 + _RATIO_EPS  # rounding to the nearest whole multiple
+    # Bare "N fois": the stated precision, never wider than 0.05 (so "deux fois" does not cover 2.18).
+    return abs(ratio - value) <= (0.5 * 10 ** -decimals if decimals else 0.05) + 0.005 + _RATIO_EPS
+
+
+def _multiple_metric(sentence: str, match: "re.Match", clause: str, clause_start: int) -> Optional[str]:
+    """The metric a multiple ("deux fois …") qualifies: the nearest metric noun after it, else the one before.
+
+    An unrelated cue elsewhere in the clause ("lors de cette longue sortie") never decides it.
+    """
+    def kind(noun: str) -> str:
+        if _DURATION_NOUN.fullmatch(noun):
+            return "duration"
+        return "distance" if _DISTANCE_NOUN.fullmatch(noun) else "pace_or_hr"
+
+    after = _METRIC_NOUN.search(clause, match.end() - clause_start)
+    if _LENGTH_ADJECTIVE.match(clause, match.end() - clause_start) and not after:
+        return "duration"
+    if after:
+        return kind(after.group(0))
+    before = [m for m in _METRIC_NOUN.finditer(clause, 0, match.start() - clause_start)]
+    return kind(before[-1].group(0)) if before else None
+
+
+def _other_metric_multiples(sentence: str) -> bool:
+    """True when a multiple is stated about a distance, a pace or an HR: V3 holds no such ratio."""
+    breaks = [m.span() for m in csc._CLAUSE_BREAK.finditer(sentence)]
+    for match in _MULTIPLE.finditer(sentence):
+        start = max((e for _, e in breaks if e <= match.start()), default=0)
+        end = min((b for b, _ in breaks if b >= match.end()), default=len(sentence))
+        if _multiple_metric(sentence, match, sentence[start:end], start) in ("distance", "pace_or_hr"):
+            return True
+    return False
+
+
+def _duration_claims(sentence: str, ratio_fact: Optional[dict]) -> list[tuple["re.Match", bool]]:
+    """(match, supported) for every multiple stated about a DURATION ("plus de deux fois la durée habituelle").
+
+    A multiple not about a duration (pace, HR, a number of sessions) is not considered here. A duration
+    multiple is supported only by the V3 duration ratio: it never borrows a pace or HR figure, and it
+    needs the habitual-duration reference and a statement compatible with the ratio.
+    """
+    claims = []
+    breaks = [m.span() for m in csc._CLAUSE_BREAK.finditer(sentence)]
+    for match in _MULTIPLE.finditer(sentence):
+        start = max((e for _, e in breaks if e <= match.start()), default=0)
+        end = min((b for b, _ in breaks if b >= match.end()), default=len(sentence))
+        clause = sentence[start:end]
+        if _multiple_metric(sentence, match, clause, start) != "duration":
+            continue
+        if match.group("n"):
+            raw = match.group("n")
+            value = float(raw.replace(",", ".")) if raw[0].isdigit() else float(csc._WORD_VALUE[raw.lower()])
+            decimals = len(re.split(r"[.,]", raw)[1]) if raw[0].isdigit() and re.search(r"[.,]", raw) else 0
+        else:
+            value, decimals = 2.0, 0
+        # the reference must be the habitual/median one, never an explicitly named mean
+        ok = bool(ratio_fact) and _HABITUAL_REF.search(clause) and not _MEAN_WORD.search(clause) and \
+            not _PACE_OR_HR_WORD.search(clause) and \
+            _multiple_compatible(_qualifier_kind(match.group("q")), value, decimals, ratio_fact["ratio"])
+        claims.append((match, bool(ok)))
+    return claims
+
+
+def _duration_ratio_fact(contract: dict) -> Optional[dict]:
+    """The V3 duration ratio, only when internally consistent and tied to this session's measured duration."""
+    entry = next((e for e in contract.get("validated_comparisons") or []
+                  if isinstance(e, dict) and e.get("metric") == _DURATION_RATIO_METRIC), None)
+    if not entry:
+        return None
+    ratio, session, habitual = (_finite(entry.get(k)) for k in
+                                ("ratio", "session_duration_minutes", "habitual_duration_minutes"))
+    count = entry.get("reference_count")
+    measured = _finite((contract.get("measured_facts") or {}).get("duration_minutes"))
+    if not (ratio and session and habitual and measured and ratio > 0 and session > 0 and habitual > 0):
+        return None
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        return None
+    if abs(session - measured) > 0.51 or abs(ratio - session / habitual) > 0.011:
+        return None
+    return {"ratio": ratio, "count": count}
+
+
 def _contract(context: dict) -> dict:
     """What the contract says, with every count tied to the metric and population it describes."""
     frame = context.get("session_coaching_frame") if isinstance(context.get("session_coaching_frame"), dict) else {}
@@ -114,6 +264,20 @@ def _contract(context: dict) -> dict:
     similar_count = similar_entry.get("activity_count")
     sub = ((comparison.get("provenance") or {}).get("sub_populations")) or {}
     relative_used = relative.get("status") == "used"
+    duration_ratio = _duration_ratio_fact(contract)
+    classification = v3.get("classification") or {}
+    provenance = relative.get("provenance") if isinstance(relative.get("provenance"), dict) else {}
+    # V3 itself concludes "relatively easy compared with the athlete's usual efforts": an explicit
+    # diagnosis, a personal-history decision tier, a low position and a sized, traceable population.
+    # A bare HR position never reaches it.
+    relative_easy = bool(
+        relative_used and relative.get("relative_position") == "low"
+        and classification.get("probable_type") == "easy_run_probable"
+        and classification.get("decision_tier") == "individual_history"
+        and any(isinstance(i, dict) and i.get("code") == "diagnosis.easy_run_relative"
+                for i in contract.get("allowed_interpretations") or [])
+        and isinstance(relative.get("reference_count"), int) and relative["reference_count"] > 0
+        and provenance.get("activity_count") == relative["reference_count"])
     by_metric = {
         "hr_position": _int_set(relative.get("reference_count") if relative_used else None),
         "comparable_effort": _int_set(
@@ -123,6 +287,7 @@ def _contract(context: dict) -> dict:
         "pace_at_hr": _int_set((sub.get("pace_at_comparable_hr") or {}).get("activity_count")),
         "hr_at_pace": _int_set((sub.get("hr_at_comparable_pace") or {}).get("activity_count")),
         "comparison_global": _int_set(comparison.get("reference_count")),
+        "duration_habitual": _int_set((duration_ratio or {}).get("count")),
         "history_list": _int_set(history.get("included_count"), history.get("eligible_count")),
         "profile": _int_set(profile.get("sessions_count"), profile.get("sessions_with_distance_count")),
     }
@@ -135,6 +300,8 @@ def _contract(context: dict) -> dict:
         "population_count": profile.get("sessions_count"),
         "has_profile_stat": bool(profile),
         "relative_used": relative_used,
+        "relative_easy": relative_easy,
+        "duration_ratio": duration_ratio,
         "relative_position": relative.get("relative_position") if relative_used else None,
         "threshold_position": intensity.get("position_vs_declared_thresholds")
         if intensity.get("thresholds_available") else None,
@@ -146,9 +313,11 @@ def _contract(context: dict) -> dict:
 def _allowed_counts(sentence: str, c: dict) -> set[int]:
     """Counts a sentence may cite, decided by the kind of population the sentence talks about."""
     by = c["by_metric"]
-    if _HR_WORD.search(sentence) and (_HR_POSITION.search(sentence) or _POS_LOW.search(sentence)
-                                      or _POS_HIGH.search(sentence)):
-        return by["hr_position"]  # exclusive: an HR position is about the relative-HR population only
+    if _duration_claims(sentence, c["duration_ratio"]):
+        return by["duration_habitual"]  # a duration multiple may cite only the population of the V3 ratio
+    if _RELATIVE_EASY.search(sentence) or (_HR_WORD.search(sentence) and (
+            _HR_POSITION.search(sentence) or _POS_LOW.search(sentence) or _POS_HIGH.search(sentence))):
+        return by["hr_position"]  # exclusive (also V3's relative-easy diagnosis: same relative-effort population): an HR position is about the relative-HR population only
     at_hr, at_pace = bool(_AT_COMPARABLE_HR.search(sentence)), bool(_AT_COMPARABLE_PACE.search(sentence))
     if at_hr or at_pace:  # each metric-specific comparison may cite only its own population
         return (by["pace_at_hr"] if at_hr else set()) | (by["hr_at_pace"] if at_pace else set())
@@ -174,6 +343,15 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
     for sentence in csc._sentences(text):
         if _direction_contradicted(sentence, facts):
             reasons.add("comparison_direction_contradicts")
+        if any(not ok for _, ok in _duration_claims(sentence, c["duration_ratio"])):
+            reasons.add("duration_ratio_not_established")
+        if _other_metric_multiples(sentence):
+            reasons.add("multiple_not_established")
+        if (_RELATIVE_EASY.search(sentence) or (_HR_WORD.search(sentence) and (
+                _POS_LOW.search(sentence) or _POS_HIGH.search(sentence) or _HR_POSITION.search(sentence)))) \
+                and _PHYSIO_READING.search(_NOT_A_ZONE.sub(" ", sentence)) \
+                and not csc._only_negated(sentence, _PHYSIO_READING):
+            reasons.add("relative_position_read_as_physiology")
         if _states_metric_figure(sentence) and _attribute(sentence, facts) is None and not (
                 _requested_only(sentence, requested)):
             reasons.add("figure_not_attributed")
@@ -234,6 +412,8 @@ def _states_metric_figure(sentence: str) -> bool:
     if _PACE_RE.search(sentence):
         return True
     text = _PACE_RE.sub(" ", sentence)
+    if csc._HM.search(text):
+        return True
     cue = _AT_COMPARABLE_HR.search(text) or _AT_COMPARABLE_PACE.search(text) or _SAME_DISTANCE.search(text)
     for m in _FIGURE.finditer(text):
         tail = text[m.end():m.end() + 40]
@@ -244,7 +424,7 @@ def _states_metric_figure(sentence: str) -> bool:
 
 def _requested_only(sentence: str, requested: set[int]) -> bool:
     """True when every figure is a session count the user asked for; any other figure (unit, pace, delta) disqualifies."""
-    if _PACE_RE.search(sentence):
+    if _PACE_RE.search(sentence) or csc._HM.search(sentence):
         return False
     text = sentence
     counts = [int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(text)]
@@ -264,13 +444,49 @@ def _requested_counts(question: Optional[str], c: dict) -> set[int]:
     return {n for n in asked if 1 < n <= available}
 
 
+def _counts_in(sentence: str) -> set[int]:
+    counts = {int(m.group(1)) for m in _COUNT_BEFORE_NOUN.finditer(sentence)}
+    counts |= {csc._WORD_VALUE[m.group(1).lower()] for m in _WORD_COUNT_BEFORE_NOUN.finditer(sentence)}
+    return {n for n in counts if n > 1}
+
+
+def _csc_view(text: str, context: dict) -> str:
+    """The text as the C403 heuristics read it.
+
+    A duration multiple proven by the V3 ratio, and "relativement facile par rapport à tes efforts
+    habituels" when V3 itself concludes it, are checked by this module; C403 would otherwise re-judge
+    them as an unlabelled number or an intensity word. Everything else in the sentence is left intact.
+    """
+    c = _contract(context)
+    out = text
+    for sentence in csc._sentences(text):
+        view = sentence
+        claims = _duration_claims(sentence, c["duration_ratio"])
+        breaks = [m.span() for m in csc._CLAUSE_BREAK.finditer(sentence)]
+        for match, ok in reversed(claims):
+            if ok:  # the multiple and its own "habitual" reference, within its clause only
+                end = min((b for b, _ in breaks if b >= match.end()), default=len(sentence))
+                view = (view[:match.start()] + " " + _HABITUAL_REF.sub(" ", view[match.end():end]) + view[end:])
+        if claims and all(ok for _, ok in claims):  # the population of the ratio, named by its own count
+            population = c["by_metric"]["duration_habitual"]
+            view = _COUNT_BEFORE_NOUN.sub(
+                lambda m: m.group(0)[m.end(1) - m.start(0):] if int(m.group(1)) in population else m.group(0), view)
+        if c["relative_easy"] and _RELATIVE_FRAME.search(sentence) and _counts_in(sentence) <= \
+                c["by_metric"]["hr_position"]:
+            view = _RELATIVE_EASY.sub("", view)
+        if view != sentence:
+            out = out.replace(sentence, view, 1)
+    return out
+
+
 def verify_chat_reply(text: Any, context: dict, language: str, question: Optional[str] = None) -> dict:
     """{"passed", "level", "rejected_checks"}: C403 heuristic guard plus the contract checks.
 
     "format" (bullets, numbered lists) is presentation only: the chat may use them when asked,
     so it is not a rejection reason here (it stays one for the automatic comment).
     """
-    ok, reasons = csc.validate_session_comment(text, context, language)
+    ok, reasons = csc.validate_session_comment(_csc_view(text, context) if isinstance(text, str) else text,
+                                               context, language)
     rejected = set(reasons) - {"format"}
     if isinstance(text, str) and text.strip():
         rejected |= check_contract_claims(text.strip(), context, question)
@@ -295,11 +511,13 @@ _FALLBACK = {
     "fr": {
         "measured": "Cette séance en chiffres : {parts}.",
         "efforts": "Allures des répétitions enregistrées : {paces}.",
-        "position": {"low": "dans la partie basse", "intermediate": "dans la zone intermédiaire",
+        "position": {"low": "dans la partie basse", "intermediate": "dans la partie intermédiaire",
                      "high": "dans la partie haute"},
         "relative": "Ta FC moyenne se situe {position} de tes {count} séances de référence (même environnement, "
                     "durée comparable, hors fractionné et compétition) : c'est une position relative dans ton "
                     "historique, pas une zone physiologique.",
+        "duration_ratio": "La durée de cette séance représente {ratio} fois ta durée habituelle (médiane de tes "
+                          "{count} séances précédentes).",
         "similar": "Par rapport à tes {count} sorties précédentes de distance similaire, ton allure est de "
                    "{delta} s/km {direction}.",
         "pace_at_hr": "À FC comparable, ton allure est de {delta} s/km {direction} que sur {count} séances "
@@ -332,6 +550,8 @@ _FALLBACK = {
         "relative": "Your average HR sits {position} of your {count} reference sessions (same environment, "
                     "comparable duration, excluding intervals and races): it is a relative position in your own "
                     "history, not a physiological zone.",
+        "duration_ratio": "This session's duration is {ratio} times your usual duration (median of your {count} "
+                          "earlier sessions).",
         "similar": "Compared with your {count} previous runs of similar distance, your pace is {delta} s/km "
                    "{direction}.",
         "pace_at_hr": "At comparable HR, your pace is {delta} s/km {direction} than over {count} earlier sessions.",
@@ -359,10 +579,12 @@ _FALLBACK = {
     "es": {
         "measured": "Esta sesión en cifras: {parts}.",
         "efforts": "Ritmos de las repeticiones registradas: {paces}.",
-        "position": {"low": "en la parte baja", "intermediate": "en la zona intermedia", "high": "en la parte alta"},
+        "position": {"low": "en la parte baja", "intermediate": "en la parte intermedia", "high": "en la parte alta"},
         "relative": "Tu FC media se sitúa {position} de tus {count} sesiones de referencia (mismo entorno, "
                     "duración comparable, sin series ni competición): es una posición relativa en tu historial, "
                     "no una zona fisiológica.",
+        "duration_ratio": "La duración de esta sesión es {ratio} veces tu duración habitual (mediana de tus "
+                          "{count} sesiones anteriores).",
         "similar": "Frente a tus {count} salidas anteriores de distancia similar, tu ritmo es {delta} s/km "
                    "{direction}.",
         "pace_at_hr": "Con FC comparable, tu ritmo es {delta} s/km {direction} que en {count} sesiones "
@@ -437,6 +659,7 @@ def _facts(context: dict) -> dict:
         if len(c["by_metric"]["hr_position"]) == 1 else None,
         "history.population": c["by_metric"]["history_list"],
         "profile.population": c["by_metric"]["profile"],
+        "duration.ratio": c["duration_ratio"],
     }
     entries = {e.get("metric"): e for e in contract.get("validated_comparisons") or [] if isinstance(e, dict)}
     similar = entries.get("pace_and_hr_vs_similar_distance_sessions")
@@ -484,7 +707,8 @@ def _direction_contradicted(sentence: str, facts: dict) -> bool:
         delta = facts.get(key)
         if delta is None or not cue.search(sentence):
             continue
-        quoted = [float(m.group(0).replace(",", ".")) for m in _FIGURE.finditer(_PACE_RE.sub(" ", sentence))]
+        quoted = [float(m.group(0).replace(",", ".")) for m in
+                  _FIGURE.finditer(csc._HM.sub(" ", _PACE_RE.sub(" ", sentence)))]
         if any(abs(v - abs(delta)) <= 0.051 for v in quoted) and not _direction_ok(sentence, delta, up, down):
             return True
     return False
@@ -508,10 +732,22 @@ def _attribute(sentence: str, facts: dict) -> Optional[set[str]]:
         else:
             return None
     text = _PACE_RE.sub(" ", sentence)
+    for match in csc._HM.finditer(text):  # "2h02", "2 h 2 min", "2 hours 2 minutes": one duration
+        if facts["session.duration"] is None or abs(csc.hm_minutes(match) - facts["session.duration"]) > 0.51:
+            return None
+        ids.add("session.duration")
+    text = csc._HM.sub(" ", text)
+    duration_claims = _duration_claims(text, facts["duration.ratio"])
+    if any(not ok for _, ok in duration_claims):
+        return None
+    if duration_claims:
+        ids.add("duration.ratio")
+        for match, _ in reversed(duration_claims):
+            text = text[:match.start()] + " " + text[match.end():]
     at_hr, at_pace = bool(_AT_COMPARABLE_HR.search(text)), bool(_AT_COMPARABLE_PACE.search(text))
     same_distance = bool(_SAME_DISTANCE.search(text))
-    hr_position = bool(_HR_WORD.search(text) and (_HR_POSITION.search(text) or _POS_LOW.search(text)
-                                                  or _POS_HIGH.search(text)))
+    hr_position = bool(_RELATIVE_EASY.search(text) or (_HR_WORD.search(text) and (
+        _HR_POSITION.search(text) or _POS_LOW.search(text) or _POS_HIGH.search(text))))
     figures = [(float(m.group(0).replace(",", ".")), text[m.end():m.end() + 40]) for m in _FIGURE.finditer(text)]
     words = [(float(csc._WORD_VALUE[m.group(1).lower()]), text[m.end(1):]) for m in _WORD_COUNT_BEFORE_NOUN.finditer(text)
              if csc._WORD_VALUE[m.group(1).lower()] > 1]
@@ -560,7 +796,9 @@ def _attribute(sentence: str, facts: dict) -> Optional[set[str]]:
             candidates = [(key, {facts.get(key)}) for key, cue in (
                 ("v3.pace_at_hr.population", at_hr), ("v3.hr_at_pace.population", at_pace),
                 ("v2.similar_pace.population", same_distance and not (at_hr or at_pace))) if cue]
-            if not candidates and _HISTORY_LIST.search(text):
+            if duration_claims:
+                candidates = [("duration.ratio", {facts["duration.ratio"]["count"]})]
+            elif not candidates and _HISTORY_LIST.search(text):
                 candidates = [("history.population", facts["history.population"])]
         for key, allowed in candidates:
             if any(a is not None and abs(value - a) < 0.5 for a in allowed):
@@ -601,6 +839,10 @@ def _fallback_items(context: dict, language: str, covered: frozenset = frozenset
             and "relative_hr.population" not in covered:
         items.append(({"relative_hr.population"}, texts["relative"].format(
             position=texts["position"][relative["relative_position"]], count=pop)))
+    ratio = facts["duration.ratio"]
+    if ratio and "duration.ratio" not in covered:
+        items.append(({"duration.ratio"}, texts["duration_ratio"].format(
+            ratio=_num(ratio["ratio"], language), count=ratio["count"])))
 
     already = sum(1 for key in _COMPARISON_PRIORITY if f"{key}.delta" in covered)
     for key in _COMPARISON_PRIORITY:
@@ -638,13 +880,24 @@ def _signed_delta(value: Any, positive: str, negative: str, texts: dict, languag
     return _num(round(abs(value), 1), language), texts[positive if value > 0 else negative]
 
 
-def _fallback_limit(contract: dict, language: str) -> Optional[str]:
-    """The single most important limit the contract itself declares; nothing is asserted otherwise."""
+_LIMIT_SIGNATURE = {
+    "physiological_intensity_undetermined": re.compile(
+        r"(physiolog|fisiol[óo]g)|(?:intensit[ée]|intensity|intensidad).{0,40}(?:d[ée]termin|determin)", re.I),
+    "progress_not_demonstrated": re.compile(r"(progress|progresi[óo]n|progreso)", re.I),
+    "recovery_not_measured": re.compile(r"(r[ée]cup[ée]ration|recovery|recuperaci[óo]n)", re.I),
+}
+
+
+def _fallback_limit(contract: dict, language: str, said: str = "") -> Optional[str]:
+    """The single most important limit the contract itself declares; nothing is asserted otherwise.
+
+    Nothing is added when `said` (the kept reply sentences) already expresses that same limit.
+    """
     texts = _FALLBACK.get(language, _FALLBACK["en"])
     declared = contract.get("not_demonstrated") or {}
     for key in _LIMIT_PRIORITY:
         if key in declared:
-            return texts["limits"][key]
+            return None if _LIMIT_SIGNATURE[key].search(said) else texts["limits"][key]
     return None
 
 
@@ -682,8 +935,22 @@ _LIMIT_STATEMENT = re.compile(
     r"limitad[oa]s?|no hay)", re.I)
 
 
+def _proven_relative_statement(sentence: str, context: dict) -> bool:
+    """A figure-free sentence the contract proves: V3's own relative conclusion, or the relative HR position."""
+    c = _contract(context)
+    if c["relative_easy"] and _RELATIVE_EASY.search(sentence) and _RELATIVE_FRAME.search(sentence):
+        return True
+    return _proven_relative_hr_position(sentence, context)
+
+
+def _proven_relative_hr_position(sentence: str, context: dict) -> bool:
+    c = _contract(context)
+    return bool(c["relative_used"] and c["relative_position"] == "low" and _HR_WORD.search(sentence)
+                and _POS_LOW.search(sentence) and not _POS_HIGH.search(sentence))
+
+
 def _sentence_reasons(sentence: str, context: dict, language: str, question: Optional[str]) -> set[str]:
-    _, local = csc.validate_session_comment(sentence, context, language)
+    _, local = csc.validate_session_comment(_csc_view(sentence, context), context, language)
     return (set(local) - {"format", "length", "language"}) | check_contract_claims(sentence, context, question)
 
 
@@ -726,8 +993,10 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
         ids = _attribute(sentence, facts)
         if not ids:
             if ids is None and not _states_metric_figure(sentence) and not _FIGURE.search(sentence) \
-                    and _LIMIT_STATEMENT.search(sentence):
+                    and (_LIMIT_STATEMENT.search(sentence) or _proven_relative_statement(sentence, context)):
                 kept.append(sentence)
+                if _proven_relative_hr_position(sentence, context):
+                    covered.add("relative_hr.population")  # stated once: the fallback must not repeat it
             continue
         kept.append(sentence)
         covered |= ids
@@ -737,7 +1006,8 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
         return result
 
     restored = [t for _, t in _fallback_items(context, language, frozenset(covered))]
-    limit = _fallback_limit(context["session_coaching_frame"]["evidence_contract"], language)
+    limit = _fallback_limit(context["session_coaching_frame"]["evidence_contract"], language,
+                            " ".join(kept))
     candidate = " ".join(restored + kept + ([limit] if limit else []))
     if not verify_chat_reply(candidate, context, language, question)["passed"]:
         result["text"] = fallback
