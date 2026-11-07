@@ -30,8 +30,8 @@ async def test_validated_observations_reach_llm_context_once_without_recommendat
     with (
         _analyze_environment(fake_db, _trial_access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative",
-              AsyncMock(return_value=_narrative())) as loader,
+        patch("server.load_scoped_workout_coach_evidence",
+              AsyncMock(return_value=(_narrative(), None))) as loader,
     ):
         llm = server.llm_coach.enrich_chat_response
         response = await _post({"message": "et la FC ?", "workout_id": "w1", "language": "fr"})
@@ -50,8 +50,8 @@ async def test_degraded_reply_reuses_loaded_narrative():
     with (
         _analyze_environment(fake_db, _premium_access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative",
-              AsyncMock(return_value=_narrative())) as loader,
+        patch("server.load_scoped_workout_coach_evidence",
+              AsyncMock(return_value=(_narrative(), None))) as loader,
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
         response = await _post({"message": "x", "workout_id": "w1", "language": "en"})
@@ -66,7 +66,7 @@ async def test_unavailable_narrative_is_not_reloaded_for_fallback(outcome):
     with (
         _analyze_environment(fake_db, _premium_access),
         _owned_workout(fake_db),
-        patch("server.load_scoped_workout_deterministic_narrative", mock),
+        patch("server.load_scoped_workout_coach_evidence", mock),
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
         response = await _post({"message": "x", "workout_id": "w1", "language": "en"})
@@ -92,7 +92,7 @@ async def test_general_chat_loads_no_workout_observations():
     fake_db = _FakeDB()
     with (
         _analyze_environment(fake_db, _trial_access),
-        patch("server.load_scoped_workout_deterministic_narrative", AsyncMock()) as loader,
+        patch("server.load_scoped_workout_coach_evidence", AsyncMock()) as loader,
     ):
         llm = server.llm_coach.enrich_chat_response
         await _post({"message": "combien de séances cette semaine ?", "language": "fr"})
@@ -106,7 +106,7 @@ async def test_loader_failure_or_missing_data_omits_observations():
         with (
             _analyze_environment(fake_db, _trial_access),
             _owned_workout(fake_db),
-            patch("server.load_scoped_workout_deterministic_narrative",
+            patch("server.load_scoped_workout_coach_evidence",
                   AsyncMock(side_effect=outcome) if isinstance(outcome, Exception)
                   else AsyncMock(return_value=outcome)),
         ):

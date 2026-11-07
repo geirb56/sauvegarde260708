@@ -115,3 +115,36 @@ async def test_unknown_or_foreign_workout_is_404():
     ):
         response = await _post({"message": "x", "workout_id": "someone-elses", "language": "en"})
     assert response.status_code == 404
+
+
+async def test_v3_assessment_reaches_llm_from_a_single_evidence_load():
+    from narrative_coach_v3_models import NarrativeCoachV3
+    from test_coach_c408_scenarios import DAY, _build, _history, _w
+    from workout_intelligence_v3_models import WorkoutIntelligenceV3
+
+    _, _, dumped = _build(_w("w1", DAY, hr=133, pace=6.3), _history())
+    narrative = NarrativeCoachV3(headline="h", language="en", generation_mode="deterministic_fallback")
+    fake_db = _FakeDB()
+    loader = AsyncMock(return_value=(narrative, WorkoutIntelligenceV3(**dumped)))
+    with (
+        _analyze_environment(fake_db, _trial_access), _owned_workout(fake_db), _with_workout_detail(),
+        patch("server.load_scoped_workout_coach_evidence", loader),
+    ):
+        llm = server.llm_coach.enrich_chat_response
+        response = await _post({"message": "Analyse", "workout_id": "w1", "language": "en"})
+        frame = llm.await_args.kwargs["context"]["session_coaching_frame"]
+    assert response.status_code == 200
+    loader.assert_awaited_once()
+    assert frame["v3_assessment"]["classification"]["probable_type"] == "easy_run_probable"
+    assert llm.await_count == 1
+
+
+async def test_unavailable_v3_is_explicit_not_empty():
+    fake_db = _FakeDB()
+    with (
+        _analyze_environment(fake_db, _trial_access), _owned_workout(fake_db), _with_workout_detail(),
+        patch("server.load_scoped_workout_coach_evidence", AsyncMock(return_value=None)),
+    ):
+        llm = server.llm_coach.enrich_chat_response
+        await _post({"message": "Analyse", "workout_id": "w1", "language": "en"})
+        assert llm.await_args.kwargs["context"]["session_coaching_frame"]["v3_assessment"] == "unavailable"

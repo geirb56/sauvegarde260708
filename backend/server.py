@@ -56,6 +56,7 @@ from narrative_coach_v3_models import WorkoutIntelligenceV3NarrativeResponse
 import coach_session_comment
 from coach_session_comment import CoachSessionCommentResponse
 from workout_intelligence_v3_service import (
+    load_scoped_workout_coach_evidence,
     load_scoped_workout_deterministic_narrative,
     load_scoped_workout_intelligence_v3_with_narrative,
 )
@@ -2011,15 +2012,19 @@ def _start_coach_refund(
 COACH_HISTORY_LIMIT = 8
 
 
-async def _load_coach_narrative(*, user_id: str, workout_id: str, language: str):
-    """Owner-scoped, read-only, provider-free V3 deterministic narrative; None on failure."""
+async def _load_coach_evidence(*, user_id: str, workout_id: str, language: str):
+    """Owner-scoped, read-only, provider-free (V3 narrative, V3 intelligence) in one pass.
+
+    Returns (None, None) on failure or when nothing is available.
+    """
     try:
-        return await load_scoped_workout_deterministic_narrative(
+        evidence = await load_scoped_workout_coach_evidence(
             db=db, user_id=user_id, workout_id=workout_id, language=language,
         )
     except Exception:
         logger.exception("[Coach] Validated observations unavailable")
-        return None
+        return None, None
+    return evidence if evidence is not None else (None, None)
 
 
 def _coach_validated_workout_observations(narrative) -> Optional[dict]:
@@ -2057,6 +2062,7 @@ async def _assemble_coach_llm_context(
     """
     user_id = user["id"]
     scoped_narrative = _NARRATIVE_NOT_LOADED
+    scoped_intelligence = None
     ninety_days_ago = now_utc - timedelta(days=90)
 
     garmin_activities_all = await db.garmin_activities.find(
@@ -2147,7 +2153,7 @@ async def _assemble_coach_llm_context(
         context, workout_analysis_allowed=workout_analysis_allowed,
     )
     if workout_id is not None and workout_analysis_allowed:
-        scoped_narrative = await _load_coach_narrative(
+        scoped_narrative, scoped_intelligence = await _load_coach_evidence(
             user_id=user_id, workout_id=workout_id, language=language,
         )
         validated = _coach_validated_workout_observations(scoped_narrative)  # None when unavailable
@@ -2156,7 +2162,10 @@ async def _assemble_coach_llm_context(
     if not goal_declared:
         llm_context.pop("goal", None)
     if workout_id is not None and workout_analysis_allowed:
-        frame = build_session_coaching_frame(llm_context, goal_declared=goal_declared)
+        frame = build_session_coaching_frame(
+            llm_context, goal_declared=goal_declared,
+            intelligence=scoped_intelligence.model_dump(mode="json") if scoped_intelligence is not None else None,
+        )
         if frame is not None:
             llm_context["session_coaching_frame"] = frame
     return llm_context, scoped_narrative

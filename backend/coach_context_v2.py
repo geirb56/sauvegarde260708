@@ -387,16 +387,123 @@ def build_llm_coach_context(
     return projected
 
 
+def _text_items(items: Any, limit: int) -> list[dict[str, Any]]:
+    compact = []
+    for item in (items or [])[:limit]:
+        if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip():
+            compact.append({
+                "code": item.get("code"),
+                "text": item["text"].strip(),
+                "source_paths": list(item.get("source_paths") or []),
+            })
+    return compact
+
+
+def _compact_v3_assessment(intel: dict[str, Any]) -> dict[str, Any]:
+    """Compact copy of the already-computed V3 results; nothing is recalculated here.
+
+    Not transmitted on purpose: performance_trend (a progress question, not an execution
+    judgment; progress_regression_allowed stays false) and coach_assessment.advice
+    (an engine recommendation, never relayed as a prescription).
+    """
+    source = "workout_intelligence_v3"
+    classification = intel.get("session_classification") or {}
+    relative = classification.get("relative_effort") or {}
+    intensity = intel.get("intensity_assessment") or {}
+    comparison = intel.get("historical_comparison") or {}
+    coach = intel.get("coach_assessment") or {}
+
+    relative_effort: dict[str, Any] = {"status": relative.get("status", "not_evaluated")}
+    if relative.get("status") == "used":
+        relative_effort.update({
+            key: relative.get(key) for key in (
+                "relative_position", "current_hr_bpm", "reference_count", "hr_q1_bpm",
+                "hr_median_bpm", "hr_q3_bpm", "period_start", "period_end",
+            )
+        })
+        relative_effort["meaning"] = "position of average HR among the athlete's own comparable earlier sessions; not a physiological zone"
+
+    compact: dict[str, Any] = {
+        "source": source,
+        "classification": {
+            "source_path": f"{source}.session_classification",
+            "probable_type": classification.get("type", "unknown"),
+            "decision_tier": classification.get("decision_tier", "insufficient_data"),
+            "confidence": classification.get("confidence", "none"),
+            "limitations": list(classification.get("limitations") or []),
+            "relative_effort": relative_effort,
+        },
+        "intensity": {
+            "source_path": f"{source}.intensity_assessment",
+            "position_vs_declared_thresholds": intensity.get("position", "unknown"),
+            "thresholds_available": intensity.get("lt1") is not None or intensity.get("lt2") is not None,
+            "declared_fcmax_available": intensity.get("fcmax_bpm") is not None,
+            "session_max_hr_bpm": intensity.get("session_max_hr_bpm"),
+            "session_max_hr_meaning": "maximum observed during this activity; not the athlete's physiological max HR",
+            "confidence": intensity.get("confidence", "none"),
+            "limitations": list(intensity.get("limitations") or []),
+        },
+        "historical_comparison": {
+            "source_path": f"{source}.historical_comparison",
+            "status": comparison.get("status", "insufficient"),
+            "comparability": comparison.get("comparability", "insufficient"),
+            "reference_count": comparison.get("reference_count", 0),
+            "window_days": comparison.get("window_days"),
+        },
+        "coach_assessment": {
+            "source_path": f"{source}.coach_assessment",
+            "diagnosis": _text_items([coach.get("diagnosis")], 1),
+            "evidence": _text_items(coach.get("evidence"), 3),
+            "limitations": _text_items(coach.get("limitations"), 4),
+        },
+    }
+    if comparison.get("status") == "available" and comparison.get("comparability") in {"strong", "moderate"}:
+        pace = comparison.get("pace_at_comparable_hr") or {}
+        hr = comparison.get("hr_at_comparable_pace") or {}
+        compact["historical_comparison"]["pace_difference_sec_per_km_at_comparable_hr"] = pace.get(
+            "pace_difference_sec_per_km")
+        compact["historical_comparison"]["hr_difference_bpm_at_comparable_pace"] = hr.get("hr_difference_bpm")
+    return compact
+
+
+def _recorded_prescription(intel: Optional[dict[str, Any]]) -> Any:
+    """Historical prescription actually recorded for the session date, else why not."""
+    assessment = (intel or {}).get("prescription_assessment") or {}
+    if assessment.get("prescription_id"):
+        return {
+            "source": "training_prescription_snapshots (workout_intelligence_v3.prescription_assessment)",
+            "assessment_status": assessment.get("status"),
+            "planned_date": assessment.get("planned_date"),
+            "prescribed_workout_type": assessment.get("prescribed_workout_type"),
+            "prescribed_intensity_class": assessment.get("prescribed_intensity_class"),
+            "prescribed_distance_km": assessment.get("prescribed_distance_km"),
+            "prescribed_duration_minutes": assessment.get("prescribed_duration_minutes"),
+            "observed_classification": assessment.get("observed_classification"),
+            "reasons": list(assessment.get("reasons") or []),
+        }
+    status = assessment.get("status")
+    reasons = set(assessment.get("reasons") or [])
+    if status == "unavailable":
+        return "none_recorded_for_session_date"
+    if "ambiguous_session_prescription_association" in reasons:
+        return "ambiguous_do_not_assert"
+    if status == "indeterminate":
+        return "unknown_session_date_cannot_look_up"
+    return "not_available_in_this_context"
+
+
 def build_session_coaching_frame(
     llm_context: dict[str, Any],
     *,
     goal_declared: bool = True,
+    intelligence: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
     """C408: compact, traceable frame for judging the selected workout.
 
-    Derived only from fields already present in the LLM context (no new calculation, no I/O).
-    It separates what is recorded, what is a current evaluation and what is unknown, so the
-    Coach never presents an intent hypothesis as a historical prescription.
+    Derived only from fields already present in the LLM context and from the already-computed
+    Workout Intelligence V3 result (no new calculation, no I/O). It keeps four things apart:
+    a recorded historical prescription, the observed classification (a hypothesis about the
+    intent), what is current context and what is unknown.
     """
     detail = llm_context.get("workout_detail")
     if not isinstance(detail, dict) or not detail.get("id"):
@@ -413,24 +520,38 @@ def build_session_coaching_frame(
             ((analysis.get("signals") or {}).get("intensity") or {}).get("available")
         ),
     }
-    return {
+    v3 = _compact_v3_assessment(intelligence) if isinstance(intelligence, dict) else None
+    recorded = _recorded_prescription(intelligence)
+    probable_type = ((v3 or {}).get("classification") or {}).get("probable_type", "unknown")
+    if isinstance(recorded, dict):
+        intent_status = "recorded_historical_prescription"
+    elif probable_type != "unknown":
+        intent_status = "probable_type_from_observed_classification_not_a_prescription"
+    else:
+        intent_status = "unknown"
+    frame: dict[str, Any] = {
         "workout_id": detail["id"],
         "workout_date": detail.get("date"),
         "activity_type": detail.get("type"),
         "data_available": available,
         "missing_data": sorted(key for key, value in available.items() if not value),
         "session_intent": {
-            "recorded_historical_prescription": "not_available_in_this_context",
+            "recorded_historical_prescription": recorded,
             "current_training_v2_evaluation": "current_training_context_only_not_historical",
-            "intent_status": "unknown_unless_supported_by_validated_observations",
+            "intent_status": intent_status,
             "rule": (
-                "Never state the intended purpose of the session as fact. You may offer a probable "
-                "type only when validated observations or workout_detail.analysis support it, "
-                "worded as a hypothesis."
+                "State the intended purpose as fact only when recorded_historical_prescription is a "
+                "recorded prescription. A probable type from the observed classification is a "
+                "hypothesis and must be worded as one; otherwise the intent is unknown."
             ),
         },
         "athlete_goal_declared": bool(goal_declared and llm_context.get("goal")),
     }
+    if v3 is not None:
+        frame["v3_assessment"] = v3
+    else:
+        frame["v3_assessment"] = "unavailable"
+    return frame
 
 
 def _build_plan_goal(resolved_goal: Any) -> PlanGoal:

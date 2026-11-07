@@ -289,7 +289,7 @@ export default function Coach() {
             aria-label={t("coach.backToWorkout")}
             title={t("coach.backToWorkout")}
             data-testid="back-to-workout"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
