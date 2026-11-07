@@ -266,6 +266,11 @@ def _walk(value: Any, path: tuple, out: list) -> None:
         out.append((path, value))
 
 
+def _sub_population(comparison: dict, name: str):
+    block = (((comparison.get("provenance") or {}).get("sub_populations")) or {}).get(name)
+    return block.get("activity_count") if isinstance(block, dict) else None
+
+
 def _frame_facts(context: dict) -> tuple[dict, dict]:
     """(session measures, comparison references) from the C408 frame, copied from V3 (not recomputed).
 
@@ -282,6 +287,9 @@ def _frame_facts(context: dict) -> tuple[dict, dict]:
     session = {
         "relative_hr": {k: relative.get(k) for k in ("current_hr_bpm", "reference_count")},
         "comparison_count": comparison.get("reference_count"),
+        # Metric-specific V3 populations (pace at comparable HR / HR at comparable pace); "pace" stays out of the key so the count is not read as a pace.
+        "comparison_count_metric_a": _sub_population(comparison, "pace_at_comparable_hr"),
+        "comparison_count_metric_b": _sub_population(comparison, "hr_at_comparable_pace"),
         "session_max_hr_bpm": (v3.get("intensity") or {}).get("session_max_hr_bpm"),
     }
     references: dict = {

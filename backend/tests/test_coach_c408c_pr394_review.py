@@ -197,7 +197,10 @@ def test_without_any_comparison_the_wording_stays_rejected():
 def test_each_comparison_keeps_its_own_count():
     ctx = _chat_context()
     assert guard.check_contract_claims("Across 31 reference sessions your HR sits in the lower part.", ctx) == set()
-    assert guard.check_contract_claims("Compared with 4 sessions at comparable HR, the pace was faster.", ctx) == set()
+    # C408-D: a metric-specific sentence cites that metric's own population (3), not the global one (4).
+    assert guard.check_contract_claims("Compared with 3 sessions at comparable HR, the pace was faster.", ctx) == set()
+    assert "ungrounded_population_count" in guard.check_contract_claims(
+        "Compared with 4 sessions at comparable HR, the pace was faster.", ctx)
     assert "ungrounded_population_count" in guard.check_contract_claims(
         "Compared with 31 sessions at comparable HR, the pace was faster.", ctx)
 
