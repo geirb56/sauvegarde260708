@@ -105,7 +105,7 @@ _ABOVE_LT2 = re.compile(r"(au[- ]dessus (?:du |de )?(?:LT2|seuil 2|second seuil)
 # --- durations (C408-F) -------------------------------------------------------------------------
 _WORDS = "|".join(sorted(csc._WORD_VALUE, key=len, reverse=True))
 _MULT_QUALIFIER = (
-    r"plus (?:de |d'|du )|moins (?:de |d'|du )|au moins |environ |pr[èe]s de |presque |"
+    r"plus (?:de |d['’]|du )|moins (?:de |d['’]|du )|au moins |environ |pr[èe]s de |presque |"
     r"more than |over |less than |fewer than |at least |about |around |roughly |almost |nearly |"
     r"m[áa]s (?:de |del )|menos (?:de |del )|al menos |alrededor de |casi |aproximadamente ")
 _MULTIPLE = re.compile(
@@ -230,19 +230,29 @@ def _duration_claims(sentence: str, ratio_fact: Optional[dict]) -> list[tuple["r
     return claims
 
 
-_MINUTES_FIGURE = re.compile(r"(?<![\w:.,])(\d+(?:[.,]\d+)?)\s*min(?:ute?s?)?\b(?!\s*/)", re.I)
+_HABITUAL_MINUTES = re.compile(
+    rf"{_HABITUAL_REF.pattern}(?:\s+(?:de|d['’]|du|of|est|is|was|[ée]tait|fue|es|environ|about))*\s*"
+    r"(?P<n>\d+(?:[.,]\d+)?)\s*min(?:ute?s?|utos?)?\b(?!\s*/)", re.I)
 
 
-def _habitual_spans(sentence: str, ratio_fact: Optional[dict]) -> list["re.Match"]:
-    """Minute figures that state the V3 habitual (median) duration, worded as that median.
+def _blank(text: str, spans: list[tuple[int, int]]) -> str:
+    """The text with each (start, end) span replaced by as many spaces: every position stays valid."""
+    for start, end in spans:
+        text = text[:start] + " " * (end - start) + text[end:]
+    return text
 
-    Only the exact habitual duration of the V3 ratio, in minutes, named by median/habitual wording: a
-    "moyenne" / "average" is another statistic, and the same figure in km or any other unit never matches.
+
+def _habitual_full_spans(sentence: str, ratio_fact: Optional[dict]) -> list[tuple[int, int]]:
+    """Spans (figure + unit) of the minute figure worded as the V3 habitual (median) duration, only those.
+
+    The figure must follow the median/habitual wording directly and equal the habitual duration of the
+    V3 ratio: the session's own duration, a "moyenne" / "average", another value or another unit never
+    match, even when they share the figure.
     """
-    if not ratio_fact or _MEAN_WORD.search(sentence) or not _HABITUAL_REF.search(sentence):
+    if not ratio_fact or _MEAN_WORD.search(sentence):
         return []
-    return [m for m in _MINUTES_FIGURE.finditer(sentence)
-            if abs(float(m.group(1).replace(",", ".")) - ratio_fact["habitual"]) <= 0.51]
+    return [m.span("n")[:1] + (m.end(),) for m in _HABITUAL_MINUTES.finditer(sentence)
+            if abs(float(m.group("n").replace(",", ".")) - ratio_fact["habitual"]) <= 0.51]
 
 
 def _duration_ratio_fact(contract: dict) -> Optional[dict]:
@@ -328,7 +338,7 @@ def _contract(context: dict) -> dict:
 def _allowed_counts(sentence: str, c: dict) -> set[int]:
     """Counts a sentence may cite, decided by the kind of population the sentence talks about."""
     by = c["by_metric"]
-    if _duration_claims(sentence, c["duration_ratio"]) or _habitual_spans(sentence, c["duration_ratio"]):
+    if _duration_claims(sentence, c["duration_ratio"]) or _habitual_full_spans(sentence, c["duration_ratio"]):
         return by["duration_habitual"]  # a duration multiple may cite only the population of the V3 ratio
     if _RELATIVE_EASY.search(sentence) or (_HR_WORD.search(sentence) and (
             _HR_POSITION.search(sentence) or _POS_LOW.search(sentence) or _POS_HIGH.search(sentence))):
@@ -407,6 +417,9 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
         if _NON_COMPLIANCE.search(sentence) and status != "deviation" and not csc._only_negated(
                 sentence, _NON_COMPLIANCE):
             reasons.add("non_compliance_not_established")
+        if recorded is not None and any(
+                found != recorded.get("prescribed_workout_type") for _, found in _prescription_labels(sentence)):
+            reasons.add("prescription_type_misstated")
         if _PRESCRIPTION_WORD.search(sentence) and not csc._only_negated(sentence, _PRESCRIPTION_WORD):
             if recorded is None:
                 reasons.add("prescription_not_recorded")
@@ -475,18 +488,20 @@ def _csc_view(text: str, context: dict) -> str:
     them as an unlabelled number or an intensity word. Everything else in the sentence is left intact.
     """
     c = _contract(context)
+    facts = _facts(context)
     out = text
     for sentence in csc._sentences(text):
-        view = sentence
         claims = _duration_claims(sentence, c["duration_ratio"])
+        habitual = _habitual_full_spans(sentence, c["duration_ratio"])
+        masked = list(habitual)  # the habitual median, proven by the V3 ratio
+        masked += [m.span() for m, _, ok in _magnitude_claims(sentence, facts) if ok]  # delta checked here
+        masked += _prescription_label_spans(sentence, context)  # the recorded prescription's own label
+        view = _blank(sentence, masked)
         breaks = [m.span() for m in csc._CLAUSE_BREAK.finditer(sentence)]
         for match, ok in reversed(claims):
             if ok:  # the multiple and its own "habitual" reference, within its clause only
                 end = min((b for b, _ in breaks if b >= match.end()), default=len(sentence))
                 view = (view[:match.start()] + " " + _HABITUAL_REF.sub(" ", view[match.end():end]) + view[end:])
-        habitual = _habitual_spans(sentence, c["duration_ratio"])
-        for match in habitual:  # the habitual median, proven by the V3 ratio
-            view = view.replace(match.group(0), " ", 1)
         if (claims or habitual) and all(ok for _, ok in claims):  # the population of the ratio, named by its own count
             population = c["by_metric"]["duration_habitual"]
             view = _COUNT_BEFORE_NOUN.sub(
@@ -757,12 +772,12 @@ def _direction_contradicted(sentence: str, facts: dict) -> bool:
     return False
 
 
-_MAG_NUMBER = {"un": 1, "une": 1, "one": 1, "uno": 1, "una": 1, "deux": 2, "two": 2, "dos": 2,
-               "trois": 3, "three": 3, "tres": 3}
+_MAG_NUMBER = {"un": 1, "une": 1, "a": 1, "an": 1, "one": 1, "uno": 1, "una": 1, "deux": 2, "two": 2,
+               "dos": 2, "trois": 3, "three": 3, "tres": 3}
 _MINUTE_MAGNITUDE = re.compile(
-    r"(?:(?P<q>plus (?:de |d')|moins (?:de |d')|more than |over |less than |m[áa]s de |menos de |"
+    r"(?:(?P<q>plus (?:de |d['’])|moins (?:de |d['’])|more than |over |less than |m[áa]s de |menos de |"
     r"environ |about |around |presque |almost |casi )\s*)?"
-    r"(?P<n>\d+|" + "|".join(_MAG_NUMBER) + r")\s+minutes?\s*"
+    r"\b(?P<n>\d+|" + "|".join(sorted(_MAG_NUMBER, key=len, reverse=True)) + r")\s+(?:minutes?|minutos?)\s*"
     r"(?:(?:par|per|por|au|al)\s+(?:km|kilom[èe]tre|kilometers?|kilometres?|kil[óo]metro)|/\s*km)", re.I)
 
 
@@ -820,16 +835,15 @@ def _attribute(sentence: str, facts: dict) -> Optional[set[str]]:
         ids.add("duration.ratio")
         for match, _ in reversed(duration_claims):
             text = text[:match.start()] + " " + text[match.end():]
-    habitual = _habitual_spans(text, facts["duration.ratio"])
+    habitual = _habitual_full_spans(text, facts["duration.ratio"])
     if habitual:
         ids.add("duration.habitual")
-        for match in habitual:
-            text = text.replace(match.group(0), " ", 1)
+        text = _blank(text, habitual)
     for match, key, ok in _magnitude_claims(text, facts):  # "plus d'une minute par km" states the delta
         if not ok:
             return None
         ids.add(f"{key}.delta")
-        text = text.replace(match.group(0), " ", 1)
+        text = _blank(text, [match.span()])
     at_hr, at_pace = bool(_AT_COMPARABLE_HR.search(text)), bool(_AT_COMPARABLE_PACE.search(text))
     same_distance = bool(_SAME_DISTANCE.search(text))
     hr_position = bool(_RELATIVE_EASY.search(text) or (_HR_WORD.search(text) and (
@@ -981,6 +995,38 @@ def _fallback_items(context: dict, language: str, covered: frozenset = frozenset
         items.append(({"thresholds"}, texts["thresholds"].format(
             position=texts["threshold_position"][intensity["position_vs_declared_thresholds"]])))
     return items
+
+
+_PRESCRIPTION_LEAD = re.compile(
+    r"(?:prescri\w+|prescripci\w+)(?:\s+(?:du jour|of the day|for the day|for today|del d[íi]a|de hoy|"
+    r"d['’]aujourd['’]hui))?(?:\s*(?:\(|:|[–—-])|\s+(?:(?:[ée]tait|est|was|is|era|es)\s+)?"
+    r"(?:(?:une?|a|an|una?|de|of)\s+)?)\s*", re.I)
+
+
+def _prescription_labels(sentence: str) -> list[tuple[tuple[int, int], str]]:
+    """((start, end), workout type) of each prescription type label written right after "prescription"."""
+    labels = sorted(((label, kind) for texts in _FALLBACK.values() for kind, label in texts["kinds"].items()),
+                    key=lambda item: -len(item[0]))
+    found = []
+    for lead in _PRESCRIPTION_LEAD.finditer(sentence):
+        for label, kind in labels:
+            match = re.compile(re.escape(label) + r"\b", re.I).match(sentence, lead.end())
+            if match:
+                found.append((match.span(), kind))
+                break
+    return found
+
+
+def _prescription_label_spans(sentence: str, context: dict) -> list[tuple[int, int]]:
+    """Spans of prescription labels that are exactly the recorded snapshot's type; any other stays visible.
+
+    A prescription label is a statement about the plan, never about the effort actually run, and a
+    prescription never proves it was carried out.
+    """
+    frame = context.get("session_coaching_frame") if isinstance(context.get("session_coaching_frame"), dict) else {}
+    recorded = (frame.get("session_intent") or {}).get("recorded_historical_prescription")
+    kind = recorded.get("prescribed_workout_type") if isinstance(recorded, dict) else None
+    return [span for span, found in _prescription_labels(sentence) if kind and found == kind]
 
 
 _PRESCRIPTION_QUESTION = re.compile(
@@ -1142,8 +1188,12 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
                     substantive = True
             continue
         compared = {i for i in ids if i.endswith(".delta")}
-        if compared and ids <= covered:
-            continue  # the same comparison (metric, population, direction, value) is already stated
+        # a comparison is identified by metric, population, direction and delta, not by whether the
+        # sentence also quotes the number of sessions
+        if compared and compared <= covered and all(
+                i in compared or (i.endswith(".population") and i[:-len(".population")] + ".delta" in covered)
+                for i in ids):
+            continue
         kept.append(sentence)
         substantive = True
         covered |= ids
@@ -1153,7 +1203,7 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
         return result
 
     restored = [t for _, t in _fallback_items(context, language, frozenset(covered), question)]
-    if not (restored or substantive):  # nothing but reserves: the factual fallback answers better
+    if not substantive:  # nothing but reserves is kept: the factual fallback answers better
         result["text"] = fallback
         return result
     limit = _fallback_limit(context["session_coaching_frame"]["evidence_contract"], language,
