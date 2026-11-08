@@ -170,9 +170,9 @@ def test_unattributable_rejection_falls_back():
 
 
 @pytest.mark.parametrize("language,marker,forbidden", [
-    ("fr", "Ta FC moyenne", ("Votre", "votre", "vous")),
-    ("en", "Your average HR", ()),
-    ("es", "Tu FC media", ()),
+    ("fr", "Tu as couru", ("Votre", "votre", "vous")),
+    ("en", "You ran", ()),
+    ("es", "Has corrido", ()),
 ])
 def test_fallback_language_and_second_person(language, marker, forbidden):
     ctx = _ctx(language)
