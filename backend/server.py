@@ -53,6 +53,7 @@ from workout_analysis_v2 import (
 )
 from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 from narrative_coach_v3_models import WorkoutIntelligenceV3NarrativeResponse
+import coach_activity_conversation
 import coach_session_comment
 from coach_session_comment import CoachSessionCommentResponse
 from workout_intelligence_v3_service import (
@@ -2243,6 +2244,65 @@ async def _coach_limit_error_handler(_request: Request, exc: CoachLimitError):
     return JSONResponse(status_code=429, content={"detail": exc.detail, "code": exc.code})
 
 
+async def _resolve_coach_activity_turn(
+    *, user_id: str, message: str, language: str, now_utc: datetime, analysis_allowed: bool,
+) -> Optional[dict]:
+    """C409: read-only, owner-scoped resolution of activity references in a general-chat message.
+
+    Returns None for ordinary chat. Conversation memory is the `coach_refs` of the latest
+    assistant message of the same user's general chat (no new store, no Garmin call).
+    """
+    today = coach_activity_conversation.today_for(now_utc)
+    parsed = coach_activity_conversation.parse_message(message, today)
+    if not coach_activity_conversation.needs_memory(parsed):
+        return None
+    if not analysis_allowed:
+        explicit = bool(parsed["selectors"] or parsed["history"]) or (parsed["compare"] and parsed["anaphora"])
+        return {"kind": "restricted"} if explicit else None
+    try:
+        latest = await db.conversations.find(
+            {"user_id": user_id, "role": "assistant", "workout_id": None},
+            {"_id": 0, "coach_refs": 1, "user_id": 1, "timestamp": 1},
+        ).sort("timestamp", -1).limit(1).to_list(1)
+        memory = latest[0].get("coach_refs") if latest and latest[0].get("user_id", user_id) == user_id else None
+        turn = await coach_activity_conversation.resolve_turn(
+            db=db, user_id=user_id, message=message, language=language, today=today,
+            memory=memory, parsed=parsed,
+        )
+    except Exception:
+        logger.exception("[Coach] Activity reference resolution failed")
+        raise HTTPException(status_code=503, detail=_COACH_UNAVAILABLE.get(language, _COACH_UNAVAILABLE["en"]))
+    return None if turn["kind"] == "passthrough" else turn
+
+
+def _compact_comparison_contract(contract: dict) -> dict:
+    """Identifiers, measures and gaps only (audit trail stored next to the answer)."""
+    keys = ("kind", "activities", "reference", "population", "deltas", "missing", "criterion",
+            "distances_comparable", "undemonstrated_conclusions")
+    return {k: contract[k] for k in keys if k in contract}
+
+
+async def _store_deterministic_coach_reply(*, user_id: str, user_message: str, turn: dict) -> CoachResponse:
+    """Persist a turn answered from structured data (no model call): clarification, absence or comparison."""
+    await db.conversations.insert_one({
+        "id": str(uuid.uuid4()), "user_id": user_id, "role": "user", "content": user_message,
+        "workout_id": None, "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    msg_id = str(uuid.uuid4())
+    verification = {
+        "passed": True, "level": "deterministic_contract", "rejected_checks": [],
+        "response_source": "c409_comparison_contract" if turn["kind"] == "compare" else "c409_reference_resolution",
+    }
+    await db.conversations.insert_one({
+        "id": msg_id, "user_id": user_id, "role": "assistant", "content": turn["text"], "workout_id": None,
+        "coach_workout_analysis_allowed": True,
+        **({"coach_refs": turn["refs"]} if turn.get("refs") else {}),
+        **({"coach_contract": _compact_comparison_contract(turn["contract"])} if turn.get("contract") else {}),
+        "verification": verification, "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    return CoachResponse(response=turn["text"], message_id=msg_id, verification=verification)
+
+
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
@@ -2265,6 +2325,27 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
     language = request.language or "en"
     user_message = request.message or ""
     now_utc = datetime.now(timezone.utc)
+
+    # C409: a general-chat message may designate real activities (date, last run, comparison,
+    # follow-up). A single resolved activity reuses the selected-workout path below.
+    effective_workout_id = request.workout_id
+    activity_turn: Optional[dict] = None
+    if request.workout_id is None:
+        activity_turn = await _resolve_coach_activity_turn(
+            user_id=user_id, message=user_message, language=language, now_utc=now_utc,
+            analysis_allowed=workout_analysis_allowed,
+        )
+        if activity_turn is not None and activity_turn["kind"] == "restricted":
+            return _coach_workout_restriction(language)
+        if activity_turn is not None and activity_turn["kind"] == "single":
+            selected_workout = await load_scoped_workout_analysis_v2(
+                db=db, user_id=user_id, workout_id=activity_turn["workout_id"], language=language,
+            )
+            if selected_workout is None:
+                raise HTTPException(status_code=404, detail="Workout not found")
+            workout, workout_analysis = selected_workout
+            effective_workout_id = activity_turn["workout_id"]
+    deterministic_turn = activity_turn if activity_turn and activity_turn["kind"] in ("reply", "compare") else None
 
     is_unlimited = user_access.is_unlimited_chat
     reservation: Optional[dict] = None
@@ -2293,6 +2374,10 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             )
 
     try:
+        if deterministic_turn is not None:
+            return await _store_deterministic_coach_reply(
+                user_id=user_id, user_message=user_message, turn=deterministic_turn)
+
         # 1. Retrieve conversation history scoped to this workout or to general chat.
         conversation_scope = _coach_history_scope(user_id, workout_analysis_allowed, request.workout_id)
         conversation_history = await db.conversations.find(
@@ -2302,7 +2387,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
         llm_context, loaded_narrative = await _build_coach_llm_context(
             user=user, language=language, workout=workout, workout_analysis=workout_analysis,
-            workout_analysis_allowed=workout_analysis_allowed, workout_id=request.workout_id,
+            workout_analysis_allowed=workout_analysis_allowed, workout_id=effective_workout_id,
             now_utc=now_utc,
         )
         if loaded_narrative is not _NARRATIVE_NOT_LOADED:
@@ -2331,9 +2416,9 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             logger.warning(f"LLM chat failed: {meta}")
             refund_task = _start_coach_refund(reservation, user_msg_id)
             await asyncio.shield(refund_task)
-            if request.workout_id is not None:
+            if effective_workout_id is not None:
                 degraded = await _coach_degraded_workout_reply(
-                    user_id=user_id, workout_id=request.workout_id, language=language,
+                    user_id=user_id, workout_id=effective_workout_id, language=language,
                     narrative=scoped_narrative,
                 )
                 if degraded is not None:
@@ -2345,7 +2430,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
         response_text = llm_response
         verification: Optional[dict] = None
-        if request.workout_id is not None and workout_analysis_allowed:
+        if effective_workout_id is not None and workout_analysis_allowed:
             # C408-C: one deterministic check of the single generated reply; no second LLM call.
             check_started = time.perf_counter()
             resolved = coach_evidence_guard.resolve_chat_reply(
@@ -2374,6 +2459,8 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             "content": response_text,
             "workout_id": request.workout_id,
             "coach_workout_analysis_allowed": workout_analysis_allowed,
+            **({"coach_refs": activity_turn["refs"]}
+               if activity_turn is not None and activity_turn.get("refs") else {}),
             **({"verification": verification} if verification is not None else {}),
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
