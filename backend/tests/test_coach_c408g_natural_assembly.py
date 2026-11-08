@@ -455,3 +455,63 @@ def test_limits_are_not_repeated_in_a_repaired_reply():
     out = _resolve(FACT_AND_LIMIT + " " + STRUCTURE_LIMIT, _ctx_1210())
     assert out["text"].count("structure ou les fractions") <= 2
     assert out["text"].count("seuil personnel") <= 1
+
+
+# ================================================================== last review point: prescription labels vs C403
+
+def _presc(kind, language="fr"):
+    return _ctx_1309(language, prescription={**RACE, "prescribed_workout_type": kind})
+
+
+def test_intensity_checks_are_not_globally_disabled_and_labels_would_trip_c403_unmasked():
+    ctx = _presc("easy")
+    raw = "Une prescription du jour (footing facile) existe."
+    import coach_session_comment as csc
+    assert csc.validate_session_comment(f"Tu as couru 21,27 km. {raw}{END}", ctx, "fr")[0] is False  # C403 alone rejects
+    assert guard.verify_chat_reply(f"Tu as couru 21,27 km. {raw}{END}", ctx, "fr")["passed"] is True
+
+
+@pytest.mark.parametrize("sentence,passed", [
+    ("Prescription du jour : footing facile.", True),
+    ("Une prescription du jour (footing facile) existe.", True),
+    ("Tu as effectué un footing physiologiquement facile.", False),
+    ("Tu étais sous LT1.", False),
+    ("Prescription du jour : compétition.", False),
+])
+def test_easy_prescription_cases(sentence, passed):
+    assert _passes(sentence, _presc("easy")) is passed, sentence
+
+
+@pytest.mark.parametrize("sentence,passed", [
+    ("Prescription du jour : sortie longue facile.", True),
+    ("Une prescription du jour (sortie longue facile) existe.", True),
+    ("La séance réalisée était forcément facile.", False),
+    ("Prescription du jour : footing facile.", False),
+])
+def test_long_easy_prescription_cases(sentence, passed):
+    assert _passes(sentence, _presc("long_easy")) is passed, sentence
+
+
+@pytest.mark.parametrize("language,kind,good,bad", [
+    ("en", "easy", "A prescription for the day (easy run) exists.", "Your session was physiologically easy."),
+    ("en", "long_easy", "A prescription for the day (easy long run) exists.", "You ran below LT1."),
+    ("es", "easy", "Existe una prescripción del día (rodaje suave).", "Tu sesión fue fisiológicamente fácil."),
+    ("es", "long_easy", "Existe una prescripción del día (tirada larga suave).", "Estuviste por debajo de LT1."),
+])
+def test_easy_prescription_labels_in_en_es(language, kind, good, bad):
+    ctx = _presc(kind, language)
+    tail = {"en": " The available context remains limited.", "es": " El contexto disponible sigue siendo limitado."}[language]
+    lead = {"en": "You ran 21.27 km.", "es": "Has corrido 21,27 km."}[language]
+    assert guard.verify_chat_reply(f"{lead} {good}{tail}", ctx, language)["passed"] is True
+    assert guard.verify_chat_reply(f"{lead} {bad}{tail}", ctx, language)["passed"] is False
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("kind", ["easy", "long_easy"])
+def test_full_fallback_with_easy_prescription_passes_its_own_guard(language, kind):
+    ctx = _presc(kind, language)
+    text = guard.build_contract_fallback(ctx, language)
+    label = guard._FALLBACK[language]["kinds"][kind]
+    assert f"({label})" in text
+    assert guard.verify_chat_reply(text, ctx, language)["passed"] is True, text
+    assert "unknown_label" not in text
