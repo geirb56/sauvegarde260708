@@ -96,14 +96,14 @@ _T = {
     # focused answers
     "progress": (
         "Je ne peux pas conclure que tu progresses à partir de ces deux séances. {a} {b} "
-        "Deux séances de distances et d'objectifs différents ne prouvent pas une évolution de ta forme ; "
+        "Deux séances isolées ne prouvent pas une évolution de ta forme ; "
         "pour en parler, il faudrait des séances comparables dans le temps. "
         "Je peux comparer avec tes dernières sorties similaires.",
         "I can't conclude that you are improving from these two sessions. {a} {b} "
-        "Two sessions with different distances and purposes do not show a change in fitness; that needs "
+        "Two isolated sessions do not show a change in fitness; that needs "
         "comparable sessions over time. I can compare with your most similar recent runs.",
         "No puedo concluir que estés progresando a partir de estas dos sesiones. {a} {b} "
-        "Dos sesiones de distancias y objetivos distintos no demuestran una evolución de tu forma; para "
+        "Dos sesiones aisladas no demuestran una evolución de tu forma; para "
         "hablar de ello harían falta sesiones comparables a lo largo del tiempo. "
         "Puedo comparar con tus últimas salidas similares."),
     "hr_head": (
@@ -193,6 +193,24 @@ _T = {
     "h_med_partial": (" (certaines mesures manquent pour une partie des séances).",
                       " (some measures are missing for part of the sessions).",
                       " (faltan algunas medidas en parte de las sesiones)."),
+    "h_f_crit": ("Critère retenu : {c}.", "Criterion: {c}.", "Criterio aplicado: {c}."),
+    "h_f_ref": ("{m} de la séance de référence ({d}) : {v}.", "{m} of the reference session ({d}): {v}.",
+                "{m} de la sesión de referencia ({d}): {v}."),
+    "h_f_ref_missing": (
+        "{m} : non disponible pour la séance de référence ({d}), je ne peux donc pas la comparer.",
+        "{m}: not available for the reference session ({d}), so I can't compare it.",
+        "{m}: no disponible para la sesión de referencia ({d}), por lo que no puedo compararla."),
+    "h_f_pop": ("Séances comparées ({n}/{total} avec cette mesure) : {vals}.",
+                "Compared sessions ({n}/{total} with this measure): {vals}.",
+                "Sesiones comparadas ({n}/{total} con esta medida): {vals}."),
+    "h_f_pop_none": (
+        "{m} : aucune des {total} séances comparées n'a cette mesure, je ne peux donc pas comparer.",
+        "{m}: none of the {total} compared sessions has this measure, so I can't compare.",
+        "{m}: ninguna de las {total} sesiones comparadas tiene esta medida, por lo que no puedo comparar."),
+    "h_f_med": ("Médiane de ces {n} séances : {med} ; écart de la séance de référence : {gap}.",
+                "Median of these {n} sessions: {med}; gap of the reference session: {gap}.",
+                "Mediana de estas {n} sesiones: {med}; diferencia de la sesión de referencia: {gap}."),
+    "h_same": ("identique", "identical", "idéntico"),
     "h_pace_same": ("allure identique", "same pace", "mismo ritmo"),
     "h_pace_slow": ("plus lente", "slower", "más lento"),
     "h_pace_fast": ("plus rapide", "faster", "más rápido"),

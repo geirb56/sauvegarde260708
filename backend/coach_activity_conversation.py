@@ -12,6 +12,7 @@ call, no write.
 """
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
@@ -61,7 +62,7 @@ _WEEKDAYS = {
 _MONTH_ALT = "|".join(sorted(_MONTHS, key=len, reverse=True))
 _WEEKDAY_ALT = "|".join(_WEEKDAYS)
 _NUMBER_WORDS = {"deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "two": 2, "three": 3, "four": 4, "five": 5,
-                 "dos": 2, "tres": 3, "cuatro": 4}
+                 "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5}
 
 _ISO_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 _NUMERIC_RE = re.compile(
@@ -75,7 +76,7 @@ _LAST_RE = re.compile(
     r"\b(?:ma|mon|ta|ton|la|ma toute|my|the|mi|el|tu)?\s*(?:derniere|dernier|last|latest|most recent|"
     r"ultima|ultimo|mas reciente)\s+"
     r"(?:sortie|course|seance|run|workout|session|semi|marathon|activite|footing|salida|carrera|sesion|"
-    r"entrenamiento|actividad|media maraton|medio maraton|maraton)\b|"
+    r"entrenamiento|actividad|half(?:-| )?marathon|half|media maraton|medio maraton|maraton)\b|"
     r"\b(?:derniere|dernier)\s+(?:semi|marathon)\b")
 _HALF_RE = re.compile(
     r"\b(?:semi(?:-| )?marathon|semi|half(?:-| )?marathon|half|medio maraton|media maraton)\b")
@@ -106,6 +107,13 @@ _TOPIC_CHANGE_RE = re.compile(
     r"\b(?:autre sujet|parlons d'autre chose|changeons de sujet|change of subject|different topic|"
     r"oublie (?:ca|cette|ces)|forget (?:that|this)|cambiemos de tema|otro tema|hablemos de otra cosa|"
     r"olvida (?:eso|esto|esa|esas))\b")
+_PLAN_INTENT_RE = re.compile(
+    r"\b(?:dois-je|dois je|devrais-je|devrais je|what should i|should i|what do i|que faire|quoi faire|que debo|"
+    r"que deberia|que hago|demain|tomorrow|manana|prochaine?s?|next|cible|target|objectif|objetivo|goal|"
+    r"proxim[oa]s?|planning|plan)\b")
+_ANALYSE_RE = re.compile(
+    r"\b(?:analys|analyz|analiz|compar|explique|explain|resume|summar|how was|comment etait|como fue|"
+    r"qu'est-ce que tu penses)")
 _PLAN_EXCLUDE_RE = re.compile(
     r"\b(?:cible|objectif|target|goal|demain|tomorrow|prochaine|prochain|next|plan|aujourd|today|semaine|week|"
     r"objetivo|manana|proxima|proximo|hoy|semana)\b")
@@ -199,8 +207,9 @@ def _dates_in(text: str, today: date) -> list[date]:
 
 
 _HISTORY_EN_RE = re.compile(
-    r"(?:last|previous|recent)\s+(\d+|two|three|four|five)\s+(long|similar|comparable)?\s*"
-    r"(?:runs?|workouts?|sessions?)")
+    r"(?:last|previous|recent|ultimas|ultimos)\s+(\d+|two|three|four|five|dos|tres|cuatro|cinco)\s+"
+    r"(long|similar|comparable|largas|largos|parecidas|similares)?\s*"
+    r"(?:runs?|workouts?|sessions?|salidas|carreras|sesiones|entrenamientos)")
 
 
 def _history_request(text: str) -> Optional[dict]:
@@ -237,16 +246,21 @@ def parse_message(message: str, today: date) -> dict:
                                          or _HISTORY_EN_RE.search(text)) else None
     if history is not None and history["kind"] == "recent" and not _COMPARE_RE.search(text):
         history = None
-    dates = [] if history is not None and not _DAY_MONTH_RE.search(text) and not _NUMERIC_RE.search(text) \
+    dates = [] if history is not None and not (_DAY_MONTH_RE.search(text) or _MONTH_DAY_RE.search(text)
+                                               or _NUMERIC_RE.search(text) or _ISO_RE.search(text)) \
         else _dates_in(text, today)
+    planning = bool(_PLAN_INTENT_RE.search(text)) and not _ANALYSE_RE.search(text)
+    if planning:
+        # A planning question is for the Coach / Training Engine, never a lookup of a performed activity.
+        dates, history = [], None
     selectors: list[dict] = [{"type": "date", "date": d} for d in dates]
-    if not selectors:
+    if not selectors and not planning:
         km = _KM_RE.search(text)
         if _LAST_RE.search(text) and history is None:
-            if _FULL_RE.search(text):
-                selectors.append({"type": "last", "km": (41.5, 43.5)})
-            elif _HALF_RE.search(text):
+            if _HALF_RE.search(text):  # the half marathon has precedence over the marathon
                 selectors.append({"type": "last", "km": (20.5, 22.0)})
+            elif _FULL_RE.search(text):
+                selectors.append({"type": "last", "km": (41.5, 43.5)})
             else:
                 selectors.append({"type": "last"})
         elif km and history is None:
@@ -255,7 +269,7 @@ def parse_message(message: str, today: date) -> dict:
             selectors.append({"type": "distance", "km": (value - tolerance, value + tolerance), "value": value})
         elif (_HALF_RE.search(text) or _FULL_RE.search(text)) and history is None and re.search(
                 r"\b(?:ma|mon|my|la|le|the)\s+(?:sortie|course|seance|run|semi|marathon|half)", text):
-            selectors.append({"type": "distance", "km": (41.5, 43.5) if _FULL_RE.search(text) else (20.5, 22.0)})
+            selectors.append({"type": "distance", "km": (20.5, 22.0) if _HALF_RE.search(text) else (41.5, 43.5)})
     if re.search(r"\b(?:objectif|objetivo|goal|target|cible)\b", text):
         # "mon objectif 10 km" designates a target, not a past activity
         selectors = [x for x in selectors if x["type"] != "distance"]
@@ -271,7 +285,7 @@ def parse_message(message: str, today: date) -> dict:
         "why": bool(_WHY_RE.search(text)),
         "ordinal": ordinal.group(1) if ordinal else None,
         "topic_change": bool(_TOPIC_CHANGE_RE.search(text)),
-        "plan_related": bool(_PLAN_EXCLUDE_RE.search(text)),
+        "plan_related": planning or bool(_PLAN_EXCLUDE_RE.search(text)),
         "followup": bool(_FOLLOWUP_RE.search(text)),
     }
 
@@ -341,10 +355,11 @@ async def _runs_on(db: Any, user_id: str, day: date) -> list[dict]:
 
 
 async def _latest_runs(db: Any, user_id: str, km: Optional[tuple], limit: int = CHOICE_LIMIT + 1) -> list[dict]:
-    docs = await (
-        db.workouts.find({"user_id": user_id, "type": "run"}, _PROJECTION)
-        .sort("date", -1).limit(200).to_list(200)
-    )
+    query: dict[str, Any] = {"user_id": user_id, "type": "run"}
+    if km is not None:
+        # Bound applied in the query, before the limit: older matching runs are never crowded out.
+        query["distance_km"] = {"$gte": km[0], "$lt": math.nextafter(km[1], math.inf)}
+    docs = await db.workouts.find(query, _PROJECTION).sort("date", -1).limit(200).to_list(200)
     docs = [d for d in docs if d.get("user_id") == user_id and _day(d.get("date"))]
     if km is not None:
         docs = [d for d in docs if _positive(d.get("distance_km")) is not None
@@ -649,6 +664,7 @@ async def build_history_contract(db: Any, user_id: str, reference: dict, kind: s
     window = [d for d in window if d.get("id") != reference["id"]]
     window_facts = [activity_facts(d) for d in window]
     contract: dict[str, Any] = {
+        "timed_sessions": sum(1 for f in window_facts if f["duration_min"] is not None),
         "version": REFS_VERSION, "kind": "history", "reference": reference, "criterion": {"kind": kind},
         "requested": count, "window_days": SIMILAR_HISTORY_WINDOW_DAYS, "window_size": len(window_facts),
         "reference_matches_criterion": None, "population": [], "habitual_duration_min": None,
@@ -684,7 +700,12 @@ async def build_history_contract(db: Any, user_id: str, reference: dict, kind: s
     else:
         contract["criterion"].update(established=True)
         picked = list(window_facts)
-    population = list(reversed(picked[:count]))  # most recent `count`, shown chronologically
+    # Bounded to `count`: enrich with the stored Garmin document (same owner-scoped loader as the pair path).
+    enriched = []
+    for f in picked[:count]:
+        richer = await load_activity_facts(db, user_id, f["id"]) if f.get("id") else None
+        enriched.append(richer or f)
+    population = list(reversed(enriched))  # most recent `count`, shown chronologically
     contract["population"] = population
     stats: dict[str, Any] = {}
     for metric in ("distance_km", "duration_min", "pace_s_per_km", "avg_hr"):
@@ -695,7 +716,52 @@ async def build_history_contract(db: Any, user_id: str, reference: dict, kind: s
     return contract
 
 
-def render_history(contract: dict, language: str, today: date) -> str:
+_HISTORY_FOCUS = {"hr": "avg_hr", "pace": "pace_s_per_km", "distance": "distance_km", "duration": "duration_min"}
+
+
+def _metric_value(metric: str, value: float, language: str) -> str:
+    if metric == "avg_hr":
+        return f"{int(value)} bpm"
+    if metric == "pace_s_per_km":
+        return f"{_pace(int(value))}/km"
+    if metric == "distance_km":
+        return f"{_num(value, language)} km"
+    return _duration(int(value), language)
+
+
+def _focused_history(contract: dict, language: str, today: date, focus: str, criteria: str) -> str:
+    """One measure of the reference session against the same population and criterion."""
+    metric = _HISTORY_FOCUS[focus]
+    ref, population, stats = contract["reference"], contract["population"], contract["population_stats"][metric]
+    name = _metric_name(metric, language)
+    name = name[0].upper() + name[1:]
+    lines = [t("h_f_crit", language, c=criteria)]
+    if ref[metric] is None:
+        lines.append(t("h_f_ref_missing", language, m=name, d=_short_date(ref["date"], language)))
+        return " ".join(lines)
+    lines.append(t("h_f_ref", language, m=name, d=_short_date(ref["date"], language),
+                   v=_metric_value(metric, ref[metric], language)))
+    values = [f"{_short_date(f['date'], language)} : {_metric_value(metric, f[metric], language)}"
+              for f in population if f[metric] is not None]
+    if not values:
+        lines.append(t("h_f_pop_none", language, m=name, total=len(population)))
+        return " ".join(lines)
+    lines.append(t("h_f_pop", language, n=stats["n"], total=len(population), vals="; ".join(values)))
+    diff = ref[metric] - stats["median"]
+    if metric == "pace_s_per_km":
+        gap = (t("h_same", language) if not diff else
+               f"{_pace_gap(abs(diff), language)} {t('h_pace_slow' if diff > 0 else 'h_pace_fast', language)}")
+    elif not diff:
+        gap = t("h_same", language)
+    else:
+        unit = {"avg_hr": " bpm", "duration_min": " min", "distance_km": " km"}[metric]
+        gap = f"{'+' if diff > 0 else '−'}{_num(abs(round(diff, 2)), language)}{unit}"
+    lines.append(t("h_f_med", language, n=stats["n"], med=_metric_value(metric, stats["median"], language), gap=gap))
+    lines.append(t("h_descriptive", language))
+    return " ".join(lines)
+
+
+def render_history(contract: dict, language: str, today: date, focus: Optional[str] = None) -> str:
     ref = contract["reference"]
     criterion = contract["criterion"]
     ref_line = _session_sentence(ref, language, today, verb_index=0)
@@ -703,7 +769,7 @@ def render_history(contract: dict, language: str, today: date) -> str:
     if criterion.get("established") is False:
         if kind == "long":
             reason = t("h_long_unset", language, n=criterion["min_history"], w=contract["window_days"],
-                       have=contract["window_size"])
+                       have=contract["timed_sessions"])
         else:
             reason = t("h_sim_unset", language)
         return f"{ref_line} {reason}"
@@ -719,6 +785,8 @@ def render_history(contract: dict, language: str, today: date) -> str:
         criteria = t("h_c_recent", language)
     population = contract["population"]
     n = len(population)
+    if focus in _HISTORY_FOCUS and n:
+        return _focused_history(contract, language, today, focus, criteria)
     if n == 0:
         return f"{ref_line} {t('h_none', language, c=criteria, w=contract['window_days'])}"
     head = t("h_head", language, c=criteria, n=n,
@@ -728,23 +796,28 @@ def render_history(contract: dict, language: str, today: date) -> str:
     lines = [f"- {_session_sentence(f, language, today, verb_index=i)}" for i, f in enumerate(population)]
     stats = contract["population_stats"]
     gap_parts = []
+
+    def counted(metric: str) -> str:
+        n_metric = stats[metric]["n"]
+        return f" ({n_metric}/{n})" if n_metric < n else ""
+
     if ref["distance_km"] is not None and stats["distance_km"]["median"] is not None:
         diff = round(ref["distance_km"] - stats["distance_km"]["median"], 2)
         gap_parts.append(f"{_metric_name('distance_km', language)} {'+' if diff >= 0 else '−'}"
-                         f"{_num(abs(diff), language)} km")
+                         f"{_num(abs(diff), language)} km{counted('distance_km')}")
     if ref["duration_min"] is not None and stats["duration_min"]["median"] is not None:
         diff = ref["duration_min"] - stats["duration_min"]["median"]
-        gap_parts.append(f"{_metric_name('duration_min', language)} {'+' if diff >= 0 else '−'}{abs(diff)} min")
+        gap_parts.append(f"{_metric_name('duration_min', language)} {'+' if diff >= 0 else '−'}{abs(diff)} min{counted('duration_min')}")
     if ref["pace_s_per_km"] is not None and stats["pace_s_per_km"]["median"] is not None:
         diff = ref["pace_s_per_km"] - stats["pace_s_per_km"]["median"]
         if diff:
             word = t("h_pace_slow" if diff > 0 else "h_pace_fast", language)
-            gap_parts.append(f"{_metric_name('pace_s_per_km', language)} {_pace_gap(abs(diff), language)} {word}")
+            gap_parts.append(f"{_metric_name('pace_s_per_km', language)} {_pace_gap(abs(diff), language)} {word}{counted('pace_s_per_km')}")
         else:
-            gap_parts.append(t("h_pace_same", language))
+            gap_parts.append(t("h_pace_same", language) + counted("pace_s_per_km"))
     if ref["avg_hr"] is not None and stats["avg_hr"]["median"] is not None:
         diff = ref["avg_hr"] - stats["avg_hr"]["median"]
-        gap_parts.append(f"{_metric_name('avg_hr', language)} {'+' if diff >= 0 else '−'}{abs(diff)} bpm")
+        gap_parts.append(f"{_metric_name('avg_hr', language)} {'+' if diff >= 0 else '−'}{abs(diff)} bpm{counted('avg_hr')}")
     median_line = ""
     if gap_parts:
         counts = {m: s["n"] for m, s in stats.items()}
@@ -922,7 +995,7 @@ def _single(workout_id: str, *, continues: bool = False) -> dict:
             "refs": _refs("single", [workout_id], primary=workout_id)}
 
 
-_KINDS = ("single", "pair")
+_KINDS = ("single", "pair", "history")
 
 
 def clean_memory(memory: Any) -> Optional[dict]:
@@ -934,9 +1007,18 @@ def clean_memory(memory: Any) -> Optional[dict]:
     kind = memory.get("kind") if memory.get("kind") in _KINDS else None
     if kind == "pair" and len(ids) != 2:
         kind = None
-    if kind == "single" and len(ids) != 1:
+    if kind in ("single", "history") and len(ids) != 1:
         kind = None
     cleaned: dict[str, Any] = {"v": REFS_VERSION, "kind": kind, "workout_ids": ids if kind else []}
+    stored_history = memory.get("history")
+    if kind == "history":
+        valid = (isinstance(stored_history, dict) and stored_history.get("kind") in ("long", "similar", "recent")
+                 and isinstance(stored_history.get("count"), int) and not isinstance(stored_history["count"], bool)
+                 and 1 <= stored_history["count"] <= HISTORY_MAX_COUNT)
+        if not valid:
+            cleaned["kind"], cleaned["workout_ids"] = None, []
+        else:
+            cleaned["history"] = {"kind": stored_history["kind"], "count": stored_history["count"]}
     if isinstance(memory.get("primary"), str):
         cleaned["primary"] = memory["primary"]
     if isinstance(memory.get("carried"), int) and not isinstance(memory["carried"], bool):
@@ -1011,7 +1093,8 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
         # The opened activity is the first reference; a pair already built in this scope may be followed up.
         keeps_pair = (mem_kind == "pair" and selected_id in ids and len(ids) == 2
                       and not (selectors or p["history"] is not None))
-        if not keeps_pair:
+        keeps_history = (mem_kind == "history" and ids == [selected_id] and not selectors)
+        if not (keeps_pair or keeps_history):
             ids, mem_kind = [selected_id], "single"
         if selectors and p["history"] is None:
             compare = True  # naming another activity from a selected one means comparing with it
@@ -1067,20 +1150,29 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
     # C) comparison of two sessions
     if compare or (p["both"] and len(ids) == 2):
         chosen: list[str] = []
+        ambiguous: Optional[dict] = None
         for selector in selectors[:2]:
             resolved = await _resolve_selector(db, user_id, selector, language, today)
             if "workout" not in resolved:
-                if resolved.get("choices"):
-                    intent = {"action": "pair", "others": chosen or ([ids[0]] if len(ids) == 1 else []),
-                              "focus": p["focus"], "why": p["why"]}
-                    return _reply(resolved["reply"], _refs(mem_kind or "single", ids, pending=_pending(
-                        resolved["choices"], intent, resolved["reply"])))
+                if resolved.get("choices") and ambiguous is None:
+                    ambiguous = resolved
+                    continue
+                if resolved.get("choices"):  # two ambiguous selectors: ask for precise dates instead
+                    return _reply(_clarify_text(language, "referent", today), None)
                 return _reply(resolved["reply"], None)
             chosen.append(resolved["workout"]["id"])
+        if ambiguous is not None:
+            # The comparison survives the clarification: the other activity is kept in the pending intent.
+            others = chosen[:1] or (ids[:1] if mem_kind in ("single", "history") and len(ids) == 1 else [])
+            if not others:
+                return _reply(_clarify_text(language, "referent", today), None)
+            intent = {"action": "pair", "others": others, "focus": p["focus"], "why": p["why"]}
+            return _reply(ambiguous["reply"], _refs(mem_kind or "single", ids, pending=_pending(
+                ambiguous["choices"], intent, ambiguous["reply"])))
         if len(chosen) == 2:
             return await _pair_response(db, user_id, chosen, language, today, p["focus"], p["why"])
         if len(chosen) == 1:
-            if mem_kind == "single" and len(ids) == 1:
+            if mem_kind in ("single", "history") and len(ids) == 1:
                 return await _pair_response(db, user_id, [ids[0], chosen[0]], language, today,
                                             p["focus"], p["why"])
             if mem_kind == "pair" and chosen[0] in ids:
@@ -1105,6 +1197,9 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
     if ids and not p["plan_related"]:
         if mem_kind == "pair" and len(ids) == 2 and (p["focus"] or p["both"] or p["anaphora"]):
             return await _pair_response(db, user_id, ids, language, today, p["focus"], p["why"])
+        if mem_kind == "history" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]):
+            history = (memory or {}).get("history")
+            return await _history_turn(db, user_id, ids[0], history, language, today, p["focus"])
         if mem_kind == "single" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]):
             return _single(ids[0], continues=True)
     if p["anaphora"]:
@@ -1112,13 +1207,16 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
     return {"kind": "passthrough"}
 
 
-async def _history_turn(db: Any, user_id: str, workout_id: str, history: dict, language: str, today: date) -> dict:
+async def _history_turn(db: Any, user_id: str, workout_id: str, history: dict, language: str, today: date,
+                        focus: Optional[str] = None) -> dict:
     reference = await load_activity_facts(db, user_id, workout_id)
     if reference is None or not reference["date"]:
         return _reply(_clarify_text(language, "referent", today), None)
     contract = await build_history_contract(db, user_id, reference, history["kind"], history["count"])
-    return {"kind": "compare", "text": render_history(contract, language, today),
-            "refs": _refs("single", [workout_id], primary=workout_id), "contract": contract}
+    refs = _refs("history", [workout_id], primary=workout_id)
+    refs["history"] = {"kind": history["kind"], "count": history["count"]}
+    return {"kind": "compare", "text": render_history(contract, language, today, focus), "refs": refs,
+            "contract": contract}
 
 
 def today_for(now_utc: datetime) -> date:

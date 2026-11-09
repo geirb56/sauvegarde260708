@@ -7,6 +7,7 @@ from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from test_coach_contract_unified import _Collection, _FakeDB, _analyze_environment, _trial_access, _free_access  # sets env first
 import server
@@ -335,27 +336,28 @@ def _server_env(db, access=_trial_access):
     return _analyze_environment(db, access)
 
 
+class _Detail:
+    def model_dump(self, mode="json"):
+        return {"workout_detail": {"id": "x", "date": "2026-10-12", "type": "run", "avg_hr": 127.0}}
+
+
 async def test_full_conversation_path_memory_and_no_model_call_for_comparisons():
     db = _db(A(), B())
-    narrative_loader = AsyncMock(return_value=(None, None))
     with (
         _server_env(db),
         patch("coach_activity_conversation.today_for", return_value=TODAY),
+        patch("server.build_coach_context_v2", AsyncMock(return_value=_Detail())),
         patch("server.load_scoped_workout_analysis_v2",
               AsyncMock(side_effect=lambda **kw: ({"id": kw["workout_id"], "user_id": kw["user_id"]}, object()))) as scoped,
-        patch("server.load_scoped_workout_coach_evidence", narrative_loader),
+        patch("server.load_scoped_workout_coach_evidence", AsyncMock(return_value=(None, None))),
     ):
         llm = server.llm_coach.enrich_chat_response
         r1 = await _post({"message": "Analyse ma sortie du 12 octobre.", "language": "fr"})
-        assert r1.status_code in (200, 503)
-        scoped.assert_awaited_once()
+        assert r1.status_code == 200  # the first turn must succeed: no reference is injected afterwards
         assert scoped.await_args.kwargs["workout_id"] == "wA"
-        # Turn 1 stored with its reference so the next turns can use it (when the model path answered).
+        first = [d for d in db.conversations._docs if d["role"] == "assistant"][0]
+        assert first["coach_refs"]["workout_ids"] == ["wA"] and first["coach_refs"]["primary"] == "wA"
         calls_after_1 = llm.await_count
-        db.conversations._docs.append({
-            "id": "seed", "user_id": "user-a", "role": "assistant", "content": "x", "workout_id": None,
-            "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), "coach_refs": cac._refs("single", ["wA"], primary="wA"),
-        })
         r2 = await _post({"message": "Compare-la à celle du 13 septembre.", "language": "fr"})
         r3 = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
         r4 = await _post({"message": "Est-ce que je progresse ?", "language": "fr"})
@@ -364,10 +366,24 @@ async def test_full_conversation_path_memory_and_no_model_call_for_comparisons()
     assert "21,27 km" in r2.json()["response"] and "11,94 km" in r2.json()["response"]
     assert "160 bpm" in r3.json()["response"] and "33 bpm" in r3.json()["response"]
     assert "Je ne peux pas conclure que tu progresses" in r4.json()["response"]
-    assistants = [d for d in db.conversations._docs if d["role"] == "assistant" and d["id"] != "seed"]
+    assistants = [d for d in db.conversations._docs if d["role"] == "assistant"]
     assert [d["coach_refs"]["workout_ids"] for d in assistants[-3:]] == [["wB", "wA"]] * 3
     assert all(d["workout_id"] is None for d in db.conversations._docs)
     assert r2.json()["verification"]["response_source"] == "c409_comparison_contract"
+
+
+async def test_failed_first_turn_stores_no_reference_and_later_turns_ask_for_the_session():
+    db = _db(A(), B())
+    with (
+        _server_env(db),
+        patch("coach_activity_conversation.today_for", return_value=TODAY),
+        patch("server.load_scoped_workout_analysis_v2", AsyncMock(side_effect=HTTPException(status_code=404, detail="not found"))),
+    ):
+        failed = await _post({"message": "Analyse ma sortie du 12 octobre.", "language": "fr"})
+        followup = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
+    assert failed.status_code == 404
+    assert not [d for d in db.conversations._docs if d.get("coach_refs")]
+    assert "160 bpm" not in followup.json().get("response", "")
 
 
 async def test_free_tier_gets_the_workout_restriction_for_activity_questions():
