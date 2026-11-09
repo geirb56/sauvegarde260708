@@ -701,6 +701,7 @@ _FALLBACK = {
             "unexplained": "Les données montrent son allure, mais ne suffisent pas à expliquer pourquoi elle diffère des autres.",
             "numbered": "L'effort n° {n} était à {pace}/km.",
             "missing": "Je n'ai pas l'allure enregistrée de cet effort.",
+            "last_unknown": "Je ne sais pas combien d'efforts ont été enregistrés, donc je ne peux pas identifier le dernier.",
             "cause": "Les données montrent cette différence, mais pas sa cause certaine.",
             "single_faster": "Une seule répétition plus rapide ne suffit pas à démontrer une amélioration de ta forme.",
             "single": "Une seule répétition ne suffit pas à démontrer une amélioration de ta forme.",
@@ -763,6 +764,7 @@ _FALLBACK = {
             "unexplained": "The data shows its pace, but is not enough to explain why it differs from the others.",
             "numbered": "Effort no. {n} was at {pace}/km.",
             "missing": "I don't have the recorded pace of that effort.",
+            "last_unknown": "I don't know how many efforts were recorded, so I can't identify the last one.",
             "cause": "The data shows this difference, but not its definite cause.",
             "single_faster": "A single faster repetition is not enough to show that your fitness has improved.",
             "single": "A single repetition is not enough to show that your fitness has improved.",
@@ -825,6 +827,7 @@ _FALLBACK = {
             "unexplained": "Los datos muestran su ritmo, pero no bastan para explicar por qué difiere de los demás.",
             "numbered": "El esfuerzo n.º {n} fue a {pace}/km.",
             "missing": "No tengo el ritmo registrado de ese esfuerzo.",
+            "last_unknown": "No sé cuántos esfuerzos se registraron, así que no puedo identificar el último.",
             "cause": "Los datos muestran esa diferencia, pero no su causa segura.",
             "single_faster": "Una sola repetición más rápida no basta para demostrar una mejora de tu forma.",
             "single": "Una sola repetición no basta para demostrar una mejora de tu forma.",
@@ -1292,10 +1295,10 @@ _FOCUS_ORDINAL = {
     "neuvieme": 9, "ninth": 9, "9th": 9, "noveno": 9, "dixieme": 10, "tenth": 10, "10th": 10, "decimo": 10,
     "dernier": -1, "derniere": -1, "last": -1, "final": -1, "ultimo": -1, "ultima": -1,
 }
-_FOCUS_NOUN = r"(?:efforts?|repetitions?|reps?|intervalles?|intervals?|fractions?|esfuerzos?|series?|intervalos?)"
+_FOCUS_NOUN = r"(?:efforts?|repetitions?|repeticion(?:es)?|reps?|intervalles?|intervals?|fractions?|esfuerzos?|series?|intervalos?)"
 _FOCUS_ORDINAL_FIRST = re.compile(
     rf"\b({'|'.join(_FOCUS_ORDINAL)}|\d{{1,2}}\s*(?:e|er|eme|th|st|nd|rd|a|o))\s+{_FOCUS_NOUN}\b")
-_FOCUS_NUMBER_AFTER = re.compile(rf"\b{_FOCUS_NOUN}\s*(?:n(?:o|°|º)?\.?\s*|numero\s*|#)?(\d{{1,2}})\b")
+_FOCUS_NUMBER_AFTER = re.compile(rf"\b{_FOCUS_NOUN}\s*(?:n(?:o|°|º)?\.?\s*|numero\s*|#)?(\d{{1,2}})\b(?!\s*(?:km|min|m\b|s\b|sec|bpm|%|x))")
 _FOCUS_WHY = re.compile(r"\b(?:pourquoi|why|por que|comment expliquer)\b")
 _FOCUS_TOPICS = {
     "progress": re.compile(r"progr|ameliorat|improv|mejora|mejoro|mejorand|\bforme\b|fitness|\bforma\b|fitter"),
@@ -1350,12 +1353,17 @@ def _effort_sentences(contract: dict, language: str, effort: int) -> tuple[list[
     """Sentences about the asked effort from recorded paces only; also the rank ("fastest"/"slowest")."""
     words = (_FALLBACK.get(language, _FALLBACK["en"]))["focus"]
     paces = _effort_pace_seconds(contract)
-    number = max(paces) if effort == -1 and paces else effort
+    structure = _effort_structure_fact((contract.get("measured_facts") or {}).get("recorded_effort_structure"))
+    number = effort
+    if effort == -1:
+        # The last repetition is the last expected one, never the last one that happens to have a pace.
+        if not structure:
+            return [words["last_unknown"]], None
+        number = structure["count"]
     if number not in paces:
         return [words["missing"]], None
     pace, seconds = paces[number]
     others = [value for key, (_, value) in paces.items() if key != number]
-    structure = _effort_structure_fact((contract.get("measured_facts") or {}).get("recorded_effort_structure"))
     # "Fastest"/"slowest" is only claimed over the recorded paces; a tie gives no unique rank.
     complete = bool(structure) and set(paces) == set(range(1, structure["count"] + 1))
     rank = None
@@ -1382,7 +1390,8 @@ def _focused_fallback(context: dict, language: str, question: Optional[str], typ
     rank = None
     if focus["effort"] is not None:
         parts, rank = _effort_sentences(contract, language, focus["effort"])
-        if focus["why"] and len(parts) == 1 and parts[0] != texts["focus"]["missing"]:
+        if focus["why"] and len(parts) == 1 and parts[0] not in (
+                texts["focus"]["missing"], texts["focus"]["last_unknown"]):
             parts.append(texts["focus"]["cause" if rank else "unexplained"])
     allowed = tuple(fact for topic in focus["topics"] for fact in _TOPIC_FACTS[topic])
     for ids, sentence in _fallback_items(context, language, question=question, type_stated=type_stated):
@@ -1483,6 +1492,7 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
 
     attributed: set[str] = set()
     kept: list[str] = []
+    kept_ids: dict[str, set] = {}  # logical facts carried by each kept sentence
     covered: set[str] = set()
     substantive = False
     facts = _facts(context)
@@ -1509,6 +1519,7 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
             if ids is None and not _states_metric_figure(sentence) and not _FIGURE.search(sentence) \
                     and (_LIMIT_STATEMENT.search(sentence) or _proven_relative_statement(sentence, context)):
                 kept.append(sentence)
+                kept_ids[sentence] = set()
                 if _proven_relative_hr_position(sentence, context):
                     covered.add("relative_hr.population")  # stated once: the fallback must not repeat it
                     substantive = True
@@ -1523,27 +1534,46 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
                 for i in ids):
             continue
         kept.append(sentence)
+        kept_ids[sentence] = set(ids)
         substantive = True
         covered |= ids
         if _TYPE_TERM_RE.search(sentence):
             covered.add("session.type")
     result["removed_sentences"] = len(sentences) - len(kept)
+    focus = _question_focus(question)
+    if focus["effort"] is not None:
+        # A precise repetition was asked: keep only sentences about its pace or pure reserves.
+        kept = [k for k in kept if not kept_ids.get(k) or "session.effort_pace" in kept_ids[k]]
+        covered = {c for c in covered if c == "session.effort_pace"} if any(
+            "session.effort_pace" in kept_ids.get(k, ()) for k in kept) else set()
+        substantive = any("session.effort_pace" in kept_ids.get(k, ()) for k in kept)
     if not set(verdict["rejected_checks"]) <= attributed or not kept:
         result["text"] = fallback
         return result
 
     restored_items = _fallback_items(context, language, frozenset(covered), question, type_stated)
-    topics = _question_focus(question)["topics"]
+    topics = focus["topics"]
     if topics:  # only the facts of the asked topic come back, not every removed metric
         allowed = tuple(fact for topic in topics for fact in _TOPIC_FACTS[topic])
         restored_items = [item for item in restored_items if any(i.startswith(allowed) for i in item[0])]
     restored = [t for _, t in restored_items]
+    if focus["effort"] is not None:
+        # A precise repetition was asked: restore only its own fact, never the other paces or measures.
+        contract = context["session_coaching_frame"]["evidence_contract"]
+        words = _FALLBACK.get(language, _FALLBACK["en"])["focus"]
+        sentences_, rank = _effort_sentences(contract, language, focus["effort"])
+        restored = [] if "session.effort_pace" in covered else list(sentences_)
+        if focus["why"] and len(sentences_) == 1 and sentences_[0] not in (words["missing"], words["last_unknown"]):
+            restored.append(words["cause" if rank else "unexplained"])
     if not substantive:  # nothing but reserves is kept: the factual fallback answers better
         result["text"] = fallback
         return result
-    limit = _fallback_limit(context["session_coaching_frame"]["evidence_contract"], language,
-                            " ".join(kept), question, default=False)
-    candidate = " ".join(restored + kept + ([limit] if limit else []))
+    limit = None if focus["effort"] is not None else _fallback_limit(
+        context["session_coaching_frame"]["evidence_contract"], language, " ".join(kept), question, default=False)
+    if focus["effort"] is not None and "session.effort_pace" in covered:
+        candidate = " ".join(kept + restored)  # the model's own sentence first, then the stated limit
+    else:
+        candidate = " ".join(restored + kept + ([limit] if limit else []))
     if not verify_chat_reply(candidate, context, language, question)["passed"]:
         result["text"] = fallback
         return result

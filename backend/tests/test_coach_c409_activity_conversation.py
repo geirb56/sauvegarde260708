@@ -472,3 +472,40 @@ async def test_previous_of_a_date_with_two_runs_asks_then_pairs_chronologically(
 async def test_last_versus_previous_behaviour_is_unchanged():
     turn = await _turn(_db(A(), B(), _oct10()), "Compare ma dernière sortie avec la précédente.")
     assert {a["id"] for a in turn["contract"]["activities"]} == {"wA", "wC"}
+
+
+# ---------------------------------------------------------------- C415 review — pair kept while another workout is opened
+
+async def _pair_AC_with_B_open():
+    db = _db(A(), B(), _oct10())
+    first = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=None,
+                                   message="Compare ma séance du 12 octobre avec celle du 10 octobre.",
+                                   selected_id="wB")
+    assert first["kind"] == "compare" and set(first["refs"]["workout_ids"]) == {"wA", "wC"}
+    return db, first
+
+
+async def test_followup_keeps_explicit_pair_when_another_workout_is_opened():
+    db, first = await _pair_AC_with_B_open()
+    turn = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=first["refs"],
+                                  message="Et au niveau du cardio ?", selected_id="wB")
+    assert turn["kind"] != "single"
+    assert set(turn["refs"]["workout_ids"]) == {"wA", "wC"} and "wB" not in turn["refs"]["workout_ids"]
+
+
+async def test_explicit_new_activity_replaces_the_kept_pair():
+    db, first = await _pair_AC_with_B_open()
+    db.workouts._docs.append(_run("wD", "2026-10-01T07:00:00", 6.0, 40, 400, 138))
+    turn = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=first["refs"],
+                                  message="Et celle du 1er octobre ?", selected_id="wB")
+    assert set(turn["refs"]["workout_ids"]) == {"wB", "wD"}
+
+
+async def test_topic_change_or_missing_memory_never_resurrects_the_pair():
+    db, first = await _pair_AC_with_B_open()
+    alone = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=None,
+                                   message="Et au niveau du cardio ?", selected_id="wB")
+    assert "wA" not in (alone.get("refs") or {}).get("workout_ids", [])
+    changed = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=first["refs"],
+                                     message="Autre sujet : que manger avant une course ?", selected_id="wB")
+    assert "wA" not in (changed.get("refs") or {}).get("workout_ids", [])

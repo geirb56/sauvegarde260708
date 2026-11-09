@@ -1214,7 +1214,9 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
 
     if selected_id is not None:
         # The opened activity is the first reference; a pair already built in this scope may be followed up.
-        keeps_pair = (mem_kind == "pair" and selected_id in ids and len(ids) == 2
+        # The memory is already limited to this user/scope/TTL and cleared on topic change, so an explicit
+        # A <-> C pair survives follow-ups even though the opened activity B is neither of them.
+        keeps_pair = (mem_kind == "pair" and len(ids) == 2 and not p["topic_change"]
                       and not (selectors or p["history"] is not None))
         keeps_history = (mem_kind == "history" and ids == [selected_id] and not selectors)
         if not (keeps_pair or keeps_history):

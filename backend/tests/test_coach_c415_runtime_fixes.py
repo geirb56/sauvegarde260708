@@ -173,3 +173,76 @@ def test_rejected_reply_with_incomplete_paces_falls_back_without_a_second_call(l
     assert out["response_source"] == "contract_fallback" and out["passed"] is False
     assert {"fr": "parmi les répétitions", "en": "among the repetitions", "es": "entre las repeticiones"}[language] in out["text"]
     assert set(re.findall(r"\d+:\d{2}", out["text"])) == {"4:31"}
+
+
+# ---- C415 review round 3 ----
+@pytest.mark.parametrize("question", [
+    "¿Por qué mi tercera repetición fue más rápida?", "¿Y la repetición número 3?", "Mi tercer esfuerzo",
+    "¿Y las repeticiones 3?"])
+def test_spanish_repetition_wordings_identify_the_third_effort(question):
+    assert guard._question_focus(question)["effort"] == 3
+    text = _text(_ctx(), "es", question)
+    assert "4:31/km" in text and "4:42" not in text and "4:40" not in text
+
+
+@pytest.mark.parametrize("question", ["Hice 5 repeticiones de 4 min", "Corrí 5 km en 3 repeticiones", "Mis 2 km"])
+def test_unrelated_numbers_are_not_an_effort(question):
+    assert guard._question_focus(question)["effort"] in (None,)
+
+
+def test_last_effort_is_the_last_expected_one_not_the_last_known_pace():
+    ctx = _ctx((("1", "4:42"), ("2", "4:40")), expected=3)
+    text = _text(ctx, "fr", "Et mon dernier effort ?")
+    assert text == "Je n'ai pas l'allure enregistrée de cet effort." and "4:40" not in text
+
+
+def test_last_effort_is_not_invented_when_the_total_is_unknown():
+    text = _text(_ctx((("1", "4:42"), ("2", "4:40")), expected=None), "fr", "Et mon dernier effort ?")
+    assert "4:40" not in text and "4:42" not in text and "dernier" in text
+
+
+def test_last_effort_with_complete_data_is_ranked():
+    assert _text(_ctx(), "fr", "Et mon dernier effort ?").startswith("Le dernier effort était le plus rapide, à 4:31/km.")
+
+
+def _grounded(ctx):
+    # the paces also appear in the analysed workout, as in production, so the model may quote them
+    ctx["workout_detail"] = {"distance_km": 10, "efforts": [{"pace_display": "4:42"}, {"pace_display": "4:40"},
+                                                           {"pace_display": "4:31"}]}
+    return ctx
+
+
+_ASKED = {"fr": "Pourquoi mon troisième effort était-il différent ?", "en": "Why was my third effort different?",
+          "es": "¿Por qué mi tercer esfuerzo fue diferente?"}
+_PARTIAL = {
+    "fr": ("Tu as couru 10 km. Le troisième effort était à 4:31/km. Tu as clairement progressé depuis le mois dernier.",
+           "Le troisième effort était à 4:31/km. Les données montrent cette différence, mais pas sa cause certaine."),
+    "en": ("You ran 10 km. The third effort was at 4:31/km. You clearly improved since last month.",
+           "The third effort was at 4:31/km. The data shows this difference, but not its definite cause."),
+    "es": ("Has corrido 10 km. El tercer esfuerzo fue a 4:31/km. Has progresado claramente desde el mes pasado.",
+           "El tercer esfuerzo fue a 4:31/km. Los datos muestran esa diferencia, pero no su causa segura."),
+}
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_partial_repair_is_limited_to_the_asked_repetition(language):
+    reply, expected = _PARTIAL[language]
+    out = guard.resolve_chat_reply(reply, _grounded(_ctx()), language, question=_ASKED[language])
+    assert out["response_source"] == "llm_reply_partially_validated"
+    assert out["text"] == expected  # no distance, no other pace, no generic limit, no duplicated pace
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_partial_repair_restores_the_asked_pace_without_other_metrics(language):
+    reply = {"fr": "Ton troisième effort était rapide. Tu as clairement progressé depuis le mois dernier.",
+             "en": "Your third effort was quick. You clearly improved since last month.",
+             "es": "Tu tercer esfuerzo fue rápido. Has progresado claramente desde el mes pasado."}[language]
+    out = guard.resolve_chat_reply(reply, _grounded(_ctx()), language, question=_ASKED[language])
+    assert "4:31" in out["text"] and "4:42" not in out["text"] and "4:40" not in out["text"]
+    assert "10" not in out["text"] and "127" not in out["text"]
+
+
+def test_partial_repair_without_asked_effort_is_unchanged():
+    out = guard.resolve_chat_reply("Tu as couru 10 km. Tu as clairement progressé.", _grounded(_ctx()), "fr",
+                                   question="Analyse ma séance.")
+    assert out["response_source"] != "llm_reply_checked" and "10 km" in out["text"]
