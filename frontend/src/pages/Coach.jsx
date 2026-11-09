@@ -39,7 +39,8 @@ export default function Coach() {
   const { t, lang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const hasTriggeredAnalysis = useRef(null);
-  const analysisSeq = useRef(0);
+  // Monotonic id shared by analyses and follow-ups: only the latest request owns loading/context state.
+  const requestSeq = useRef(0);
 
   // Load conversation history on mount
   useEffect(() => {
@@ -104,8 +105,8 @@ export default function Coach() {
   }, [messages]);
 
   const triggerWorkoutAnalysis = async (workoutId) => {
-    const seq = ++analysisSeq.current;
-    const isCurrent = () => analysisSeq.current === seq;
+    const seq = ++requestSeq.current;
+    const isCurrent = () => requestSeq.current === seq;
     activeWorkoutRef.current = workoutId;
     setActiveWorkoutId(workoutId);
     setActiveWorkoutMetadata({});
@@ -123,14 +124,15 @@ export default function Coach() {
         ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
         ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
       };
-      if (activeWorkoutRef.current === workoutId) {
+      if (isCurrent() && activeWorkoutRef.current === workoutId) {
         setActiveWorkoutMetadata(current => current === null ? null : metadata);
       }
     } catch (e) {
       workoutName = workoutId;
     }
 
-    if (activeWorkoutRef.current !== workoutId) {
+    // Superseded (even by a later reopening of the same workout) or closed: no message, no POST.
+    if (!isCurrent() || activeWorkoutRef.current !== workoutId) {
       if (isCurrent()) {
         setLoading(false);
         setAnalyzingWorkout(null);
@@ -177,6 +179,8 @@ export default function Coach() {
 
     const userMessage = input.trim();
     const workoutId = activeWorkoutId || undefined;
+    const seq = ++requestSeq.current;
+    const isCurrent = () => requestSeq.current === seq;
     setInput("");
     setMessages(prev => [...prev, {
       role: "user",
@@ -206,7 +210,7 @@ export default function Coach() {
         ...(workoutId ? { workout_id: workoutId } : {}),
       }]);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
