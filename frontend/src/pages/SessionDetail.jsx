@@ -20,7 +20,7 @@ import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
+import { getSessionClassification, getAnalysisObservations, getAnalysisFallback, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 
@@ -136,10 +136,8 @@ export default function SessionDetail() {
   }
 
   const analysisForRender = canAccessAnalysis && analysisScope === scope ? analysis : null;
-  const coachConclusions = getCoachConclusions(analysisForRender);
   const classification = getSessionClassification(analysisForRender, t);
-  const observation = getDistinctCoachObservation(analysisForRender);
-  const observations = getAnalysisObservations(analysisForRender);
+  const observations = getAnalysisObservations(analysisForRender, { keepReplaced: true });
   const fallback = getAnalysisFallback(analysisForRender, t);
   const detailsAvailable = (analysisForRender?.phase_analysis?.available === true
     && getRenderableAnalysisPhases(analysisForRender.phase_analysis).length > 0)
@@ -201,15 +199,11 @@ export default function SessionDetail() {
       </section>
 
       {!narrative && <>
-      {!intelligenceLoading && coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
-        <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
-        {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
-      </section>}
       {analysisDetails}
       </>}
 
       {canAccessAnalysis ? <>
-        {!intelligenceLoading && !narrative && analysisForRender && (observations.length > 0 || fallback || classification || observation
+        {!intelligenceLoading && !narrative && analysisForRender && (observations.length > 0 || fallback || classification
           || (analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text)) && <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -224,10 +218,6 @@ export default function SessionDetail() {
         {analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text && (
           <p className="text-sm">{t("analysis.intensity")}: {analysisForRender.signals.intensity.text}</p>
         )}
-        {observation && <div>
-          <h3 className="text-sm font-medium">{t("workoutDetailExtended.coachObservation")}</h3>
-          <p className="mt-1 text-sm leading-6" data-testid="advice-text">{observation}</p>
-        </div>}
         </section>}
         {(analysisForRender || narrative) && <Link to={`/coach?analyze=${encodeURIComponent(id)}`} data-testid="ask-coach-btn" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-3 text-sm font-mono uppercase tracking-wider text-foreground">
           <MessageSquare className="h-3.5 w-3.5" />

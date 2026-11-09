@@ -17,7 +17,7 @@ import { formatAnalysisNumber } from "@/lib/analysisFormat";
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 const isCycling = (type) => ["cycle", "cycling", "ride"].includes(type);
@@ -132,9 +132,7 @@ export default function DetailedAnalysis() {
       ? [t("workoutDetailExtended.averageHeartRate"), `${formatAnalysisNumber(heartRate, lang, 1)} bpm`] : null,
   ].filter(Boolean);
   const classification = getSessionClassification(analysis, t);
-  const coachConclusions = getCoachConclusions(analysis);
-  const observation = getDistinctCoachObservation(analysis);
-  const observations = getAnalysisObservations(analysis);
+  const observations = getAnalysisObservations(analysis, { keepReplaced: true });
   const fallback = getAnalysisFallback(analysis, t);
   const date = new Date(analysis?.workout?.date || workout?.date);
   const dateStr = Number.isFinite(date.getTime()) ? date.toLocaleDateString(
@@ -177,10 +175,6 @@ export default function DetailedAnalysis() {
         {analysisDetails}
       </NarrativeWorkoutAnalysis> : <>
       {!analysis && !analysisLoading && <p className="text-muted-foreground" data-testid="analysis-not-found">{t("workoutDetailExtended.analysisLoadError")}</p>}
-      {coachConclusions.length > 0 && <section className="my-3 space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
-        <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
-        {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
-      </section>}
       {analysisDetails}
 
       {(observations.length > 0 || fallback || classification || (analysis?.signals?.intensity?.available === true && analysis.signals.intensity.text)) && <section className="my-3 rounded-xl border border-border bg-card p-3">
@@ -195,11 +189,6 @@ export default function DetailedAnalysis() {
         )}
       </section>}
       </>}
-
-      {!intelligenceLoading && !narrative && observation && <section className="my-3 rounded-xl border border-border bg-card p-3">
-        <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-primary">{t("workoutDetailExtended.coachObservation")}</h2>
-        <p className="font-sans text-sm leading-relaxed" data-testid="advice-text">{observation}</p>
-      </section>}
 
       <Button
         onClick={() => navigate(id ? `/coach?analyze=${encodeURIComponent(id)}` : "/coach")}

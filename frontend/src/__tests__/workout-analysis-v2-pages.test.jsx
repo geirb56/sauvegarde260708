@@ -591,8 +591,9 @@ test.each(malformedSyntheses)("WorkoutDetail preserves legacy coach rendering fo
     ] },
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", "fr");
-  expect(await screen.findByTestId("coach-primary")).toHaveTextContent(primary.text);
-  expect(screen.getByTestId("meaning-text")).toHaveTextContent("Legacy factual observation.");
+  expect(await screen.findByTestId("meaning-text")).toHaveTextContent("Legacy factual observation.");
+  expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+  expect(screen.queryByText(primary.text)).not.toBeInTheDocument();
   expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
 });
 
@@ -603,8 +604,9 @@ test("WorkoutDetail keeps old payload advice and metric test IDs without synthes
     advice: { available: true, code: "advice.high_intensity_observation", text: "Legacy advice." },
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
-  expect(await screen.findByTestId("advice-text")).toHaveTextContent("Legacy advice.");
-  expect(screen.getByTestId("coach-summary")).toBeInTheDocument();
+  expect(await screen.findByTestId("coach-summary")).toBeInTheDocument();
+  expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  expect(screen.queryByText("Legacy advice.")).not.toBeInTheDocument();
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
   expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
 });
@@ -654,14 +656,15 @@ test.each(coachScreens)("%s renders Coach V1 before factual phase and split deta
     ] },
   } });
   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
-  expect(await screen.findByTestId("coach-primary")).toHaveTextContent(primary.text);
-  expect(screen.getAllByTestId("coach-complementary")).toHaveLength(1);
-  expect(screen.getByTestId("coach-complementary")).toHaveTextContent(extra.text);
-  expect(screen.getByTestId("coach-primary").compareDocumentPosition(screen.getByTestId("structured-phase-analysis")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByTestId("coach-primary").compareDocumentPosition(screen.getByTestId("kilometer-splits")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
+  expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+  expect(screen.queryByText(primary.text)).not.toBeInTheDocument();
+  expect(screen.queryByText(extra.text)).not.toBeInTheDocument();
+  expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
   expect(screen.getByText("A distinct factual detail.")).toBeInTheDocument();
-  expect(screen.queryByText("Replaced pace fact.")).not.toBeInTheDocument();
-  expect(screen.queryByText("Replaced HR fact.")).not.toBeInTheDocument();
+  expect(screen.getByText("Replaced pace fact.")).toBeInTheDocument();
+  expect(screen.getByText("Replaced HR fact.")).toBeInTheDocument();
   expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
 });
@@ -691,10 +694,11 @@ describe.each(coachScreens)("%s post-audit Coach conclusions", (_, route, path, 
       ] },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(text);
-    expect(screen.queryByTestId("coach-complementary")).not.toBeInTheDocument();
-    expect(screen.queryByText("Duplicate pace change.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Duplicate half comparison.")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("meaning-text")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
+    expect(screen.queryByText(text)).not.toBeInTheDocument();
+    expect(screen.getByText("Duplicate pace change.")).toBeInTheDocument();
+    expect(screen.getByText("Duplicate half comparison.")).toBeInTheDocument();
     expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
   });
 
@@ -708,7 +712,9 @@ describe.each(coachScreens)("%s post-audit Coach conclusions", (_, route, path, 
       })],
     } } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(text);
+    expect(await screen.findByTestId("kilometer-splits")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+    expect(screen.queryByText(text)).not.toBeInTheDocument();
     expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   });
 
@@ -727,8 +733,10 @@ describe.each(coachScreens)("%s post-audit Coach conclusions", (_, route, path, 
       version: "v1", conclusions: [unchanged, history],
     } } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(history.text);
-    expect(screen.getByTestId("coach-complementary")).toHaveTextContent(unchanged.text);
+    expect(await screen.findByTestId("kilometer-splits")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+    expect(screen.queryByText(history.text)).not.toBeInTheDocument();
+    expect(screen.queryByText(unchanged.text)).not.toBeInTheDocument();
   });
 });
 
@@ -742,7 +750,9 @@ describe.each(coachScreens)("%s Coach V1 access and localization", (_, route, pa
       version: "v1", conclusions: [coachConclusion({ text })],
     } } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(text);
+    expect(await screen.findByTestId("kilometer-splits")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+    expect(screen.queryByText(text)).not.toBeInTheDocument();
     expect(axios.get.mock.calls.some(([url]) => url.includes(`language=${language}`))).toBe(true);
   });
 
@@ -2362,7 +2372,7 @@ test.each([
 });
 
 describe.each(editorialPages)("%s factual observation contract", (_name, route, path, Page, testId) => {
-  test("shows supported legacy pacing advice when its factual contract is absent", async () => {
+  test("legacy pacing advice is not shown on the fact page (it belongs to the unified Coach)", async () => {
     const adviceText = "The recorded pace change is a useful comparison point.";
     mockAxios({ analysisPayload: {
       ...analysis,
@@ -2372,7 +2382,9 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       meaning: { factual_observations: [] },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
-    expect(await screen.findByTestId("advice-text")).toHaveTextContent(adviceText);
+    expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
+    expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+    expect(screen.queryByText(adviceText)).not.toBeInTheDocument();
     expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   });
 
