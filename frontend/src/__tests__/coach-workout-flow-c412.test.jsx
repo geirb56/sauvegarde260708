@@ -35,6 +35,7 @@ const renderCoach = (entry, lang = "en") => {
     <LanguageProvider>
       <MemoryRouter initialEntries={[entry]}>
         <Link to="/coach?analyze=wB" data-testid="go-b">B</Link>
+        <Link to="/coach?analyze=wA" data-testid="go-a">A</Link>
         <Coach />
       </MemoryRouter>
     </LanguageProvider>
@@ -148,5 +149,129 @@ describe("C412 workout / coach flow", () => {
     }
     expect(Object.keys(dict.followups)).toEqual(expect.arrayContaining(["compare", "takeaway"]));
     expect(screen.getByTestId("back-to-workout")).toHaveAccessibleName(dict.backToWorkout);
+  });
+
+  describe("concurrency (shared request sequence)", () => {
+    // Every GET /workouts/:id is held until released, in call order.
+    const heldWorkoutGets = () => {
+      const held = [];
+      axios.get.mockImplementation(url => {
+        if (String(url).includes("/coach/history")) return Promise.resolve({ data: [] });
+        const id = String(url).split("/workouts/")[1];
+        const d = deferred();
+        held.push({ id, ...d });
+        return d.promise;
+      });
+      return held;
+    };
+    const ctx = () => screen.getByTestId("coach-workout-context");
+    const postIds = () => axios.post.mock.calls.map(c => c[1].workout_id);
+
+    test("A → B → A: late metadata of the first A is ignored, one analysis for the last A", async () => {
+      const held = heldWorkoutGets();
+      axios.post.mockResolvedValue({ data: { response: "reply A2" } });
+      renderCoach("/coach?analyze=wA");
+      await waitFor(() => expect(held).toHaveLength(1));
+      fireEvent.click(screen.getByTestId("go-b"));
+      await waitFor(() => expect(held).toHaveLength(2));
+      fireEvent.click(screen.getByTestId("go-a"));
+      await waitFor(() => expect(held).toHaveLength(3));
+      const [a1, b, a2] = held;
+      await act(async () => { a1.resolve({ data: { name: "STALE A1", distance_km: 1, date: "2026-01-01" } }); });
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(ctx()).not.toHaveTextContent("STALE A1");
+      await act(async () => { b.resolve({ data: WORKOUTS.wB }); });
+      expect(axios.post).not.toHaveBeenCalled();
+      await act(async () => { a2.resolve({ data: WORKOUTS.wA }); });
+      expect(await screen.findByText("reply A2")).toBeInTheDocument();
+      expect(postIds()).toEqual(["wA"]);
+      expect(ctx()).toHaveTextContent("Run A");
+      expect(ctx()).not.toHaveTextContent("STALE A1");
+      expect(screen.getAllByTestId(/^message-/)).toHaveLength(2);
+      await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+    });
+
+    test("A → B → A: rejected stale metadata request does not start or clear anything", async () => {
+      const held = heldWorkoutGets();
+      axios.post.mockResolvedValue({ data: { response: "reply A2" } });
+      renderCoach("/coach?analyze=wA");
+      await waitFor(() => expect(held).toHaveLength(1));
+      fireEvent.click(screen.getByTestId("go-b"));
+      await waitFor(() => expect(held).toHaveLength(2));
+      fireEvent.click(screen.getByTestId("go-a"));
+      await waitFor(() => expect(held).toHaveLength(3));
+      const [a1, , a2] = held;
+      await act(async () => { a1.resolve(Promise.reject({ response: { status: 500 } })); });
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(screen.getByTestId("coach-input")).toBeDisabled();
+      await act(async () => { a2.resolve({ data: WORKOUTS.wA }); });
+      expect(await screen.findByText("reply A2")).toBeInTheDocument();
+      expect(postIds()).toEqual(["wA"]);
+    });
+
+    const startPendingQuestionOnA = async () => {
+      mockGets();
+      const q = deferred();
+      const b = deferred();
+      axios.post.mockImplementation((_u, body) => {
+        if (body.message === "Question on A") return q.promise;
+        return b.promise;
+      });
+      renderCoach("/coach?analyze=wA");
+      // first analysis (A) resolves through the default branch of the mock
+      await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+      await act(async () => { b.resolve({ data: { response: "analysis A" } }); });
+      await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+      submit("Question on A");
+      await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+      expect(axios.post.mock.calls[1][1].workout_id).toBe("wA");
+      const bAnalysis = deferred();
+      axios.post.mockImplementation(() => bAnalysis.promise);
+      fireEvent.click(screen.getByTestId("go-b"));
+      await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(3));
+      expect(axios.post.mock.calls[2][1].workout_id).toBe("wB");
+      return { q, bAnalysis };
+    };
+
+    test("question on A finishing before analysis of B keeps B loading and active", async () => {
+      const { q, bAnalysis } = await startPendingQuestionOnA();
+      await act(async () => { q.resolve({ data: { response: "answer A" } }); });
+      expect(screen.getByText("answer A")).toBeInTheDocument();
+      expect(screen.getByTestId("coach-input")).toBeDisabled();
+      expect(screen.getByText("Analyzing...", { exact: false })).toBeInTheDocument();
+      expect(ctx()).toHaveTextContent("Run B");
+      expect(screen.getByTestId("back-to-workout")).toHaveAttribute("href", "/workout/wB");
+      await act(async () => { bAnalysis.resolve({ data: { response: "analysis B" } }); });
+      await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+      expect(screen.getByText("analysis B")).toBeInTheDocument();
+      const answerA = screen.getByText("answer A").closest("[data-testid^='message-']");
+      expect(answerA).toHaveAttribute("data-workout-id", "wA");
+    });
+
+    test("question on A failing before analysis of B does not clear B loading or context", async () => {
+      const { q, bAnalysis } = await startPendingQuestionOnA();
+      await act(async () => { q.resolve(Promise.reject({ response: { status: 500 } })); });
+      expect(screen.getByTestId("coach-input")).toBeDisabled();
+      expect(ctx()).toHaveTextContent("Run B");
+      await act(async () => { bAnalysis.resolve({ data: { response: "analysis B" } }); });
+      await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+      expect(ctx()).toHaveTextContent("Run B");
+    });
+
+    test("superseded analysis A rejected late does not clear loading of B", async () => {
+      mockGets();
+      const a = deferred();
+      const b = deferred();
+      axios.post.mockImplementation((_u, body) => (body.workout_id === "wA" ? a.promise : b.promise));
+      renderCoach("/coach?analyze=wA");
+      await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByTestId("go-b"));
+      await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+      await act(async () => { a.resolve(Promise.reject({ response: { status: 500 } })); });
+      expect(screen.getByTestId("coach-input")).toBeDisabled();
+      expect(ctx()).toHaveTextContent("Run B");
+      await act(async () => { b.resolve({ data: { response: "reply B" } }); });
+      await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
+    });
   });
 });
