@@ -461,7 +461,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     delete intelligence.narrative_coach_v3;
     mockRequests({ intelligence });
     renderPage(route, path, Page, language);
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(legacyText);
+    expect(await screen.findByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
     await waitFor(() => expectIndependentRequests("w1", language));
     expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
     expect(screen.queryByText("Private deterministic diagnosis.")).not.toBeInTheDocument();
@@ -481,7 +481,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       ? null : { ...intelligence.narrative_coach_v3, ...update };
     mockRequests({ intelligence });
     renderPage(route, path, Page);
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(legacyText);
+    expect(await screen.findByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
     await waitFor(() => expectIndependentRequests());
     expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
   });
@@ -489,7 +489,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
   test.each(languages)("keeps the V1 fallback and a discreet localized status after a V3 error in %s", async (language) => {
     mockRequests({ rejectV3: true });
     renderPage(route, path, Page, language);
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent(legacyText);
+    expect(await screen.findByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent(translations[language].workoutNarrative.unavailable);
     expect(status).not.toHaveTextContent(/Private upstream|Error:|workout-intelligence|HTTP/);
@@ -761,7 +761,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     await screen.findByTestId("coach-pending");
     await act(async () => { fail(Object.assign(new Error("timeout"), { code: "ECONNABORTED" })); });
-    expect(screen.getByTestId("coach-primary")).toHaveTextContent(legacyText);
+    expect(screen.getByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
     expect(screen.getByRole("status")).toHaveTextContent(translations.en.workoutNarrative.unavailable);
     expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
   });
@@ -787,7 +787,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       });
       expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
       expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
-      expect(screen.getAllByText(legacyText)).toHaveLength(1);
+      expect(screen.getAllByText(legacyMeaning)).toHaveLength(1);
       if (outcome === "HTTP500") {
         expect(screen.getByRole("status")).toHaveTextContent(translations[language].workoutNarrative.unavailable);
       } else {
@@ -861,9 +861,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
     expectNoLegacyNarrative();
     await act(async () => { freshV3.resolve({ data: {} }); });
-    expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
     await act(async () => { freshV2.resolve({ data: makeAnalysis() }); });
-    expect(screen.getByTestId("coach-primary")).toHaveTextContent(legacyText);
+    expect(screen.getByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
   });
 
   test("aborts stale session and V2 route requests without replacing current facts or fallback", async () => {
@@ -872,8 +872,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     mockRequests({
       intelligence: {},
       v2Request: ({ id }) => id === "w1" ? staleV2.promise
-        : Promise.resolve({ data: { ...makeAnalysis(), workout: { ...makeAnalysis().workout, id, name: "Current workout." }, coach_language: {
-          version: "v1", conclusions: [{ ...makeAnalysis().coach_language.conclusions[0], text: "Current fallback." }],
+        : Promise.resolve({ data: { ...makeAnalysis(), workout: { ...makeAnalysis().workout, id, name: "Current workout." }, meaning: {
+          text: "Current fallback.",
+          factual_observations: [{ code: "fact.recorded_hr", placement: "summary", text: "Current fallback.", evidence: { avg_hr: 150 } }],
         } } }),
       workoutRequest: ({ id }) => id === "w1" ? staleWorkout.promise
         : Promise.resolve({ data: { ...workout, id, name: "Current workout." } }),
@@ -882,13 +883,13 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     const oldSignals = axios.get.mock.calls.map(([, options]) => options.signal);
     fireEvent.click(screen.getByRole("link", { name: "Next test workout" }));
     expect(await screen.findByText("Current workout.")).toBeVisible();
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent("Current fallback.");
+    expect(await screen.findByTestId("meaning-text")).toHaveTextContent("Current fallback.");
     oldSignals.forEach((signal) => expect(signal.aborted).toBe(true));
     await act(async () => {
       staleV2.resolve({ data: makeAnalysis() });
       staleWorkout.resolve({ data: workout });
     });
-    expect(screen.getByTestId("coach-primary")).toHaveTextContent("Current fallback.");
+    expect(screen.getByTestId("meaning-text")).toHaveTextContent("Current fallback.");
     expect(screen.queryByText("Morning Run")).not.toBeInTheDocument();
     expect(screen.queryByText(legacyText)).not.toBeInTheDocument();
   });
@@ -898,18 +899,19 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     mockRequests({
       intelligence: {},
       v2Request: ({ language }) => language === "en" ? stale.promise
-        : Promise.resolve({ data: { ...makeAnalysis(), coach_language: {
-          version: "v1", conclusions: [{ ...makeAnalysis().coach_language.conclusions[0], text: "Conclusión actual." }],
+        : Promise.resolve({ data: { ...makeAnalysis(), meaning: {
+          text: "Conclusión actual.",
+          factual_observations: [{ code: "fact.recorded_hr", placement: "summary", text: "Conclusión actual.", evidence: { avg_hr: 150 } }],
         } } }),
     });
     renderPage(route, path, Page);
     await waitFor(() => expectIndependentRequests());
     const oldSignal = axios.get.mock.calls.find(([url]) => url.includes("/coach/workout-analysis/"))[1].signal;
     fireEvent.click(screen.getByRole("button", { name: "Switch test language" }));
-    expect(await screen.findByTestId("coach-primary")).toHaveTextContent("Conclusión actual.");
+    expect(await screen.findByTestId("meaning-text")).toHaveTextContent("Conclusión actual.");
     expect(oldSignal.aborted).toBe(true);
     await act(async () => { stale.resolve({ data: makeAnalysis() }); });
-    expect(screen.getByTestId("coach-primary")).toHaveTextContent("Conclusión actual.");
-    expect(screen.queryByText(legacyText)).not.toBeInTheDocument();
+    expect(screen.getByTestId("meaning-text")).toHaveTextContent("Conclusión actual.");
+    expect(screen.queryByText(legacyMeaning)).not.toBeInTheDocument();
   });
 });

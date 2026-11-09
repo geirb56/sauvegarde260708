@@ -95,9 +95,11 @@ export const getSessionClassification = (analysis, t) => {
     : null;
 };
 
-export const getAnalysisObservations = (analysis) => {
+// With keepReplaced, facts stay visible even when a Coach conclusion would replace them
+// (fiche pages no longer render conclusions: those live in the unified /coach experience).
+export const getAnalysisObservations = (analysis, { keepReplaced = false } = {}) => {
   const facts = analysis?.meaning?.factual_observations;
-  const conclusions = getCoachConclusions(analysis);
+  const conclusions = keepReplaced ? [] : getCoachConclusions(analysis);
   const replacedCodes = new Set(conclusions.flatMap((item) =>
     Array.isArray(item.replaces_factual_codes) ? item.replaces_factual_codes : []));
   const coachTexts = new Set(conclusions.map((item) => item.text.trim()));

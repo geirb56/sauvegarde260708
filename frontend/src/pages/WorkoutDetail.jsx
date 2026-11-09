@@ -8,7 +8,7 @@ import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotic
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatPaceDisplay, getCoachConclusions, getDistinctCoachObservation, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getSessionSynthesis, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getSessionSynthesis, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
@@ -198,9 +198,7 @@ export default function WorkoutDetail() {
   const synthesisLabel = (item) => item.kind
     ? <span className="block text-xs text-muted-foreground">{t(`workoutDetailExtended.synthesis${item.kind === "interpretation" ? "Interpretation" : "Observation"}`)}</span>
     : null;
-  const coachConclusions = synthesis ? [] : getCoachConclusions(analysisForRender);
-  const coachObservation = synthesis ? null : getDistinctCoachObservation(analysisForRender);
-  const observations = synthesis ? [] : getAnalysisObservations(analysisForRender);
+  const observations = synthesis ? [] : getAnalysisObservations(analysisForRender, { keepReplaced: true });
   const fallback = synthesis ? null : getAnalysisFallback(analysisForRender, t);
   const classification = getSessionClassification(analysisForRender, t);
   const intensity = analysisForRender?.signals?.intensity;
@@ -289,10 +287,6 @@ export default function WorkoutDetail() {
           </ul>
         </div>}
       </>}
-      {coachConclusions.length > 0 && <section className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="coach-language">
-        <h2 className="text-base font-semibold">{t("workoutDetailExtended.coachObservation")}</h2>
-        {coachConclusions.map((item, index) => <p key={item.code} className="text-sm leading-relaxed" data-testid={index === 0 ? "coach-primary" : "coach-complementary"}>{item.text}</p>)}
-      </section>}
       {analysisDetails}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
@@ -311,10 +305,6 @@ export default function WorkoutDetail() {
       </>}
 
       {canAccessAnalysis && <section aria-labelledby="coach-advice-title">
-        {!intelligenceLoading && !narrative && coachObservation && <div className="mb-3">
-          <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachObservation")}</h2>
-          <p className="text-sm leading-relaxed" data-testid="advice-text">{coachObservation}</p>
-        </div>}
         <Button
           onClick={goToAskCoach}
           data-testid="ask-coach-btn"
