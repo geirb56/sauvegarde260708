@@ -38,7 +38,8 @@ export default function Coach() {
   const inputRef = useRef(null);
   const { t, lang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
-  const hasTriggeredAnalysis = useRef(false);
+  const hasTriggeredAnalysis = useRef(null);
+  const analysisSeq = useRef(0);
 
   // Load conversation history on mount
   useEffect(() => {
@@ -82,11 +83,16 @@ export default function Coach() {
   // Check for workout analysis param
   useEffect(() => {
     const workoutId = searchParams.get("analyze");
-    if (workoutId && !hasTriggeredAnalysis.current && !initialLoading) {
-      hasTriggeredAnalysis.current = true;
+    if (!workoutId) {
+      hasTriggeredAnalysis.current = null;
+      return;
+    }
+    // Keyed by workout id so a different ?analyze= while mounted is honored, never re-run for the same one.
+    if (hasTriggeredAnalysis.current !== workoutId && !initialLoading) {
+      hasTriggeredAnalysis.current = workoutId;
       triggerWorkoutAnalysis(workoutId);
-      // Clear the param after triggering
-      setSearchParams({});
+      // Clear the param after triggering; replace keeps Back from re-arming the analysis
+      setSearchParams({}, { replace: true });
     }
   }, [searchParams, initialLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -98,6 +104,8 @@ export default function Coach() {
   }, [messages]);
 
   const triggerWorkoutAnalysis = async (workoutId) => {
+    const seq = ++analysisSeq.current;
+    const isCurrent = () => analysisSeq.current === seq;
     activeWorkoutRef.current = workoutId;
     setActiveWorkoutId(workoutId);
     setActiveWorkoutMetadata({});
@@ -115,14 +123,18 @@ export default function Coach() {
         ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
         ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
       };
-      setActiveWorkoutMetadata(current => current === null ? null : metadata);
+      if (activeWorkoutRef.current === workoutId) {
+        setActiveWorkoutMetadata(current => current === null ? null : metadata);
+      }
     } catch (e) {
       workoutName = workoutId;
     }
 
     if (activeWorkoutRef.current !== workoutId) {
-      setLoading(false);
-      setAnalyzingWorkout(null);
+      if (isCurrent()) {
+        setLoading(false);
+        setAnalyzingWorkout(null);
+      }
       return;
     }
 
@@ -151,8 +163,11 @@ export default function Coach() {
         workout_id: workoutId,
       }]);
     } finally {
-      setLoading(false);
-      setAnalyzingWorkout(null);
+      // A superseded analysis must not clear the loading state of the newer one
+      if (isCurrent()) {
+        setLoading(false);
+        setAnalyzingWorkout(null);
+      }
     }
   };
 
