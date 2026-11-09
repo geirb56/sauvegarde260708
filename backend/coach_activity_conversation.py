@@ -81,7 +81,8 @@ _LAST_RE = re.compile(
     r"\b(?:derniere|dernier)\s+(?:semi|marathon)\b")
 _PREVIOUS_RE = re.compile(
     r"\b(?:precedente|precedent|previous(?:\s+(?:one|run|workout|session))?|avant[- ]derniere|anterior|"
-    r"penultima|penultimo|one before|the one before)\b"
+    r"penultima|penultimo|one before|the one before|the one prior|the prior one|"
+    r"celle d['’ ]?avant|celle avant|la de antes|la de atras)\b"
     r"(?!\s+(?:sorties|seances|courses|runs|workouts|sessions|salidas|carreras|sesiones|entrenamientos))")
 _SAME_DISTANCE_RE = re.compile(
     r"\b(?:meme distance|distance (?:similaire|identique|comparable|equivalente)|same distance|"
@@ -220,13 +221,27 @@ _HISTORY_EN_RE = re.compile(
     r"(?:runs?|workouts?|sessions?|salidas|carreras|sesiones|entrenamientos)")
 
 
+_HISTORY_COUNT_RE = re.compile(
+    r"\b(\d+|deux|trois|quatre|cinq|two|three|four|five|dos|tres|cuatro|cinco)\s+"
+    r"(?:sorties?|seances?|courses?|runs?|workouts?|sessions?|salidas?|carreras?|sesiones|entrenamientos?)"
+    r"(?:\s+(precedentes|previous|anteriores))?\b")
+
+
+def _history_match(text: str):
+    """Count-before-noun wording ("3 sorties de même distance", "3 sorties précédentes") is also a history."""
+    found = _HISTORY_RE.search(text) or _HISTORY_EN_RE.search(text)
+    if found:
+        return found
+    counted = _HISTORY_COUNT_RE.search(text)
+    return counted if counted and (counted.group(2) or _SAME_DISTANCE_RE.search(text)) else None
+
+
 def _history_request(text: str) -> Optional[dict]:
     match = _HISTORY_RE.search(text)
     if not match:
-        english = _HISTORY_EN_RE.search(text)
-        if not english:
+        match = _history_match(text)
+        if match is None:
             return None
-        match = english
     raw_count = match.group(1)
     count = HISTORY_DEFAULT_COUNT
     if raw_count:
@@ -252,8 +267,7 @@ def _focus_of(text: str) -> Optional[str]:
 def parse_message(message: str, today: date) -> dict:
     """Pure interpretation of one message; never touches data."""
     text = _norm(message)
-    history = _history_request(text) if (_COMPARE_RE.search(text) or _HISTORY_RE.search(text)
-                                         or _HISTORY_EN_RE.search(text)) else None
+    history = _history_request(text) if (_COMPARE_RE.search(text) or _history_match(text)) else None
     if history is not None and history["kind"] == "recent" and not _COMPARE_RE.search(text):
         history = None
     dates = [] if history is not None and not (_DAY_MONTH_RE.search(text) or _MONTH_DAY_RE.search(text)
