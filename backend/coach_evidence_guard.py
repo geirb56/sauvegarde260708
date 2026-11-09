@@ -37,7 +37,8 @@ _HR_POSITION = re.compile(
     r"(quartile|partie (?:basse|haute)|lower (?:part|end|quarter)|upper (?:part|end|quarter)|"
     r"parte (?:baja|alta)|m[ée]diane|median|mediana|position relative|relative position|"
     r"plus basse|plus haute|lowest|highest|partie interm[ée]diaire|intermediate (?:part|range)|"
-    r"parte intermedia)", re.I)
+    r"parte intermedia|niveau (?:interm[ée]diaire|moyen)|interm[ée]diaire|intermediate (?:level|position)|"
+    r"mid(?:dle)?[- ](?:range|level)|nivel intermedio|posici[óo]n intermedia)", re.I)
 _AVERAGE_WORDING = re.compile(
     r"(en moyenne|on average|average|moyenne|habituel|usually|d'habitude|typical|promedio|"
     r"normalmente|generalmente|m[ée]diane|median)", re.I)
@@ -409,6 +410,8 @@ _TYPE_TERM_RE = re.compile(rf"\b{_TYPE_TERM}\b", re.I)
 _HR_POPULATION_MISDESCRIBED = re.compile(
     r"(?:compar\w+|similaires?|similar|semejantes?)\s+(?:en|in|by|de|of)\s+(?:distance|distancia)|"
     r"m[êe]me distance|same[- ]distance|misma distancia|distance similaire|similar distance|distancia similar|"
+    r"(?:s[ée]ances|sorties|runs|sessions|salidas|sesiones)\s+(?:habituelles|habituales|usual|regular|typical)\s+"
+    r"(?:similaires|similar(?:es)?)|(?:similar|usual)\s+(?:and\s+)?(?:usual|similar)\s+(?:runs|sessions|workouts)|"
     r"(?:\d+|dix|vingt|trente|ten|twenty|thirty|diez|veinte|treinta)\s+(?:derni[èe]re?s?|r[ée]centes?|last|latest|"
     r"recent|[úu]ltim[ao]s|recientes)\s+(?:sorties|s[ée]ances|runs|sessions|salidas|sesiones)|"
     r"(?:derni[èe]re?s?|last|latest|[úu]ltim[ao]s)\s+\d+\s+(?:sorties|s[ée]ances|runs|sessions|salidas|sesiones)|"
@@ -419,7 +422,20 @@ _HR_POPULATION_MISDESCRIBED = re.compile(
 _LOOSE_POSITION = re.compile(r"\b(?:basse|faible|haute|[ée]lev[ée]e|low|high|baja|alta|elevada)\b", re.I)
 
 
+# A position sentence whose subject is a pronoun ("Elle est à un niveau intermédiaire parmi tes séances ...")
+# still restates the HR position when it ranks the session inside a population.
+_ELLIPTICAL_POSITION = re.compile(
+    r"(?:partie (?:basse|haute|interm[ée]diaire)|niveau (?:interm[ée]diaire|moyen)|(?:lower|upper) part|"
+    r"intermediate (?:part|range|level)|parte (?:baja|alta|intermedia)|nivel intermedio)", re.I)
+_RANKED_IN_POPULATION = re.compile(
+    r"\b(?:parmi|among|entre|de|of|in|dans|en)\s+(?:tes|vos|your|tus|les|the|las)\s+(?:\w+\s+){0,3}?"
+    rf"{_SESSION_NOUN}\b", re.I)
+
+
 def _states_hr_position(sentence: str) -> bool:
+    if not _HR_WORD.search(sentence) and _ELLIPTICAL_POSITION.search(sentence) \
+            and _RANKED_IN_POPULATION.search(sentence):
+        return True
     return bool(_HR_WORD.search(sentence) and (_HR_POSITION.search(sentence) or _POS_LOW.search(sentence)
                 or _POS_HIGH.search(sentence) or _LOOSE_POSITION.search(sentence)) and not _AT_COMPARABLE_HR.search(sentence)
                 and not _AT_COMPARABLE_PACE.search(sentence))
@@ -1299,9 +1315,14 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
     covered: set[str] = set()
     substantive = False
     facts = _facts(context)
+    positions_seen = 0
     for sentence in sentences:
         reasons = _sentence_reasons(sentence, context, language, question)
         attributed |= reasons
+        if _states_hr_position(sentence):
+            positions_seen += 1
+            if reasons and positions_seen > 1:
+                attributed.add("redundant_hr_position")  # the repeated statement is the removed sentence
         if reasons:
             continue
         if _DEPENDENT_START.search(sentence) and not _SESSION_SUBJECT.search(sentence):
