@@ -238,9 +238,9 @@ def test_requested_count_is_allowed_up_to_what_exists():
 
 def test_fallback_states_intensity_undetermined_only_without_thresholds():
     without = guard.build_contract_fallback(_chat_context(), "en")
-    assert "cannot be determined" in without
+    assert "physiological intensity" in without
     with_thresholds = guard.build_contract_fallback(_chat_context(thresholds="below_LT1"), "en")
-    assert "cannot be determined" not in with_thresholds and "below LT1" in with_thresholds
+    assert "physiological intensity" not in with_thresholds and "below LT1" in with_thresholds
 
 
 @pytest.mark.parametrize("lang,fragment", [("fr", "sous LT1"), ("es", "por debajo de LT1")])
