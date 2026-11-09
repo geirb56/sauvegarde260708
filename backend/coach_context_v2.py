@@ -709,6 +709,26 @@ def _effort_list(intel: Optional[dict[str, Any]], key: str, field: str, formatte
     return out
 
 
+def _effort_structure(intel: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """"N x D" of the recorded efforts, only when every recorded effort has a valid, near-identical duration."""
+    block = (intel or {}).get("effort_duration_observations") or {}
+    efforts = [e for e in block.get("efforts") or [] if isinstance(e, dict)]
+    if len(efforts) < 2:
+        return None
+    durations = []
+    for effort in efforts:
+        value = effort.get("duration_s")
+        if (not effort.get("available") or isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            return None
+        durations.append(float(value))
+    typical = sorted(durations)[len(durations) // 2]
+    if max(durations) - min(durations) > max(5.0, 0.03 * typical):
+        return None
+    return {"effort_count": len(durations), "effort_duration_s": int(round(typical)),
+            "scope": "recorded efforts only; not proof of the whole session structure"}
+
+
 def build_evidence_contract(
     detail: dict[str, Any],
     analysis: dict[str, Any],
@@ -740,6 +760,9 @@ def build_evidence_contract(
         measured["recorded_effort_paces"] = effort_paces
     if effort_durations:
         measured["recorded_effort_durations"] = effort_durations
+    structure = _effort_structure(intelligence)
+    if structure:
+        measured["recorded_effort_structure"] = structure
 
     comparisons: list[dict[str, Any]] = []
     classification = (v3 or {}).get("classification") or {}

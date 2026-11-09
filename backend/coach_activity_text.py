@@ -247,6 +247,29 @@ _T = {
         "sortie ».",
         "Which session do you mean? Give me a date (for example “October 12”) or “my last run”.",
         "¿De qué sesión hablas? Dame una fecha (por ejemplo «el 12 de octubre») o «mi última salida»."),
+    "c_history_reference": (
+        "Pour te montrer tes {n} dernières sorties de même distance, j'ai besoin d'une sortie de référence : "
+        "{listing}. Laquelle ? Réponds par exemple « la 1 », ou donne une date.",
+        "To show your last {n} runs of the same distance, I need a reference run: {listing}. "
+        "Which one? For example, answer “1”, or give a date.",
+        "Para mostrarte tus últimas {n} salidas de la misma distancia necesito una salida de referencia: "
+        "{listing}. ¿Cuál? Responde, por ejemplo, «la 1», o indica una fecha."),
+    "env_treadmill": ("sur tapis", "on a treadmill", "en cinta"),
+    "env_outdoor": ("en extérieur", "outdoors", "en exterior"),
+    "env_pair_note": (
+        " Attention : une séance {a} contre une séance {b} ; les allures et les FC ne sont pas directement "
+        "équivalentes (tapis et extérieur), cet écart se lit avec prudence.",
+        " Caution: one session was {a} and the other {b}; paces and heart rates are not directly "
+        "equivalent (treadmill vs outdoor), so read this gap with caution.",
+        " Atención: una sesión fue {a} y la otra {b}; los ritmos y las FC no son directamente "
+        "equivalentes (cinta y exterior), así que esta diferencia debe leerse con cautela."),
+    "env_history_note": (
+        "{k} séance(s) sur {n} n'ont pas le même environnement que la référence ({r}) : leurs allures et "
+        "FC ne sont pas directement comparables.",
+        "{k} of {n} sessions were not in the same environment as the reference ({r}): their paces and "
+        "heart rates are not directly comparable.",
+        "{k} de {n} sesiones no tuvieron el mismo entorno que la referencia ({r}): sus ritmos y FC no son "
+        "directamente comparables."),
     "c_which_reference": (
         "Avec laquelle de ces séances veux-tu faire la comparaison ? Indique une date.",
         "Which of these sessions should be the reference? Please give a date.",

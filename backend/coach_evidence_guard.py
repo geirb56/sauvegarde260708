@@ -242,6 +242,30 @@ def _blank(text: str, spans: list[tuple[int, int]]) -> str:
     return text
 
 
+_STRUCTURE_UNIT = r"min(?:utes?|utos?)?|secs?|s|sec(?:ond(?:e|s|es|os)?)?"
+_STRUCTURE_CLAIM = re.compile(
+    r"(?<![\w:.,])(?P<n1>\d{1,2})\s*(?:[×xX*]|fois|times|veces)\s*(?P<d1>\d+(?:[.,]\d+)?)\s*"
+    r"(?P<u1>" + _STRUCTURE_UNIT + r")\b|"
+    r"(?<![\w:.,])(?P<n2>\d{1,2})\s+(?:r[ée]p[ée]titions?|repetitions?|repeticiones|efforts?|esfuerzos?|"
+    r"intervalles?|intervals?|intervalos?|fractions?|s[ée]ries|reps)\s+(?:de|of|d['’])\s*(?P<d2>\d+(?:[.,]\d+)?)\s*"
+    r"(?P<u2>" + _STRUCTURE_UNIT + r")\b", re.I)
+
+
+def _structure_spans(sentence: str, structure: Optional[dict]) -> list[tuple[int, int]]:
+    """Spans of "N × D min" wordings that match the recorded effort structure exactly; others stay visible."""
+    if not structure:
+        return []
+    spans = []
+    for m in _STRUCTURE_CLAIM.finditer(sentence):
+        count = int(m.group("n1") or m.group("n2"))
+        value = float((m.group("d1") or m.group("d2")).replace(",", "."))
+        unit = (m.group("u1") or m.group("u2")).lower()
+        seconds = value * (60 if unit.startswith("min") else 1)
+        if count == structure["count"] and abs(seconds - structure["duration_s"]) <= max(3.0, 0.02 * seconds):
+            spans.append(m.span())
+    return spans
+
+
 def _habitual_full_spans(sentence: str, ratio_fact: Optional[dict]) -> list[tuple[int, int]]:
     """Spans (figure + unit) of the minute figure worded as the V3 habitual (median) duration, only those.
 
@@ -332,6 +356,8 @@ def _contract(context: dict) -> dict:
         if intensity.get("thresholds_available") else None,
         "recorded": recorded if isinstance(recorded, dict) else None,
         "has_not_demonstrated": set(contract.get("not_demonstrated") or {}),
+        "type_certain_ok": classification.get("probable_type") == "intervals"
+        and classification.get("confidence") == "high",
     }
 
 
@@ -357,6 +383,60 @@ def _allowed_counts(sentence: str, c: dict) -> set[int]:
     return c["all_counts"] | {1}  # no stated population: a known count, but unattributed (documented limit)
 
 
+_TYPE_TERM = (
+    r"(?:sortie longue|footing|sortie facile|sortie tempo|s[ée]ance (?:de )?(?:tempo|seuil|fractionn[ée])|"
+    r"fractionn[ée]|long run|easy run|tempo run|steady run|interval(?:s| session| workout)|"
+    r"tirada larga|salida larga|rodaje|entrenamiento (?:de )?(?:series|intervalos))")
+_CERTAIN_WORD = (
+    r"(?:clairement|nettement|sans (?:aucun )?doute|[àa] coup s[ûu]r|certainement|d[ée]finitivement|"
+    r"manifestement|[ée]videmment|incontestablement|sans [ée]quivoque|clearly|definitely|certainly|"
+    r"undoubtedly|obviously|without (?:a )?doubt|unmistakabl[ey]|sin duda|claramente|definitivamente|"
+    r"ciertamente|obviamente)")
+_CATEGORICAL_TYPE = re.compile(
+    rf"(?:{_CERTAIN_WORD}[^.!?;]{{0,40}}?\b{_TYPE_TERM}\b|\b{_TYPE_TERM}\b[^.!?;]{{0,30}}?{_CERTAIN_WORD}|"
+    rf"(?:c['’]était|c['’]est|il s['’]agissait d['’]|il s['’]agit d['’]|it was|it is|it's|this was|this is|"
+    rf"fue|era|es|se trata de|se trataba de)\s+(?:une?|a|an|una?)\s+{_TYPE_TERM}\b)", re.I)
+_TYPE_HEDGE = re.compile(
+    r"(probabl|likely|seems|semble|suggests?|plausible|parece|podr[ií]a|might|peut-[êe]tre|possibly|"
+    r"appears|ressemble|looks like|compatible)", re.I)
+
+
+_TYPE_TERM_RE = re.compile(rf"\b{_TYPE_TERM}\b", re.I)
+
+
+# The HR position is measured against V3's own admitted population (strictly prior, same environment, comparable
+# duration, no interval or race); it is not "the last N runs", "all your sessions" nor a same-distance population.
+_HR_POPULATION_MISDESCRIBED = re.compile(
+    r"(?:compar\w+|similaires?|similar|semejantes?)\s+(?:en|in|by|de|of)\s+(?:distance|distancia)|"
+    r"m[êe]me distance|same[- ]distance|misma distancia|distance similaire|similar distance|distancia similar|"
+    r"(?:\d+|dix|vingt|trente|ten|twenty|thirty|diez|veinte|treinta)\s+(?:derni[èe]re?s?|r[ée]centes?|last|latest|"
+    r"recent|[úu]ltim[ao]s|recientes)\s+(?:sorties|s[ée]ances|runs|sessions|salidas|sesiones)|"
+    r"(?:derni[èe]re?s?|last|latest|[úu]ltim[ao]s)\s+\d+\s+(?:sorties|s[ée]ances|runs|sessions|salidas|sesiones)|"
+    r"(?:toutes?\s+(?:tes|vos)|all\s+(?:of\s+)?your|todas\s+tus)\s+(?:sorties|s[ée]ances|runs|sessions|salidas|sesiones)",
+    re.I)
+
+
+_LOOSE_POSITION = re.compile(r"\b(?:basse|faible|haute|[ée]lev[ée]e|low|high|baja|alta|elevada)\b", re.I)
+
+
+def _states_hr_position(sentence: str) -> bool:
+    return bool(_HR_WORD.search(sentence) and (_HR_POSITION.search(sentence) or _POS_LOW.search(sentence)
+                or _POS_HIGH.search(sentence) or _LOOSE_POSITION.search(sentence)) and not _AT_COMPARABLE_HR.search(sentence)
+                and not _AT_COMPARABLE_PACE.search(sentence))
+
+
+_NEGATION = re.compile(r"\b(?:pas|not|no|never|jamais|nunca|nada)\b|n['’]t\b", re.I)
+
+
+def _categorical_type_claim(sentence: str) -> bool:
+    """A session type stated as certain: the V3 classification is probable, never certain."""
+    matches = [m for m in _CATEGORICAL_TYPE.finditer(sentence) if not _NEGATION.search(m.group(0))]
+    if not matches or csc._only_negated(sentence, _CATEGORICAL_TYPE):
+        return False
+    certain = [m for m in matches if re.search(_CERTAIN_WORD, m.group(0), re.I)]
+    return bool(certain) or not _TYPE_HEDGE.search(sentence)
+
+
 def check_contract_claims(text: str, context: dict, question: Optional[str] = None) -> set[str]:
     """Contract-based reasons for rejecting a reply; empty when no checked claim is contradicted."""
     c = _contract(context)
@@ -368,6 +448,8 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
     for sentence in csc._sentences(text):
         if _direction_contradicted(sentence, facts):
             reasons.add("comparison_direction_contradicts")
+        if not c["type_certain_ok"] and _categorical_type_claim(sentence):
+            reasons.add("type_certainty_not_established")
         if any(not ok for _, ok in _duration_claims(sentence, c["duration_ratio"])):
             reasons.add("duration_ratio_not_established")
         if _other_metric_multiples(sentence):
@@ -405,6 +487,10 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
                     reasons.add("hr_position_not_established")
                 elif (low and c["relative_position"] != "low") or (high and c["relative_position"] != "high"):
                     reasons.add("hr_position_contradicts_v3")
+        if (_states_hr_position(sentence) or (_HR_WORD.search(sentence) and _LOOSE_POSITION.search(sentence))) \
+                and _HR_POPULATION_MISDESCRIBED.search(sentence) \
+                and not csc._only_negated(sentence, _HR_POPULATION_MISDESCRIBED):
+            reasons.add("population_misdescribed")
         position = c["threshold_position"]
         if _BELOW_LT1.search(sentence) and position != "below_LT1" or \
                 _ABOVE_LT2.search(sentence) and position != "above_LT2":
@@ -434,6 +520,8 @@ def check_contract_claims(text: str, context: dict, question: Optional[str] = No
             reasons.add("pace_read_as_performance")
         if _RECOVERY_ADVICE.search(sentence) and not csc._only_negated(sentence, _RECOVERY_ADVICE):
             reasons.add("recovery_advice_not_supported")
+    if sum(1 for sentence in csc._sentences(text) if _states_hr_position(sentence)) > 1:
+        reasons.add("redundant_hr_position")
     return reasons
 
 
@@ -496,6 +584,7 @@ def _csc_view(text: str, context: dict) -> str:
         masked = list(habitual)  # the habitual median, proven by the V3 ratio
         masked += [m.span() for m, _, ok in _magnitude_claims(sentence, facts) if ok]  # delta checked here
         masked += _prescription_label_spans(sentence, context)  # the recorded prescription's own label
+        masked += _structure_spans(sentence, facts.get("session.effort_structure"))  # recorded "N × D min"
         view = _blank(sentence, masked)
         breaks = [m.span() for m in csc._CLAUSE_BREAK.finditer(sentence)]
         for match, ok in reversed(claims):
@@ -548,6 +637,11 @@ _FALLBACK = {
                     "duration": " en {v}", "pace_head": "Ton allure moyenne était de {v}", "pace": ", à {v}",
                     "hr_head": "Ta FC moyenne était de {v} bpm", "hr": ", avec une FC moyenne de {v} bpm",
                     "minutes": "{v} minutes"},
+        "type": "Le moteur d'analyse classe cette séance comme probablement {kind} (confiance {conf}).",
+        "type_kinds": {"easy_run_probable": "un footing facile", "steady_run_probable": "une sortie à allure régulière",
+                       "tempo_probable": "un effort de type tempo", "long_run_probable": "une sortie longue"},
+        "type_conf": {"high": "élevée", "medium": "moyenne", "low": "faible"},
+        "structure": "Structure enregistrée : {n} × {d} (efforts enregistrés uniquement).",
         "efforts": "Allures des répétitions enregistrées : {paces}.",
         "position": {"low": "dans la partie basse", "intermediate": "dans la partie intermédiaire",
                      "high": "dans la partie haute"},
@@ -590,6 +684,11 @@ _FALLBACK = {
                     "duration": " in {v}", "pace_head": "Your average pace was {v}", "pace": ", at {v}",
                     "hr_head": "Your average HR was {v} bpm", "hr": ", with an average HR of {v} bpm",
                     "minutes": "{v} minutes"},
+        "type": "The analysis engine classes this session as probably {kind} (confidence: {conf}).",
+        "type_kinds": {"easy_run_probable": "an easy run", "steady_run_probable": "a steady-pace run",
+                       "tempo_probable": "a tempo-type effort", "long_run_probable": "a long run"},
+        "type_conf": {"high": "high", "medium": "medium", "low": "low"},
+        "structure": "Recorded structure: {n} × {d} (recorded efforts only).",
         "efforts": "Recorded repetition paces: {paces}.",
         "position": {"low": "in the lower part", "intermediate": "in the intermediate range",
                      "high": "in the upper part"},
@@ -631,6 +730,11 @@ _FALLBACK = {
                     "duration": " en {v}", "pace_head": "Tu ritmo medio fue de {v}", "pace": ", a {v}",
                     "hr_head": "Tu FC media fue de {v} bpm", "hr": ", con una FC media de {v} bpm",
                     "minutes": "{v} min"},
+        "type": "El motor de análisis clasifica esta sesión como probablemente {kind} (confianza: {conf}).",
+        "type_kinds": {"easy_run_probable": "un rodaje fácil", "steady_run_probable": "una salida a ritmo constante",
+                       "tempo_probable": "un esfuerzo tipo tempo", "long_run_probable": "una tirada larga"},
+        "type_conf": {"high": "alta", "medium": "media", "low": "baja"},
+        "structure": "Estructura registrada: {n} × {d} (solo esfuerzos registrados).",
         "efforts": "Ritmos de las repeticiones registradas: {paces}.",
         "position": {"low": "en la parte baja", "intermediate": "en la parte intermedia", "high": "en la parte alta"},
         "relative": "Tu FC media se sitúa {position} de tus {count} sesiones de referencia (mismo entorno, "
@@ -698,6 +802,15 @@ def _display_seconds(display: Any) -> Optional[int]:
     return -seconds if match.group(1) == "-" else seconds
 
 
+def _effort_structure_fact(value: Any) -> Optional[dict]:
+    if not isinstance(value, dict):
+        return None
+    count, duration = value.get("effort_count"), _finite(value.get("effort_duration_s"))
+    if isinstance(count, bool) or not isinstance(count, int) or count < 2 or not duration or duration <= 0:
+        return None
+    return {"count": count, "duration_s": duration}
+
+
 def _facts(context: dict) -> dict:
     """The facts a reply may state, keyed by logical id with their value, unit and population."""
     frame = context.get("session_coaching_frame") if isinstance(context.get("session_coaching_frame"), dict) else {}
@@ -710,6 +823,7 @@ def _facts(context: dict) -> dict:
         "session.duration": _finite(measured.get("duration_minutes")),
         "session.avg_hr": _finite(measured.get("avg_hr_bpm")),
         "session.avg_pace": _norm_pace(measured.get("avg_pace")),
+        "session.effort_structure": _effort_structure_fact(measured.get("recorded_effort_structure")),
         "session.effort_paces": {p for p in (_norm_pace(e.get("value")) for e in
                                              measured.get("recorded_effort_paces") or []
                                              if isinstance(e, dict)) if p},
@@ -813,6 +927,10 @@ def _attribute(sentence: str, facts: dict) -> Optional[set[str]]:
     unit or population never matches.
     """
     ids: set[str] = set()
+    structure = _structure_spans(sentence, facts.get("session.effort_structure"))
+    if structure:
+        ids.add("session.effort_structure")
+        sentence = _blank(sentence, structure)
     text = sentence
     for match in list(_PACE_RE.finditer(sentence)):
         pace = f"{int(match.group(1))}:{match.group(2)}"
@@ -938,7 +1056,7 @@ def _measures_sentence(facts: dict, covered: frozenset, texts: dict, language: s
 
 
 def _fallback_items(context: dict, language: str, covered: frozenset = frozenset(),
-                    question: Optional[str] = None) -> list[tuple[set[str], str]]:
+                    question: Optional[str] = None, type_stated: bool = False) -> list[tuple[set[str], str]]:
     """Ordered (fact ids, sentence) from the evidence contract, minus facts already stated (`covered`)."""
     texts = _FALLBACK.get(language, _FALLBACK["en"])
     frame = context.get("session_coaching_frame")
@@ -950,12 +1068,24 @@ def _fallback_items(context: dict, language: str, covered: frozenset = frozenset
     measures = _measures_sentence(facts, covered, texts, language)
     if measures:
         items.append(({"session.measures"}, measures))
+    structure = facts.get("session.effort_structure")
+    if structure and "session.effort_structure" not in covered:
+        seconds = structure["duration_s"]
+        shown = f"{round(seconds / 60)} min" if seconds >= 60 and abs(seconds - round(seconds / 60) * 60) <= 3 \
+            else f"{int(round(seconds))} s"
+        items.append(({"session.effort_structure"}, texts["structure"].format(n=structure["count"], d=shown)))
     paces = [e["value"] for e in (contract.get("measured_facts") or {}).get("recorded_effort_paces") or []
              if isinstance(e, dict) and _norm_pace(e.get("value")) and "session.effort_pace" not in covered]
     if paces:
         items.append(({"session.effort_pace"}, texts["efforts"].format(paces=", ".join(paces))))
     v3 = frame.get("v3_assessment") if isinstance(frame.get("v3_assessment"), dict) else {}
-    relative = (v3.get("classification") or {}).get("relative_effort") or {}
+    classification = v3.get("classification") or {}
+    if type_stated and "session.type" not in covered and classification.get("probable_type") in texts["type_kinds"] \
+            and classification.get("confidence") in texts["type_conf"]:
+        items.append(({"session.type"}, texts["type"].format(
+            kind=texts["type_kinds"][classification["probable_type"]],
+            conf=texts["type_conf"][classification["confidence"]])))
+    relative = classification.get("relative_effort") or {}
     pop = facts["relative_hr.population"]
     if relative.get("status") == "used" and relative.get("relative_position") in texts["position"] and pop \
             and "relative_hr.population" not in covered:
@@ -1086,9 +1216,10 @@ def _fallback_limit(contract: dict, language: str, said: str = "", question: Opt
     return None
 
 
-def build_contract_fallback(context: dict, language: str, question: Optional[str] = None) -> Optional[str]:
+def build_contract_fallback(context: dict, language: str, question: Optional[str] = None,
+                            type_stated: bool = False) -> Optional[str]:
     """Factual, useful reply built only from the evidence contract; None when it holds nothing."""
-    items = _fallback_items(context, language, question=question)
+    items = _fallback_items(context, language, question=question, type_stated=type_stated)
     if not items:
         return None
     limit = _fallback_limit(context["session_coaching_frame"]["evidence_contract"], language, question=question)
@@ -1155,7 +1286,8 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
     if verdict["passed"]:
         return result
     result["text"], result["response_source"] = None, "contract_fallback"
-    fallback = build_contract_fallback(context, language, question)
+    type_stated = "type_certainty_not_established" in verdict["rejected_checks"]
+    fallback = build_contract_fallback(context, language, question, type_stated)
     full_text = text.strip() if isinstance(text, str) else ""
     sentences = csc._sentences(full_text)
     if not sentences or fallback is None:
@@ -1177,6 +1309,10 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
         if _INFERENCE.search(sentence):
             continue
         ids = _attribute(sentence, facts)
+        if "relative_hr.population" in covered and (
+                "relative_hr.population" in (ids or ()) or _states_hr_position(sentence)):
+            attributed.add("redundant_hr_position")  # the HR position is stated once
+            continue
         if not ids:
             if ids is None and not _states_metric_figure(sentence) and not _FIGURE.search(sentence) \
                     and (_LIMIT_STATEMENT.search(sentence) or _proven_relative_statement(sentence, context)):
@@ -1197,12 +1333,14 @@ def resolve_chat_reply(text: Any, context: dict, language: str, question: Option
         kept.append(sentence)
         substantive = True
         covered |= ids
+        if _TYPE_TERM_RE.search(sentence):
+            covered.add("session.type")
     result["removed_sentences"] = len(sentences) - len(kept)
     if not set(verdict["rejected_checks"]) <= attributed or not kept:
         result["text"] = fallback
         return result
 
-    restored = [t for _, t in _fallback_items(context, language, frozenset(covered), question)]
+    restored = [t for _, t in _fallback_items(context, language, frozenset(covered), question, type_stated)]
     if not substantive:  # nothing but reserves is kept: the factual fallback answers better
         result["text"] = fallback
         return result

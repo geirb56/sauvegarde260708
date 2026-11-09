@@ -2281,7 +2281,8 @@ async def _resolve_coach_activity_turn(
 def _compact_comparison_contract(contract: dict) -> dict:
     """Identifiers, measures and gaps only (audit trail stored next to the answer)."""
     keys = ("kind", "activities", "reference", "population", "deltas", "missing", "criterion",
-            "distances_comparable", "undemonstrated_conclusions")
+            "distances_comparable", "environments_differ", "environment_differs",
+            "undemonstrated_conclusions")
     return {k: contract[k] for k in keys if k in contract}
 
 
