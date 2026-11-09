@@ -696,6 +696,9 @@ _FALLBACK = {
             "fastest": "Le {ord} effort était le plus rapide, à {pace}/km.",
             "slowest": "Le {ord} effort était le plus lent, à {pace}/km.",
             "plain": "Le {ord} effort était à {pace}/km.",
+            "fastest_partial": "Le {ord} effort était le plus rapide parmi les répétitions dont l'allure est enregistrée, à {pace}/km.",
+            "slowest_partial": "Le {ord} effort était le plus lent parmi les répétitions dont l'allure est enregistrée, à {pace}/km.",
+            "unexplained": "Les données montrent son allure, mais ne suffisent pas à expliquer pourquoi elle diffère des autres.",
             "numbered": "L'effort n° {n} était à {pace}/km.",
             "missing": "Je n'ai pas l'allure enregistrée de cet effort.",
             "cause": "Les données montrent cette différence, mais pas sa cause certaine.",
@@ -755,6 +758,9 @@ _FALLBACK = {
             "fastest": "The {ord} effort was the fastest, at {pace}/km.",
             "slowest": "The {ord} effort was the slowest, at {pace}/km.",
             "plain": "The {ord} effort was at {pace}/km.",
+            "fastest_partial": "The {ord} effort was the fastest among the repetitions with a recorded pace, at {pace}/km.",
+            "slowest_partial": "The {ord} effort was the slowest among the repetitions with a recorded pace, at {pace}/km.",
+            "unexplained": "The data shows its pace, but is not enough to explain why it differs from the others.",
             "numbered": "Effort no. {n} was at {pace}/km.",
             "missing": "I don't have the recorded pace of that effort.",
             "cause": "The data shows this difference, but not its definite cause.",
@@ -814,6 +820,9 @@ _FALLBACK = {
             "fastest": "El {ord} esfuerzo fue el más rápido, a {pace}/km.",
             "slowest": "El {ord} esfuerzo fue el más lento, a {pace}/km.",
             "plain": "El {ord} esfuerzo fue a {pace}/km.",
+            "fastest_partial": "El {ord} esfuerzo fue el más rápido entre las repeticiones con ritmo registrado, a {pace}/km.",
+            "slowest_partial": "El {ord} esfuerzo fue el más lento entre las repeticiones con ritmo registrado, a {pace}/km.",
+            "unexplained": "Los datos muestran su ritmo, pero no bastan para explicar por qué difiere de los demás.",
             "numbered": "El esfuerzo n.º {n} fue a {pace}/km.",
             "missing": "No tengo el ritmo registrado de ese esfuerzo.",
             "cause": "Los datos muestran esa diferencia, pero no su causa segura.",
@@ -1346,6 +1355,9 @@ def _effort_sentences(contract: dict, language: str, effort: int) -> tuple[list[
         return [words["missing"]], None
     pace, seconds = paces[number]
     others = [value for key, (_, value) in paces.items() if key != number]
+    structure = _effort_structure_fact((contract.get("measured_facts") or {}).get("recorded_effort_structure"))
+    # "Fastest"/"slowest" is only claimed over the recorded paces; a tie gives no unique rank.
+    complete = bool(structure) and set(paces) == set(range(1, structure["count"] + 1))
     rank = None
     if others and seconds < min(others):
         rank = "fastest"
@@ -1354,7 +1366,8 @@ def _effort_sentences(contract: dict, language: str, effort: int) -> tuple[list[
     name = words["last"] if effort == -1 else words["ordinals"].get(number)
     if name is None:
         return [words["numbered"].format(n=number, pace=pace)], rank
-    return [words[rank or "plain"].format(ord=name, pace=pace)], rank
+    return [words[rank if rank and complete else f"{rank}_partial" if rank else "plain"]
+            .format(ord=name, pace=pace)], rank
 
 
 def _focused_fallback(context: dict, language: str, question: Optional[str], type_stated: bool) -> Optional[str]:
@@ -1369,12 +1382,12 @@ def _focused_fallback(context: dict, language: str, question: Optional[str], typ
     rank = None
     if focus["effort"] is not None:
         parts, rank = _effort_sentences(contract, language, focus["effort"])
-        if rank and focus["why"]:
-            parts.append(texts["focus"]["cause"])
+        if focus["why"] and len(parts) == 1 and parts[0] != texts["focus"]["missing"]:
+            parts.append(texts["focus"]["cause" if rank else "unexplained"])
     allowed = tuple(fact for topic in focus["topics"] for fact in _TOPIC_FACTS[topic])
     for ids, sentence in _fallback_items(context, language, question=question, type_stated=type_stated):
         if any(i.startswith(allowed) for i in ids) and not (
-                focus["effort"] is not None and "session.effort_pace" in ids):
+                focus["effort"] is not None and ids & {"session.effort_pace", "session.effort_structure"}):
             parts.append(sentence)
     for topic in focus["topics"]:
         key = _TOPIC_LIMIT[topic]
