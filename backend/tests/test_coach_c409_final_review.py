@@ -295,3 +295,27 @@ async def test_clarification_keeps_the_pair_when_the_remembered_counterpart_is_u
     second = await _turn(db, "la première", memory=first["refs"])
     assert second["kind"] == "compare"
     assert {a["id"] for a in second["contract"]["activities"]} == {"wB", "wA"}
+
+
+# ---- finalisation: exact routing set
+
+@pytest.mark.parametrize("message,kind", [
+    ("Que dois-je faire aujourd'hui ?", "passthrough"),
+    ("Quelle séance demain ?", "passthrough"),
+    ("Quelle allure cible pour mon 10 km ?", "passthrough"),
+    ("Analyse ma sortie d'aujourd'hui.", "single"),
+])
+async def test_planning_vs_analysis_routing_exact_set(message, kind):
+    for memory in (None, cac._refs("single", ["wA"], primary="wA")):
+        turn = await _turn(_db(A(), B()), message, memory=memory)
+        if kind == "passthrough":
+            assert turn["kind"] == "passthrough"
+        else:
+            assert turn["kind"] != "passthrough"
+        if kind == "passthrough":
+            assert not turn.get("workout_ids")
+
+
+def test_compare_yesterday_with_monday_is_a_two_date_comparison():
+    parsed = cac.parse_message("Compare ma séance d'hier avec celle de lundi.", TODAY)
+    assert parsed["compare"] and len(parsed["selectors"]) == 2 and not parsed["plan_related"]
