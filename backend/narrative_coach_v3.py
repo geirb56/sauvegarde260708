@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import os
+import re
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
@@ -34,6 +35,7 @@ from workout_intelligence_v3_models import WorkoutIntelligenceV3
 
 if TYPE_CHECKING:
     from coach_language import CoachLanguageV1
+    from coach_session_synthesis import CoachSessionSynthesisV2
     from workout_analysis_v2 import WorkoutAnalysisPhaseAnalysis
 
 GENERATION_VERSION = "c358-controlled-1"
@@ -107,11 +109,198 @@ def _approved_repetition_judgment(coach_language, effort_count):
     # resolved by selecting whichever conclusion happens to come first.
     return approved[0] if len(approved) == 1 else None
 
+_SYNTH_HISTORY = {"coach.history.pace"}
+_SYNTH_REPETITION = {"coach.repetitions.pacing", "coach.repetitions.pace_hr",
+                     "fact.effort_extremes", "fact.effort_hr_evolution"}
+_COACH_PATH = re.compile(r"^coach_language\.conclusions\[(\d+)\]$")
+_FACT_PATH = re.compile(r"^meaning\.factual_observations\[\d+\]$")
+_FACT_KEYS = {
+    "fact.effort_extremes": {"fastest_effort_number", "slowest_effort_number",
+                             "fastest_pace_sec_per_km", "slowest_pace_sec_per_km"},
+    "fact.effort_hr_evolution": {"first_effort_number", "last_effort_number",
+                                 "first_average_hr_bpm", "last_average_hr_bpm"},
+}
+
+
+def _authorized_synthesis(session_synthesis, coach_language, session_type):
+    """Return validated (ref, item, conclusion) triples from V2 session_synthesis.
+
+    Only the typed, finite numeric evidence is used (never the V2 prose). Coach
+    items must still resolve to the matching available coach_language
+    conclusion, whose metadata carries the comparability scope. Anything else
+    is ignored, so Narrative falls back to its pre-existing claims.
+    """
+    from coach_language import CoachLanguageV1
+    from coach_session_synthesis import CoachSessionSynthesisV2, SessionSynthesisItem
+
+    if (type(session_synthesis) is not CoachSessionSynthesisV2
+            or session_synthesis.version != "v2" or session_synthesis.status != "available"
+            or session_synthesis.primary is None):
+        return []
+    entries = [("session_synthesis.primary", session_synthesis.primary)] + [
+        (f"session_synthesis.supporting.{i}", item)
+        for i, item in enumerate(session_synthesis.supporting)
+    ]
+    allowed = _SYNTH_REPETITION if session_type == "intervals" else _SYNTH_HISTORY
+    result = []
+    for ref, item in entries:
+        if (type(item) is not SessionSynthesisItem or item.code not in allowed
+                or not item.evidence or not all(_finite(v) for v in item.evidence.values())
+                or not item.source_paths):
+            continue
+        evidence, conclusion = item.evidence, None
+        if item.code.startswith("coach."):
+            match = _COACH_PATH.match(item.source_paths[0])
+            if (match is None or type(coach_language) is not CoachLanguageV1
+                    or int(match.group(1)) >= len(coach_language.conclusions)):
+                continue
+            conclusion = coach_language.conclusions[int(match.group(1))]
+            if (not conclusion.available or conclusion.code != item.code
+                    or conclusion.evidence != evidence):
+                continue
+            if item.code == "coach.history.pace":
+                count = evidence.get("pace_sample_count")
+                if (not _count(count) or count < 1 or conclusion.category != "history"
+                        or conclusion.metadata.get("comparability") not in {"strong", "distance_only"}
+                        or not all(_finite(evidence.get(k)) for k in (
+                            "pace_difference_sec_per_km", "baseline_pace_min_km", "current_pace_min_km"))
+                        or evidence["baseline_pace_min_km"] <= 0 or evidence["current_pace_min_km"] <= 0):
+                    continue
+        elif (not _FACT_PATH.match(item.source_paths[0])
+              or not _FACT_KEYS[item.code] <= set(evidence)):
+            continue
+        result.append((ref, item, conclusion))
+    return result
+
+
+def _pace_label(seconds_per_km):
+    seconds = int(math.floor(seconds_per_km + 0.5))
+    return f"{seconds // 60}:{seconds % 60:02d}/km"
+
+
+def _synthesis_claims(entries, lang, number):
+    """Closed, localized sentences built from validated V2 numbers (display formatting only).
+
+    Returns (analysis claims, limitation claims). Historical gaps stay
+    descriptive; HR evolution is never presented as drift or fatigue.
+    """
+    claims, limits = [], []
+
+    def pick(en, fr, es):
+        return {"en": en, "fr": fr, "es": es}[lang]
+
+    def claim(claim_id, ref, keys, en, fr, es, bucket=None):
+        (claims if bucket is None else bucket).append({
+            "id": claim_id, "section": "analysis" if bucket is None else "limitations",
+            "variants": [pick(en, fr, es)],
+            "evidence_refs": [f"{ref}.evidence.{key}" for key in keys],
+        })
+
+    for ref, item, conclusion in entries:
+        ev = item.evidence
+        if item.code == "coach.history.pace":
+            gap = ev["pace_difference_sec_per_km"]
+            count, cur = int(ev["pace_sample_count"]), _pace_label(ev["current_pace_min_km"] * 60)
+            base, size = _pace_label(ev["baseline_pace_min_km"] * 60), number(abs(gap))
+            comparable = conclusion.metadata["comparability"] == "distance_only"
+            ref_en = "earlier sessions of comparable distance" if comparable else "comparable sessions"
+            ref_fr = "sorties antérieures de distance comparable" if comparable else "séances comparables"
+            ref_es = "sesiones anteriores de distancia comparable" if comparable else "sesiones comparables"
+            if gap == 0:
+                claim("synthesis.history", ref, ("pace_sample_count", "pace_difference_sec_per_km"),
+                      f"Your average pace ({cur}) matches that of your {count} {ref_en} ({base}).",
+                      f"Ton allure moyenne ({cur}) est identique à celle de tes {count} {ref_fr} ({base}).",
+                      f"Tu ritmo medio ({cur}) coincide con el de tus {count} {ref_es} ({base}).")
+            else:
+                slow = gap > 0
+                claim("synthesis.history", ref, ("pace_sample_count", "pace_difference_sec_per_km",
+                                                 "current_pace_min_km", "baseline_pace_min_km"),
+                      f"Your average pace ({cur}) is {size} s/km {'slower' if slow else 'faster'} than across your {count} {ref_en} ({base} on average).",
+                      f"Ton allure moyenne ({cur}) est {size} s/km plus {'lente' if slow else 'rapide'} que sur tes {count} {ref_fr} ({base} en moyenne).",
+                      f"Tu ritmo medio ({cur}) es {size} s/km más {'lento' if slow else 'rápido'} que en tus {count} {ref_es} ({base} de media).")
+            if comparable:
+                claim("limit.history", ref, ("pace_sample_count",),
+                      "This gap compares distance only: the nature and structure of those sessions are not guaranteed, and it does not establish a change in fitness or judge execution.",
+                      "Cet écart ne compare que la distance : la nature et la structure de ces sorties ne sont pas garanties, et il n'établit ni un changement de forme ni un jugement sur l'exécution.",
+                      "Esta diferencia solo compara la distancia: no se garantiza la naturaleza ni la estructura de esas sesiones, y no establece un cambio de forma ni juzga la ejecución.",
+                      bucket=limits)
+            else:
+                claim("limit.history", ref, ("pace_sample_count",),
+                      "This gap describes these sessions; it does not establish a change in fitness or judge execution.",
+                      "Cet écart décrit ces séances ; il n'établit ni un changement de forme ni un jugement sur l'exécution.",
+                      "Esta diferencia describe esas sesiones; no establece un cambio de forma ni juzga la ejecución.",
+                      bucket=limits)
+        elif item.code.startswith("coach.repetitions."):
+            if "atypical_effort_number" in ev and all(_finite(ev.get(k)) for k in (
+                    "atypical_pace_sec_per_km", "atypical_difference_sec_per_km")):
+                n, diff = int(ev["atypical_effort_number"]), ev["atypical_difference_sec_per_km"]
+                fast = diff < 0
+                pace, size = _pace_label(ev["atypical_pace_sec_per_km"]), number(abs(diff))
+                tail_en = (" The first and last repetitions remain close."
+                           if conclusion.metadata.get("endpoint_relationship") == "close" else "")
+                tail_fr = " La première et la dernière restent proches." if tail_en else ""
+                tail_es = " La primera y la última siguen próximas." if tail_en else ""
+                claim("synthesis.atypical", ref, ("atypical_effort_number", "atypical_pace_sec_per_km",
+                                                  "atypical_difference_sec_per_km"),
+                      f"Repetition {n} stands out at {pace}, {size} s/km {'faster' if fast else 'slower'} than the central pace of the other repetitions.{tail_en}",
+                      f"La répétition n° {n} se distingue à {pace}, {size} s/km plus {'rapide' if fast else 'lente'} que l'allure centrale des autres répétitions.{tail_fr}",
+                      f"La repetición n.º {n} destaca a {pace}, {size} s/km más {'rápida' if fast else 'lenta'} que el ritmo central de las demás repeticiones.{tail_es}")
+            elif ev.get("group_size") and _finite(ev.get("group_pace_change_sec_per_km")) \
+                    and conclusion is not None and conclusion.metadata.get("group_direction") in {"faster", "slower"}:
+                size, change = int(ev["group_size"]), number(abs(ev["group_pace_change_sec_per_km"]))
+                fast = ev["group_pace_change_sec_per_km"] < 0
+                claim("synthesis.groups", ref, ("group_size", "group_pace_change_sec_per_km"),
+                      f"The finish is {'faster' if fast else 'slower'}: {change} s/km between the first {size} and last {size} repetitions.",
+                      f"La fin est plus {'rapide' if fast else 'lente'} : {change} s/km entre les {size} premières et les {size} dernières répétitions.",
+                      f"El final es más {'rápido' if fast else 'lento'}: {change} s/km entre las primeras {size} y las últimas {size} repeticiones.")
+            if _finite(ev.get("first_hr_bpm")) and _finite(ev.get("last_hr_bpm")):
+                a, b = number(ev["first_hr_bpm"]), number(ev["last_hr_bpm"])
+                claim("synthesis.hr", ref, ("first_hr_bpm", "last_hr_bpm"),
+                      f"Average heart rate goes from {a} to {b} bpm between the first and last repetition.",
+                      f"La FC moyenne passe de {a} à {b} bpm entre la première et la dernière répétition.",
+                      f"La FC media pasa de {a} a {b} lpm entre la primera y la última repetición.")
+        elif item.code == "fact.effort_extremes":
+            f, s = int(ev["fastest_effort_number"]), int(ev["slowest_effort_number"])
+            fp, sp = _pace_label(ev["fastest_pace_sec_per_km"]), _pace_label(ev["slowest_pace_sec_per_km"])
+            claim("synthesis.extremes", ref, ("fastest_effort_number", "slowest_effort_number",
+                                              "fastest_pace_sec_per_km", "slowest_pace_sec_per_km"),
+                  f"Effort {f} was the fastest ({fp}) and effort {s} the slowest ({sp}).",
+                  f"L'effort n° {f} est le plus rapide ({fp}) et l'effort n° {s} le plus lent ({sp}).",
+                  f"El esfuerzo {f} fue el más rápido ({fp}) y el esfuerzo {s} el más lento ({sp}).")
+        elif item.code == "fact.effort_hr_evolution":
+            a, b = number(ev["first_average_hr_bpm"]), number(ev["last_average_hr_bpm"])
+            x, y = int(ev["first_effort_number"]), int(ev["last_effort_number"])
+            claim("synthesis.hr", ref, tuple(_FACT_KEYS[item.code]),
+                  f"Average heart rate goes from {a} to {b} bpm between comparable repetitions {x} and {y}.",
+                  f"La FC moyenne passe de {a} à {b} bpm entre les répétitions comparables n° {x} et n° {y}.",
+                  f"La FC media pasa de {a} a {b} lpm entre las repeticiones comparables {x} y {y}.")
+    if any(c["id"] == "synthesis.hr" for c in claims):
+        ref = next(c["evidence_refs"][0] for c in claims if c["id"] == "synthesis.hr")
+        limits.append({
+            "id": "limit.hr", "section": "limitations", "evidence_refs": [ref],
+            "variants": [pick(
+                "This heart-rate evolution is descriptive; it does not establish cardiac drift or fatigue.",
+                "Cette évolution de la FC est descriptive ; elle n'établit ni dérive cardiaque ni fatigue.",
+                "Esta evolución de la FC es descriptiva; no establece deriva cardíaca ni fatiga.")],
+        })
+    seen, unique = set(), []
+    for c in claims:
+        if c["id"] not in seen:
+            seen.add(c["id"])
+            unique.append(c)
+    seen_l, unique_l = set(), []
+    for c in limits:
+        if c["id"] not in seen_l:
+            seen_l.add(c["id"])
+            unique_l.append(c)
+    return unique, unique_l
+
 
 def build_narrative_context(
     intelligence: Optional[WorkoutIntelligenceV3], language: str = "en",
     *, phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    session_synthesis: Optional[CoachSessionSynthesisV2] = None,
 ) -> dict:
     """Return a minimal, PII-free approved-claim catalog (not raw V3).
 
@@ -156,6 +345,9 @@ def build_narrative_context(
     intensity = v3.intensity_assessment
     trend = v3.performance_trend
     prescription = v3.prescription_assessment
+    synth_claims, synth_limits = _synthesis_claims(
+        _authorized_synthesis(session_synthesis, coach_language, cls.type), lang, number,
+    )
     kind_names = {
         "intervals": ("An interval session", "Une séance fractionnée", "Una sesión de intervalos"),
         "easy_run_probable": ("Probably an easy run", "Probablement un footing facile", "Probablemente un rodaje suave"),
@@ -470,6 +662,10 @@ def build_narrative_context(
     # catalog. The editor cannot turn an exhaustive factual catalog into prose.
     catalog = {claim["id"]: claim for claim in claims}
     selected = [catalog["session.kind"]]
+    if synth_claims and "session.unknown" in catalog:
+        catalog["session.unknown"] = {**catalog["session.unknown"], "section": "limitations"}
+    # Validated V2 observations lead the analysis; method sentences yield to them.
+    selected.extend(synth_claims[:2])
     if cls.type == "intervals":
         selected.extend(claim for claim in claims if claim["id"].startswith("interval.")
                         and claim["id"] not in {"interval.partial", "interval.regularity"}
@@ -479,6 +675,9 @@ def build_narrative_context(
             "session.unknown", "intensity.relative", "intensity.position", "intensity.hr",
         ) if key in catalog), None)
         if primary is not None:
+            if (synth_claims and primary["id"] == "intensity.relative"
+                    and cls.relative_effort.status != "used"):
+                primary = {**primary, "section": "limitations"}
             selected.append(primary)
         selected.extend(claim for claim in claims
                         if claim["section"] == "interpretation")
@@ -528,8 +727,12 @@ def build_narrative_context(
         selected.append(catalog["prescription.review"])
     elif "advice.comfortable" in catalog:
         selected.append(catalog["advice.comfortable"])
-    if len(selected) > 6:
+    if len(selected) > 6 + len(synth_claims[:2]):
         selected = [claim for claim in selected if claim["id"] != "interval.cohort"]
+    chosen_ids = {claim["id"] for claim in selected}
+    selected.extend(limit for limit in synth_limits if limit["id"] not in chosen_ids
+                    and (limit["id"] != "limit.hr" or "synthesis.hr" in chosen_ids)
+                    and (limit["id"] != "limit.history" or "synthesis.history" in chosen_ids))
     return {"generation_version": GENERATION_VERSION, "language": lang,
             "available": True, "claims": selected}
 
@@ -565,6 +768,7 @@ def validate_narrative_selection(
     payload: Any, intelligence: Optional[WorkoutIntelligenceV3], language: str = "en",
     *, phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    session_synthesis: Optional[CoachSessionSynthesisV2] = None,
 ) -> Optional[NarrativeCoachV3]:
     """Fail closed on anything except a complete approved-ID/variant selection.
 
@@ -580,6 +784,7 @@ def validate_narrative_selection(
         return None
     context = build_narrative_context(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        session_synthesis=session_synthesis,
     )
     if type(payload) is not dict or set(payload) != {"selections"}:
         return None
@@ -613,6 +818,7 @@ def deterministic_fallback(
     intelligence: Optional[WorkoutIntelligenceV3], language: str = "en",
     *, phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    session_synthesis: Optional[CoachSessionSynthesisV2] = None,
 ) -> NarrativeCoachV3:
     """Complete localized narrative requiring no provider, imports or I/O.
 
@@ -621,6 +827,7 @@ def deterministic_fallback(
     """
     context = build_narrative_context(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        session_synthesis=session_synthesis,
     )
     selections = [{"id": claim["id"], "variant": 0} for claim in context["claims"]]
     return _render(context, selections, "deterministic_fallback" if intelligence is not None else "none")
@@ -645,6 +852,7 @@ async def generate_narrative_coach_v3(
     intelligence: Optional[WorkoutIntelligenceV3], language: str = "en", *,
     phase_analysis: Optional[WorkoutAnalysisPhaseAnalysis] = None,
     coach_language: Optional[CoachLanguageV1] = None,
+    session_synthesis: Optional[CoachSessionSynthesisV2] = None,
     transport: Optional[Transport] = None,
 ) -> NarrativeCoachV3:
     """Optionally edit approved claims; all provider failures use fresh fallback.
@@ -657,11 +865,13 @@ async def generate_narrative_coach_v3(
     """
     fallback = deterministic_fallback(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        session_synthesis=session_synthesis,
     )
     if intelligence is None or os.getenv("C355_NARRATIVE_LLM_ENABLED", "").lower() not in {"1", "true", "yes"}:
         return fallback
     context = build_narrative_context(
         intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+        session_synthesis=session_synthesis,
     )
     prompt = json.dumps(context, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     cache_key = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -692,6 +902,7 @@ async def generate_narrative_coach_v3(
         payload = json.loads(text, object_pairs_hook=_strict_object)
         result = validate_narrative_selection(
             payload, intelligence, language, phase_analysis=phase_analysis, coach_language=coach_language,
+            session_synthesis=session_synthesis,
         )
         if result is None:
             _LOGGER.info("c355_narrative outcome=rejected")

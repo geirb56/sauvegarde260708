@@ -213,6 +213,7 @@ async def _load_scoped_workout_intelligence_v3(
                 intelligence, language,
                 phase_analysis=v2_analysis.phase_analysis if v2_analysis is not None else None,
                 coach_language=v2_analysis.coach_language if v2_analysis is not None else None,
+                session_synthesis=v2_analysis.session_synthesis if v2_analysis is not None else None,
             )
         except Exception:
             logger.exception("Narrative coach unavailable; factual V3 preserved")
@@ -223,6 +224,7 @@ async def _load_scoped_workout_intelligence_v3(
                     intelligence, language,
                     phase_analysis=v2_analysis.phase_analysis if v2_analysis is not None else None,
                     coach_language=v2_analysis.coach_language if v2_analysis is not None else None,
+                    session_synthesis=v2_analysis.session_synthesis if v2_analysis is not None else None,
                 )
             except Exception:
                 logger.exception("Narrative fallback unavailable; factual V3 preserved")
