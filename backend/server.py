@@ -2551,8 +2551,14 @@ async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: d
 
 
 @api_router.get("/coach/workout-intelligence/{workout_id}", response_model=WorkoutIntelligenceV3NarrativeResponse)
-async def get_workout_intelligence_v3(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
-    """C352 facts with C355 evidence-validated narrative (read-only)."""
+async def get_workout_intelligence_v3(
+    workout_id: str, language: str = "en", user: dict = Depends(auth_user), deterministic: bool = False,
+):
+    """C352 facts with C355 evidence-validated narrative (read-only).
+
+    C416: deterministic=true serves the same facts with the provider-free narrative, so
+    displaying a session sheet can never reach an LLM. The default is unchanged.
+    """
     user_id = user["id"]
     _, allowed = await _coach_access(user_id)
     if not allowed:
@@ -2566,6 +2572,7 @@ async def get_workout_intelligence_v3(workout_id: str, language: str = "en", use
         user_id=user_id,
         workout_id=workout_id,
         language=language,
+        provider_free=deterministic,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Workout not found")

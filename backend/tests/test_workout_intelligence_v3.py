@@ -1567,6 +1567,30 @@ def test_v3_api_endpoint_is_additive():
     assert unavailable.value.status_code == 422
 
 
+def test_c416_deterministic_route_never_reaches_the_llm_even_when_enabled(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    import narrative_coach_v3
+
+    calls = []
+
+    async def spy(*args, **kwargs):
+        calls.append(args)
+        return "{}", True, None
+
+    monkeypatch.setenv("C355_NARRATIVE_LLM_ENABLED", "true")
+    monkeypatch.setattr(narrative_coach_v3, "_default_transport", spy)
+    server = _server()
+    db = _loader_db()
+    with patch.object(server, "_coach_access", AsyncMock(return_value=(None, True))), \
+            patch.object(server, "db", db):
+        payload = asyncio.run(server.get_workout_intelligence_v3("cur", "en", {"id": "user-a"}, True))
+    assert calls == []
+    assert payload.workout_intelligence_v3 is not None
+    assert payload.narrative_coach_v3.generation_mode == "deterministic_fallback"
+    assert payload.narrative_coach_v3.headline
+
+
 # ── C354: historical INTERVAL_REST persisted as "unknown" (19 Sept shape) ────
 # SYNTHETIC reconstruction of the stored structure: 1 warm-up, 6 active
 # phases, 5 INTERVAL_REST phases persisted before #353 as "unknown".

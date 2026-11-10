@@ -190,7 +190,8 @@ export default function WorkoutDetail() {
   const synthesis = getSessionSynthesis(analysisForRender);
   const synthesisItems = synthesis
     ? [synthesis.primary, ...synthesis.supporting].filter((item) =>
-      item && !["synthesis.recorded_totals", "recorded_totals"].includes(item.code.trim()))
+      item && item.kind !== "interpretation"
+      && !["synthesis.recorded_totals", "recorded_totals"].includes(item.code.trim()))
     : [];
   const [synthesisPrimary, ...synthesisSupport] = synthesisItems;
   const synthesisLimitations = synthesis?.limitations || [];

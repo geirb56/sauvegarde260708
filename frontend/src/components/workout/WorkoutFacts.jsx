@@ -29,7 +29,6 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
   const classification = facts?.session_classification;
   const intensity = facts?.intensity_assessment;
   const history = facts?.historical_comparison;
-  const trend = facts?.performance_trend;
   const relative = classification?.relative_effort;
   const text = (key) => t(`workoutNarrative.${key}`);
   const number = (value, precision = 1) => formatAnalysisNumber(value, lang, precision);
@@ -55,10 +54,6 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
     evidence.push(["history", `${number(history.reference_count, 0)} ${text("comparableSessions")}`]);
   } else if (history?.status === "insufficient") {
     evidence.push(["history", text("insufficientHistory")]);
-  }
-  if (reliable(trend?.confidence)
-    && ["probable_improvement", "stable", "possible_decline"].includes(trend.status)) {
-    evidence.push(["trend", text(trend.status)]);
   }
   const limitations = [...new Set((Array.isArray(narrative?.limitations) ? narrative.limitations : [])
     .filter(hasText))];

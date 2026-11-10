@@ -15,8 +15,9 @@ export default function useWorkoutIntelligence(id, lang, allowed) {
     const controller = new AbortController();
     const { signal } = controller;
     setState({ scope, loading: true, error: false, data: null });
-    // C416: opening a session never triggers an AI generation (no /coach/workout-comment call).
-    const base = `${API_BASE_URL}/coach/workout-intelligence/${encodeURIComponent(id)}?language=${lang}`;
+    // C416: opening a session never triggers an AI generation: no /coach/workout-comment call,
+    // and deterministic=true keeps the backend narrative provider-free even if the LLM editor is enabled.
+    const base = `${API_BASE_URL}/coach/workout-intelligence/${encodeURIComponent(id)}?language=${lang}&deterministic=true`;
     axios.get(base, { signal, timeout: 15000 })
       .then(({ data }) => {
         if (signal.aborted) return;

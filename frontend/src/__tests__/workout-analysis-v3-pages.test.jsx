@@ -419,19 +419,19 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expectNoNarrativeProse();
   });
 
-  test.each(languages)("distinguishes a reliable performance trend from a single observation in %s", async (language) => {
+  test.each(languages)("keeps the multi-session trend off the session sheet in %s", async (language) => {
     mockRequests({ intelligence: makeIntelligence(language, {
       performance_trend: {
         status: "probable_improvement", confidence: "high", observation_count: 8,
-        span_days: 42, earlier_median_pace_min_km: 6.2, later_median_pace_min_km: 6,
-        median_change_sec_per_km: -12, variation_confirmed: true,
+        span_days: 42, median_change_sec_per_km: -12, variation_confirmed: true,
       },
     }) });
     renderPage(route, path, Page, language);
     await screen.findByTestId("workout-facts");
-    expect(screen.getByTestId("workout-evidence")).toHaveTextContent(copy[language].improvement);
-    expect(screen.getByTestId("workout-evidence")).toHaveTextContent(translations[language].workoutNarrative.probable_improvement);
-    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent("probable_improvement");
+    const w = translations[language].workoutNarrative;
+    const text = document.body.textContent;
+    [w.trend, w.probable_improvement, w.stable, w.possible_decline].forEach((label) => expect(text).not.toContain(label));
+    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(copy[language].improvement);
   });
 
   test.each(languages)("does not fabricate progress from insufficient history in %s", async (language) => {
@@ -443,16 +443,6 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(evidence).toHaveTextContent(translations[language].workoutNarrative.insufficientHistory);
     expect(evidence).not.toHaveTextContent(copy[language].improvement);
     expect(evidence).not.toHaveTextContent(/insufficient_data|NaN|undefined/);
-  });
-
-  test("does not promote a low-confidence trend to reliable progress", async () => {
-    mockRequests({ intelligence: makeIntelligence("en", {
-      performance_trend: { status: "probable_improvement", confidence: "low" },
-    }) });
-    renderPage(route, path, Page);
-    await screen.findByTestId("workout-facts");
-    expect(screen.getByTestId("workout-evidence"))
-      .not.toHaveTextContent(translations.en.workoutNarrative.probable_improvement);
   });
 
   test.each(languages)("keeps V3 facts and V2 observations when the %s V3 response has no narrative", async (language) => {
@@ -545,6 +535,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     await screen.findByTestId("workout-facts");
     expect(axios.get.mock.calls.some(([url]) => url.includes("workout-comment"))).toBe(false);
+    expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/")).every(([url]) => url.includes("deterministic=true"))).toBe(true);
     expect(axios.post).not.toHaveBeenCalled();
     expect(screen.queryByText("Stored AI comment.")).not.toBeInTheDocument();
     expect(screen.getByTestId("ask-coach-btn")).toBeInTheDocument();

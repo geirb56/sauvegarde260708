@@ -56,3 +56,22 @@ Verified in code (`server.py::_assemble_coach_llm_context`, `coach_session_comme
 
 ## Verdict
 GO MERGE, conditional on a human check of the 390 px rendering and the env flag above (not merged automatically).
+
+---
+
+## Corrections finales PR #407
+
+1. **Interprétations V2 (`WorkoutDetail.jsx`)** : `synthesisItems` exclut désormais `kind: "interpretation"`; l'élément principal est recalculé après filtrage; sans observation, aucune carte (message d'abstention + limites conservées). `SessionDetail`/`DetailedAnalysis` n'utilisent pas `session_synthesis`. API/DB inchangées.
+2. **Tendance (`WorkoutFacts.jsx`)** : `performance_trend` retiré de la fiche (non transmis au Chat Coach, relève de Progrès). Contrat/calcul inchangés.
+3. **Appel IA automatique** : `GET /coach/workout-intelligence` pouvait atteindre `generate_narrative_coach_v3` (LLM) si `C355_NARRATIVE_LLM_ENABLED` ∈ {1,true,yes} (défaut : désactivé; aucune valeur dans le dépôt). La valeur réelle de l'aperçu est **inaccessible** depuis ici. Correctif minimal : paramètre optionnel `deterministic` (défaut `false`, autres consommateurs inchangés) → `provider_free` → `deterministic_fallback`; le hook frontend envoie `deterministic=true`. Calculs V3 inchangés.
+
+### Tests
+- Exécutés : frontend complet 41 suites / 1618 tests OK (inclut C412–C416, FR/EN/ES, FREE/Trial/Premium); `npm run build` OK; backend `test_workout_intelligence_v3.py` + `test_narrative_coach_v3.py` : 398 OK, dont un test avec flag activé et transport espionné (0 appel).
+- Simulés : mobile 390 px (jsdom, pas de rendu navigateur); transport LLM mocké.
+- Impossibles : valeur réelle du flag sur l'aperçu; appels LLM réels; rendu visuel réel.
+
+### Risques résiduels
+- Un client tiers sans `deterministic=true` conserve l'ancien comportement (voulu).
+- Qualité rédactionnelle des réponses IA du Chat non vérifiée.
+
+**Verdict : GO MERGE** (relecture humaine requise; garantie « aucun appel IA » valable pour la fiche, non vérifiable sur la config réelle).
