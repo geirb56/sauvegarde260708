@@ -419,3 +419,93 @@ async def test_english_rendering_is_complete():
 @pytest.mark.parametrize("message", ["after-clear-7-1", "10-20 km facile", "rendez-vous à 7:21", "j'ai couru 5.2 km"])
 async def test_ordinary_text_is_not_mistaken_for_a_date(message):
     assert not [s for s in cac.parse_message(message, TODAY)["selectors"] if s["type"] == "date"]
+
+
+# ---------------------------------------------------------------- C415 — "the one before" anchors on the named date
+
+def _oct10():
+    return _run("wC", "2026-10-10T07:00:00", 8.0, 55, 412, 140)
+
+
+@pytest.mark.parametrize("language,message", [
+    ("fr", "Compare ma séance du 12 octobre avec celle d'avant."),
+    ("en", "Compare my run on October 12 with the one before."),
+    ("es", "Compara mi sesión del 12 de octubre con la anterior."),
+])
+async def test_named_date_and_its_previous_run_ignore_the_opened_activity(language, message):
+    db = _db(A(), B(), _oct10())
+    turn = await cac.resolve_turn(db=db, user_id="user-a", message=message, language=language,
+                                  today=TODAY, memory=None, selected_id="wB")
+    assert turn["kind"] == "compare"
+    assert {a["id"] for a in turn["contract"]["activities"]} == {"wA", "wC"}
+    assert "wB" not in turn["refs"]["workout_ids"] and turn["refs"]["primary"] == "wA"
+
+
+async def test_previous_of_a_named_date_is_chronological_and_user_scoped():
+    other = _run("wX", "2026-10-11T07:00:00", 5.0, 30, 360, 130, user="user-b")
+    db = _db(A(), B(), _oct10(), other)
+    turn = await _turn(db, "Compare ma séance du 12 octobre avec celle d'avant.")
+    assert {a["id"] for a in turn["contract"]["activities"]} == {"wA", "wC"}
+
+
+async def test_previous_of_a_named_date_without_earlier_run_says_so():
+    turn = await _turn(_db(B()), "Compare ma séance du 13 septembre avec celle d'avant.")
+    assert turn["kind"] == "reply" and "avant le" in turn["text"]
+
+
+async def test_previous_of_an_unknown_date_invents_nothing():
+    turn = await _turn(_db(A(), B()), "Compare ma séance du 20 octobre avec celle d'avant.")
+    assert turn["kind"] == "reply" and "aucune course le" in turn["text"]
+
+
+async def test_previous_of_a_date_with_two_runs_asks_then_pairs_chronologically():
+    morning = _run("m1", "2026-10-12T07:00:00", 5.0, 30, 360, 130)
+    evening = _run("m2", "2026-10-12T18:00:00", 6.0, 36, 360, 132)
+    db = _db(morning, evening, _oct10())
+    first = await _turn(db, "Compare ma séance du 12 octobre avec celle d'avant.")
+    assert first["kind"] == "reply" and first["refs"]["pending"]["intent"]["action"] == "before"
+    second = await _turn(db, "la 2", memory=first["refs"])
+    assert {a["id"] for a in second["contract"]["activities"]} == {"m1", "m2"}
+    assert second["refs"]["primary"] == "m2"
+
+
+async def test_last_versus_previous_behaviour_is_unchanged():
+    turn = await _turn(_db(A(), B(), _oct10()), "Compare ma dernière sortie avec la précédente.")
+    assert {a["id"] for a in turn["contract"]["activities"]} == {"wA", "wC"}
+
+
+# ---------------------------------------------------------------- C415 review — pair kept while another workout is opened
+
+async def _pair_AC_with_B_open():
+    db = _db(A(), B(), _oct10())
+    first = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=None,
+                                   message="Compare ma séance du 12 octobre avec celle du 10 octobre.",
+                                   selected_id="wB")
+    assert first["kind"] == "compare" and set(first["refs"]["workout_ids"]) == {"wA", "wC"}
+    return db, first
+
+
+async def test_followup_keeps_explicit_pair_when_another_workout_is_opened():
+    db, first = await _pair_AC_with_B_open()
+    turn = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=first["refs"],
+                                  message="Et au niveau du cardio ?", selected_id="wB")
+    assert turn["kind"] != "single"
+    assert set(turn["refs"]["workout_ids"]) == {"wA", "wC"} and "wB" not in turn["refs"]["workout_ids"]
+
+
+async def test_explicit_new_activity_replaces_the_kept_pair():
+    db, first = await _pair_AC_with_B_open()
+    db.workouts._docs.append(_run("wD", "2026-10-01T07:00:00", 6.0, 40, 400, 138))
+    turn = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=first["refs"],
+                                  message="Et celle du 1er octobre ?", selected_id="wB")
+    assert set(turn["refs"]["workout_ids"]) == {"wB", "wD"}
+
+
+async def test_topic_change_or_missing_memory_never_resurrects_the_pair():
+    db, first = await _pair_AC_with_B_open()
+    alone = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=None,
+                                   message="Et au niveau du cardio ?", selected_id="wB")
+    assert "wA" not in (alone.get("refs") or {}).get("workout_ids", [])
+    changed = await cac.resolve_turn(db=db, user_id="user-a", language="fr", today=TODAY, memory=first["refs"],
+                                     message="Autre sujet : que manger avant une course ?", selected_id="wB")
+    assert "wA" not in (changed.get("refs") or {}).get("workout_ids", [])

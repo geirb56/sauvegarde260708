@@ -303,11 +303,13 @@ export const translations = {
     
     // Coach
     coach: {
-      title: "Coach",
+      title: "RunIndex Coach",
       subtitle: "Your RunIndex coach",
       placeholder: "Ask your coach…",
       replyLabel: "RunIndex Coach",
       activeWorkout: "This workout",
+      workoutFallback: "Workout",
+      generalConversation: "General conversation",
       closeContext: "Close workout context",
       backToWorkout: "Back to workout",
       workoutNotFound: "This workout is not accessible. Open it again from your sessions list.",
@@ -787,7 +789,7 @@ export const translations = {
       sessionDetailViewAnalysis: "View analysis",
     },
     workoutNarrative: {
-      coach: "The Coach",
+      coach: "Session analysis",
       evidence: "What the data shows",
       details: "Explore session details",
       type: "Session type",
@@ -1011,7 +1013,7 @@ export const translations = {
 
   fr: {
     workoutNarrative: {
-      coach: "Le Coach",
+      coach: "Analyse de séance",
       evidence: "Ce que montrent les données",
       details: "Explorer les détails de la séance",
       type: "Type de séance",
@@ -1343,11 +1345,13 @@ export const translations = {
 
     // Coach
     coach: {
-      title: "Coach",
+      title: "Coach RunIndex",
       subtitle: "Ton entraîneur RunIndex",
       placeholder: "Pose une question à ton coach…",
       replyLabel: "Coach RunIndex",
       activeWorkout: "Cette séance",
+      workoutFallback: "Séance",
+      generalConversation: "Conversation générale",
       closeContext: "Fermer le contexte de séance",
       backToWorkout: "Retour à la séance",
       workoutNotFound: "Cette séance n'est pas accessible. Rouvrez-la depuis votre liste de séances.",
@@ -2018,7 +2022,7 @@ export const translations = {
   // Spanish
   es: {
     workoutNarrative: {
-      coach: "El Coach",
+      coach: "Análisis de la sesión",
       evidence: "Lo que muestran los datos",
       details: "Explorar los detalles de la sesión",
       type: "Tipo de sesión",
@@ -2321,11 +2325,13 @@ export const translations = {
       askCoach: "Preguntar al coach",
     },
     coach: {
-      title: "Coach",
+      title: "Coach RunIndex",
       subtitle: "Tu entrenador RunIndex",
       placeholder: "Pregunta a tu coach…",
       replyLabel: "Coach RunIndex",
       activeWorkout: "Esta sesión",
+      workoutFallback: "Sesión",
+      generalConversation: "Conversación general",
       closeContext: "Cerrar el contexto de la sesión",
       backToWorkout: "Volver a la sesión",
       workoutNotFound: "Esta sesión no es accesible. Ábrela de nuevo desde tu lista de sesiones.",

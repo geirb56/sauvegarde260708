@@ -282,6 +282,12 @@ def parse_message(message: str, today: date) -> dict:
         # A planning question is for the Coach / Training Engine, never a lookup of a performed activity.
         dates, history = [], None
     selectors: list[dict] = [{"type": "date", "date": d} for d in dates]
+    # "Compare my 12 October run with the one before": the reference of "before" is the named date,
+    # never the opened activity.
+    before_date = bool(len(dates) == 1 and history is None and not last_vs_previous and not planning
+                       and _COMPARE_RE.search(text) and _PREVIOUS_RE.search(text))
+    if before_date:
+        selectors.append({"type": "before", "date": dates[0]})
     if not selectors and not planning:
         km = _KM_RE.search(text)
         if last_vs_previous:
@@ -307,6 +313,7 @@ def parse_message(message: str, today: date) -> dict:
     return {
         "text": text,
         "selectors": selectors,
+        "before_date": before_date,
         "compare": bool(_COMPARE_RE.search(text)),
         "history": history,
         "anaphora": bool(_ANAPHORA_RE.search(text)),
@@ -408,6 +415,26 @@ async def _latest_runs(db: Any, user_id: str, km: Optional[tuple], limit: int = 
         docs = [d for d in docs if _positive(d.get("distance_km")) is not None
                 and km[0] <= float(d["distance_km"]) <= km[1]]
     return docs[:limit]
+
+
+async def _previous_run(db: Any, user_id: str, workout: dict) -> Optional[dict]:
+    """The recorded run immediately before `workout` (strictly earlier), whatever the opened activity."""
+    docs = await (
+        db.workouts.find({"user_id": user_id, "type": "run", "date": {"$lt": workout["date"]}}, _PROJECTION)
+        .sort("date", -1).limit(5).to_list(5)
+    )
+    docs = [d for d in docs if d.get("user_id") == user_id and _day(d.get("date"))
+            and d.get("id") != workout.get("id")]
+    return docs[0] if docs else None
+
+
+async def _before_pair(db: Any, user_id: str, workout: dict, language: str, today: date,
+                       focus: Optional[str], why: bool) -> dict:
+    previous = await _previous_run(db, user_id, workout)
+    if previous is None:
+        return _reply(t("c_none_before", language, d=_date_label(_day(workout["date"]), language, today,
+                                                                  prefix=False)), None)
+    return await _pair_response(db, user_id, [workout["id"], previous["id"]], language, today, focus, why)
 
 
 async def load_activity_facts(db: Any, user_id: str, workout_id: str) -> Optional[dict]:
@@ -1124,7 +1151,7 @@ def clean_memory(memory: Any) -> Optional[dict]:
         choices = [{"id": c["id"], "date": c.get("date") if isinstance(c.get("date"), str) else None}
                    for c in pending["choices"] if isinstance(c, dict) and isinstance(c.get("id"), str)]
         intent = pending.get("intent") if isinstance(pending.get("intent"), dict) else {}
-        action = intent.get("action") if intent.get("action") in ("history", "pair", "single") else None
+        action = intent.get("action") if intent.get("action") in ("history", "pair", "single", "before") else None
         history = intent.get("history")
         if action == "history" and not (isinstance(history, dict) and history.get("kind") in
                                         ("long", "similar", "recent") and isinstance(history.get("count"), int)):
@@ -1187,7 +1214,9 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
 
     if selected_id is not None:
         # The opened activity is the first reference; a pair already built in this scope may be followed up.
-        keeps_pair = (mem_kind == "pair" and selected_id in ids and len(ids) == 2
+        # The memory is already limited to this user/scope/TTL and cleared on topic change, so an explicit
+        # A <-> C pair survives follow-ups even though the opened activity B is neither of them.
+        keeps_pair = (mem_kind == "pair" and len(ids) == 2 and not p["topic_change"]
                       and not (selectors or p["history"] is not None))
         keeps_history = (mem_kind == "history" and ids == [selected_id] and not selectors)
         if not (keeps_pair or keeps_history):
@@ -1203,6 +1232,12 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
             intent = pending.get("intent") if isinstance(pending.get("intent"), dict) else {}
             others = [i for i in intent.get("others", []) if isinstance(i, str)]
             history = intent.get("history")
+            if intent.get("action") == "before":
+                picked = await db.workouts.find_one({"id": choice["id"], "user_id": user_id}, _PROJECTION)
+                if picked is None or picked.get("user_id") != user_id or not _day(picked.get("date")):
+                    return _reply(_clarify_text(language, "referent", today), None)
+                return await _before_pair(db, user_id, picked, language, today,
+                                          intent.get("focus"), bool(intent.get("why")))
             if intent.get("action") == "history" and isinstance(history, dict):
                 return await _history_turn(db, user_id, choice["id"], history, language, today)
             if others:
@@ -1244,6 +1279,18 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
                 return await _history_reference_choices(db, user_id, p["history"], language, today)
             return _reply(_clarify_text(language, "referent", today), None)
         return await _history_turn(db, user_id, ref_id, p["history"], language, today)
+
+    # C0) "<named date> versus the one before it": the named date alone anchors the comparison
+    if p["before_date"]:
+        named = next(sel for sel in selectors if sel["type"] == "date")
+        resolved = await _resolve_selector(db, user_id, named, language, today)
+        if "workout" not in resolved:
+            if resolved.get("choices"):
+                return _reply(resolved["reply"], _refs("single", [], pending=_pending(
+                    resolved["choices"], {"action": "before", "focus": p["focus"], "why": p["why"]},
+                    resolved["reply"])))
+            return _reply(resolved["reply"], None)
+        return await _before_pair(db, user_id, resolved["workout"], language, today, p["focus"], p["why"])
 
     # C) comparison of two sessions
     if compare or (p["both"] and len(ids) == 2):

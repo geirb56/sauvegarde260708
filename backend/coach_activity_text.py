@@ -238,6 +238,10 @@ _T = {
         "Je ne trouve aucune course le {d} dans tes activités importées.",
         "I can't find any run on {d} in your imported activities.",
         "No encuentro ninguna carrera el {d} en tus actividades importadas."),
+    "c_none_before": (
+        "Je ne trouve aucune course enregistrée avant le {d} dans tes activités importées.",
+        "I can't find any recorded run before {d} in your imported activities.",
+        "No encuentro ninguna carrera registrada antes del {d} en tus actividades importadas."),
     "c_none": (
         "Je ne trouve aucune course correspondante dans tes activités importées.",
         "I can't find any run matching that in your imported activities.",

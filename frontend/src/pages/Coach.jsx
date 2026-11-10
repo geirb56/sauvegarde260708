@@ -12,6 +12,17 @@ import { useLanguage } from "@/context/LanguageContext";
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
+function workoutMetaFrom(data) {
+  const { name, distance_km, date } = data || {};
+  return {
+    ...(typeof name === "string" && name.trim() ? { name } : {}),
+    ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
+    ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
+  };
+}
+
+const BOTTOM_THRESHOLD_PX = 80;
+
 function coachFailureKey(error) {
   const status = error?.response?.status;
   if (status === 404) return "coach.workoutNotFound";
@@ -34,7 +45,12 @@ export default function Coach() {
   const [activeWorkoutId, setActiveWorkoutId] = useState(null);
   const [activeWorkoutMetadata, setActiveWorkoutMetadata] = useState(null);
   const activeWorkoutRef = useRef(null);
-  const scrollRef = useRef(null);
+  const viewportRef = useRef(null);
+  // Follow new messages only while the reader is at the bottom; sending or opening history forces it.
+  const stickToBottomRef = useRef(true);
+  const forceScrollRef = useRef(false);
+  const [workoutMetaById, setWorkoutMetaById] = useState({});
+  const requestedMetaRef = useRef(new Set());
   const inputRef = useRef(null);
   const { t, lang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -48,6 +64,7 @@ export default function Coach() {
       try {
         const res = await axios.get(`${API}/coach/history?limit=50`);
         setHistoryLoadError(false);
+        forceScrollRef.current = true;
         setMessages(res.data.map(msg => ({
           role: msg.role,
           content: msg.content,
@@ -61,14 +78,12 @@ export default function Coach() {
           activeWorkoutRef.current = lastWorkoutId;
           setActiveWorkoutId(lastWorkoutId);
           setActiveWorkoutMetadata({});
+          requestedMetaRef.current.add(lastWorkoutId);
           axios.get(`${API}/workouts/${lastWorkoutId}`).then(({ data }) => {
+            const metadata = workoutMetaFrom(data);
+            setWorkoutMetaById(current => ({ ...current, [lastWorkoutId]: metadata }));
             if (activeWorkoutRef.current !== lastWorkoutId) return;
-            const { name, distance_km, date } = data;
-            setActiveWorkoutMetadata({
-              ...(typeof name === "string" && name.trim() ? { name } : {}),
-              ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
-              ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
-            });
+            setActiveWorkoutMetadata(metadata);
           }).catch(() => {});
         }
       } catch (error) {
@@ -97,16 +112,50 @@ export default function Coach() {
     }
   }, [searchParams, initialLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Scroll to bottom on new messages
+  // The scrollable element is the Radix viewport, not the Root.
+  const handleViewportScroll = () => {
+    const el = viewportRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX;
+  };
+
+  const scrollToBottom = () => {
+    const el = viewportRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickToBottomRef.current = true;
+  };
+
   useEffect(() => {
-    if (scrollRef.current?.scrollTo) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    if (forceScrollRef.current || stickToBottomRef.current) {
+      forceScrollRef.current = false;
+      scrollToBottom();
+    }
+  }, [messages, loading, initialLoading]);
+
+  // Label every conversation segment with its workout, without refetching known ones.
+  useEffect(() => {
+    for (const id of new Set(messages.map(msg => msg.workout_id).filter(Boolean))) {
+      if (requestedMetaRef.current.has(id)) continue;
+      requestedMetaRef.current.add(id);
+      axios.get(`${API}/workouts/${id}`)
+        .then(({ data }) => setWorkoutMetaById(current => ({ ...current, [id]: workoutMetaFrom(data) })))
+        .catch(() => {});
     }
   }, [messages]);
+
+  const formatWorkoutLabel = (meta) => [
+    meta?.name,
+    meta?.distance_km != null
+      ? `${meta.distance_km.toLocaleString(lang, { maximumFractionDigits: 2 })} km`
+      : null,
+    meta?.date ? new Date(meta.date).toLocaleDateString(lang, { timeZone: "UTC" }) : null,
+  ].filter(part => part != null).join(" · ");
 
   const triggerWorkoutAnalysis = async (workoutId) => {
     const seq = ++requestSeq.current;
     const isCurrent = () => requestSeq.current === seq;
+    forceScrollRef.current = true;
     activeWorkoutRef.current = workoutId;
     setActiveWorkoutId(workoutId);
     setActiveWorkoutMetadata({});
@@ -118,12 +167,9 @@ export default function Coach() {
     try {
       const workoutRes = await axios.get(`${API}/workouts/${workoutId}`);
       workoutName = workoutRes.data.name || workoutId;
-      const { name, distance_km, date } = workoutRes.data;
-      const metadata = {
-        ...(typeof name === "string" && name.trim() ? { name } : {}),
-        ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
-        ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
-      };
+      const metadata = workoutMetaFrom(workoutRes.data);
+      requestedMetaRef.current.add(workoutId);
+      setWorkoutMetaById(current => ({ ...current, [workoutId]: metadata }));
       if (isCurrent() && activeWorkoutRef.current === workoutId) {
         setActiveWorkoutMetadata(current => current === null ? null : metadata);
       }
@@ -182,6 +228,7 @@ export default function Coach() {
     const seq = ++requestSeq.current;
     const isCurrent = () => requestSeq.current === seq;
     setInput("");
+    forceScrollRef.current = true;
     setMessages(prev => [...prev, {
       role: "user",
       content: userMessage,
@@ -304,7 +351,7 @@ export default function Coach() {
       </div>
 
       {activeWorkoutId && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2 md:px-8" data-testid="coach-workout-context">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2 md:px-8" data-testid="coach-workout-context" data-workout-id={activeWorkoutId}>
           <p className="min-w-0 flex-1 break-words text-sm text-muted-foreground">
             {workoutContextParts.length ? workoutContextParts.join(" · ") : t("coach.activeWorkout")}
           </p>
@@ -332,7 +379,7 @@ export default function Coach() {
       )}
 
       {/* Messages Area */}
-      <ScrollArea ref={scrollRef} className="min-h-0 flex-1 p-4 md:p-8">
+      <ScrollArea viewportRef={viewportRef} onViewportScroll={handleViewportScroll} className="min-h-0 flex-1 p-4 md:p-8">
         {historyLoadError && messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center py-12" data-testid="coach-history-load-error">
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
@@ -364,9 +411,27 @@ export default function Coach() {
           </div>
         ) : (
           <div className="space-y-6 pb-4">
-            {messages.map((msg, idx) => (
+            {messages.map((msg, idx) => {
+              const wid = msg.workout_id || null;
+              const previousWid = idx > 0 ? messages[idx - 1].workout_id || null : null;
+              const separatorLabel = wid
+                ? formatWorkoutLabel(workoutMetaById[wid]) || t("coach.workoutFallback")
+                : t("coach.generalConversation");
+              return (
+              <div key={idx}>
+              {(wid !== previousWid) && (idx > 0 || wid) && (
+                <div
+                  role="separator"
+                  className="mb-4 flex items-center gap-3 text-xs text-muted-foreground"
+                  data-testid="coach-workout-separator"
+                  data-workout-id={wid || ""}
+                >
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="min-w-0 max-w-[80%] break-words text-center">{separatorLabel}</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              )}
               <div 
-                key={idx} 
                 className={`animate-in ${msg.role === "user" ? "text-right" : ""}`}
                 data-testid={`message-${idx}`}
                 data-workout-id={msg.workout_id}
@@ -410,7 +475,9 @@ export default function Coach() {
                   </div>
                 )}
               </div>
-            ))}
+              </div>
+              );
+            })}
             {loading && (
               <div className="animate-in">
                 <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
@@ -440,6 +507,7 @@ export default function Coach() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => { forceScrollRef.current = true; setTimeout(scrollToBottom, 300); }}
             placeholder={t("coach.placeholder")}
             aria-label={t("coach.placeholder")}
             className="flex-1 min-w-0 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-2xl font-sans text-sm"
