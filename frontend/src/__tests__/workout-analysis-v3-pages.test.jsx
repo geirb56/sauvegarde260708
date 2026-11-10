@@ -297,7 +297,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(narrative).not.toHaveTextContent("Private deterministic diagnosis.");
     expect(narrative).not.toHaveTextContent(/recommendation|recommandation|recomendación/i);
     expect(screen.queryByTestId("narrative-recommendation")).not.toBeInTheDocument();
-    expect(narrative.querySelector("ul")).toBeNull();
+    expect(screen.queryByTestId("workout-limitations")).toBeNull();
 
     const evidence = screen.getByTestId("workout-evidence");
     expect(evidence).toHaveTextContent("6");
@@ -439,8 +439,8 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page, language);
     await screen.findByTestId("workout-facts");
     const evidence = screen.getByTestId("workout-evidence");
-    expect(evidence).toHaveTextContent(copy[language].insufficient);
-    expect(evidence).toHaveTextContent(translations[language].workoutNarrative.insufficientHistory);
+    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
+    expect(screen.getByTestId("reference-populations")).toHaveTextContent(translations[language].workoutNarrative.insufficientHistory);
     expect(evidence).not.toHaveTextContent(copy[language].improvement);
     expect(evidence).not.toHaveTextContent(/insufficient_data|NaN|undefined/);
   });
@@ -575,9 +575,10 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     });
     mockRequests({ analysis, intelligence });
     renderPage(route, path, Page);
-    expect(await screen.findByTestId("workout-evidence")).toHaveTextContent("7");
+    expect(await screen.findByTestId("workout-evidence")).toHaveTextContent(translations.en.workoutNarrative.easy_run_probable);
     expect(document.body.textContent).toMatch(/150/);
     fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
+    expect(screen.getByTestId("reference-populations")).toHaveTextContent("7 comparable sessions");
     expect(screen.getByTestId("narrative-comparisons")).toHaveTextContent("5");
   });
 
@@ -610,10 +611,10 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     await waitFor(() => expectIndependentRequests());
     fireEvent.click(screen.getByRole("button", { name: "Switch test language" }));
-    expect(await screen.findByText(translations.es.workoutNarrative.type)).toBeVisible();
+    expect(await screen.findByText(translations.es.workoutNarrative.structure)).toBeVisible();
     await act(async () => { stale.resolve({ data: makeIntelligence("en") }); });
-    expect(screen.getByTestId("workout-facts")).toHaveTextContent(translations.es.workoutNarrative.type);
-    expect(screen.queryByText(translations.en.workoutNarrative.type)).not.toBeInTheDocument();
+    expect(screen.getByTestId("workout-facts")).toHaveTextContent(translations.es.workoutNarrative.structure);
+    expect(screen.queryByText(translations.en.workoutNarrative.structure)).not.toBeInTheDocument();
     expectIndependentRequests("w1", "es");
   });
 
@@ -958,5 +959,136 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     await act(async () => { stale.resolve({ data: makeAnalysis() }); });
     expect(screen.getByTestId("meaning-text")).toHaveTextContent("Conclusión actual.");
     expect(screen.queryByText(legacyMeaning)).not.toBeInTheDocument();
+  });
+});
+
+// C417: consolidated WorkoutDetail presentation (markers, one limitation, Coach access, details).
+describe("WorkoutDetail C417 consolidation", () => {
+  const paceText = "21.4 s/km faster than five earlier sessions. Recorded average pace: 6:06/km, versus 6:27/km for these references.";
+  const historyLimitEn = "This difference describes these sessions; it cannot alone establish a change in fitness or judge execution.";
+  const traceLimitEn = "Historical comparisons are observational, not proof of a physiological change.";
+  const synthesisWith = (limitations = []) => ({
+    version: "v2", status: "available",
+    primary: {
+      code: "coach.history.pace", text: paceText, kind: "observation",
+      evidence: { pace_sample_count: 5, pace_difference_sec_per_km: -21.4, baseline_pace_min_km: 6.45, current_pace_min_km: 6.1 },
+      source_paths: ["coach_language.conclusions[0]"], replaces_factual_codes: [],
+    },
+    supporting: [], limitations, abstention: null,
+  });
+  const continuousIntelligence = (limitations = []) => {
+    const intelligence = makeIntelligence("en", {
+      session_classification: {
+        type: "easy_run_probable", confidence: "medium", evidence: {},
+        relative_effort: { status: "used", relative_position: "low", reference_count: 25 },
+      },
+      historical_comparison: {
+        status: "available", comparability: "moderate", reference_count: 3, window_days: 90,
+        pace_at_comparable_hr: { reference_count: 0 }, hr_at_comparable_pace: { reference_count: 0 },
+      },
+    });
+    intelligence.narrative_coach_v3.limitations = limitations;
+    return intelligence;
+  };
+  const open = async (analysis, intelligence, language = "en") => {
+    mockRequests({ analysis, intelligence });
+    renderPage("/workout/w1", "/workout/:id", WorkoutDetail, language);
+    await screen.findByTestId("workout-facts");
+    await screen.findByTestId("ask-coach-btn");
+  };
+  const analysisWith = (synthesis) => ({ ...makeAnalysis(), session_synthesis: synthesis });
+
+  test("shows an equivalent V2/V3 limitation once, with both provenances kept", async () => {
+    await open(
+      analysisWith(synthesisWith([{ code: "synthesis.history_descriptive", text: historyLimitEn, source_paths: ["coach_language.conclusions[0]"] }])),
+      continuousIntelligence([traceLimitEn]),
+    );
+    expect(screen.getByTestId("workout-limitations")).toHaveTextContent(historyLimitEn);
+    expect(screen.queryByText(traceLimitEn)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-limitations-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
+  });
+
+  test("shows a strictly identical limitation once", async () => {
+    await open(analysisWith(synthesisWith([{ code: "x.same", text: "Same limit.", source_paths: [] }])), continuousIntelligence(["Same limit."]));
+    expect(screen.getAllByText("Same limit.")).toHaveLength(1);
+  });
+
+  test("keeps different limitations: one in the main flow, the rest in the details", async () => {
+    await open(
+      analysisWith(synthesisWith([{ code: "synthesis.hr_observation", text: "HR limit.", source_paths: [] }])),
+      continuousIntelligence(["Different V3 limit."]),
+    );
+    expect(screen.getByTestId("workout-limitations")).toHaveTextContent("HR limit.");
+    const details = screen.getByTestId("workout-analysis-details");
+    expect(within(details).getByTestId("workout-limitations-details")).toHaveTextContent("Different V3 limit.");
+    expect(screen.getAllByText("HR limit.")).toHaveLength(1);
+  });
+
+  test("never repeats the primary observation and keeps it out of any synthesis card", async () => {
+    await open(analysisWith(synthesisWith()), continuousIntelligence());
+    expect(screen.getAllByText(paceText)).toHaveLength(1);
+    expect(screen.getByTestId("workout-evidence")).toHaveTextContent(paceText);
+    expect(screen.getAllByTestId("session-marker").length).toBeLessThanOrEqual(3);
+    expect(screen.queryByTestId("synthesis-primary")).not.toBeInTheDocument();
+  });
+
+  test("places the Coach button before the long technical sections and keeps its URL", async () => {
+    await open(analysisWith(synthesisWith()), continuousIntelligence());
+    const button = screen.getByTestId("ask-coach-btn");
+    expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
+    const details = screen.getByTestId("workout-analysis-details");
+    expect(details).not.toHaveAttribute("open");
+    expect(button.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("workout-evidence").compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(details).toContainElement(screen.getByTestId("kilometer-splits"));
+  });
+
+  test("keeps reference populations distinct and unchanged in the details", async () => {
+    await open(analysisWith(synthesisWith()), continuousIntelligence());
+    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
+    const references = screen.getByTestId("reference-populations");
+    expect(references).toHaveTextContent("25 reference sessions");
+    expect(references).toHaveTextContent("3 comparable sessions");
+    expect(references).toHaveTextContent("5 earlier sessions");
+    expect(references).toHaveTextContent(translations.en.workoutNarrative.referencesNote);
+    expect(references.textContent).not.toMatch(/33|\b8\b/);
+  });
+
+  test("excludes interpretations and narrative prose, and never calls the AI on open", async () => {
+    const synthesis = synthesisWith();
+    synthesis.supporting = [{
+      code: "coach.interpretation", text: "Validated interpretation text.", kind: "interpretation",
+      evidence: { value: 1 }, source_paths: ["x"], replaces_factual_codes: [],
+    }];
+    await open(analysisWith(synthesis), continuousIntelligence());
+    expect(screen.queryByText("Validated interpretation text.")).not.toBeInTheDocument();
+    expectNoNarrativeProse();
+    expect(axios.post).not.toHaveBeenCalled();
+    axios.get.mock.calls.forEach(([url]) => expect(url).not.toMatch(/ai|llm|comment/i));
+  });
+
+  test("shows limitations without observation, with the Coach button and no empty card", async () => {
+    const synthesis = {
+      version: "v2", status: "insufficient", primary: null, supporting: [],
+      limitations: [{ code: "synthesis.hr_observation", text: "Only limit.", source_paths: [] }],
+      abstention: "Nothing relevant to describe.",
+    };
+    const intelligence = makeIntelligence("en");
+    delete intelligence.workout_intelligence_v3;
+    delete intelligence.narrative_coach_v3;
+    mockRequests({ analysis: analysisWith(synthesis), intelligence });
+    renderPage("/workout/w1", "/workout/:id", WorkoutDetail);
+    expect(await screen.findByTestId("workout-limitations")).toHaveTextContent("Only limit.");
+    expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
+    expect(screen.queryByTestId("workout-evidence")).not.toBeInTheDocument();
+    expect(screen.getByTestId("synthesis-abstention")).toBeInTheDocument();
+  });
+
+  test.each(languages)("still shows one Coach button when V3 is unavailable in %s", async (language) => {
+    mockRequests({ rejectV3: true });
+    renderPage("/workout/w1", "/workout/:id", WorkoutDetail, language);
+    expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
+    expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
   });
 });

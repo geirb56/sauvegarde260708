@@ -32,7 +32,7 @@ test.each([
 test("keeps every narrative limitation visible on the sheet", () => {
   renderIt({ narrative_coach_v3: narrative, workout_intelligence_v3: facts });
   expect(screen.getByTestId("workout-limitations")).toHaveTextContent("LIMIT ONE");
-  expect(screen.getByTestId("workout-limitations")).toHaveTextContent("LIMIT TWO");
+  expect(screen.getByTestId("workout-limitations-details")).toHaveTextContent("LIMIT TWO");
 });
 
 test("renders nothing without facts or valid narrative", () => {

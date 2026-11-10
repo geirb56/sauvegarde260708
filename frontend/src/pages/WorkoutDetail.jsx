@@ -196,12 +196,13 @@ export default function WorkoutDetail() {
   const [synthesisPrimary, ...synthesisSupport] = synthesisItems;
   const synthesisLimitations = synthesis?.limitations || [];
   const hasAvailableSynthesis = synthesis?.status === "available" && synthesisItems.length > 0;
-  const synthesisLabel = (item) => item.kind
-    ? <span className="block text-xs text-muted-foreground">{t(`workoutDetailExtended.synthesis${item.kind === "interpretation" ? "Interpretation" : "Observation"}`)}</span>
-    : null;
+  // Validated V2 content is folded into the factual markers/details of WorkoutFacts (no separate card).
+  const synthesisForFacts = { items: hasAvailableSynthesis ? synthesisItems : [], limitations: synthesisLimitations };
+  const factsRendered = !intelligenceLoading && (hasFacts
+    || synthesisForFacts.items.length > 0 || synthesisForFacts.limitations.length > 0);
   const observations = synthesis ? [] : getAnalysisObservations(analysisForRender, { keepReplaced: true });
   const fallback = synthesis ? null : getAnalysisFallback(analysisForRender, t);
-  const classification = getSessionClassification(analysisForRender, t);
+  const classification = hasFacts ? null : getSessionClassification(analysisForRender, t);
   const intensity = analysisForRender?.signals?.intensity;
   const detailsAvailable = (analysisForRender?.phase_analysis?.available === true
     && getRenderableAnalysisPhases(analysisForRender.phase_analysis).length > 0)
@@ -212,6 +213,17 @@ export default function WorkoutDetail() {
     <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
     <WorkoutKilometerSplits splits={workout.km_splits} workoutType={workout.type} unitSystem={unitSystem} t={t} lang={lang} />
   </>;
+
+  const coachButton = canAccessAnalysis ? (
+    <Button
+      onClick={goToAskCoach}
+      data-testid="ask-coach-btn"
+      className="w-full bg-primary text-primary-foreground hover:bg-primary/90 min-h-11 h-auto py-3 whitespace-normal text-sm flex items-center justify-center gap-2"
+    >
+      <MessageSquare className="w-3.5 h-3.5" />
+      {t("workoutDetailExtended.askCoach")}
+    </Button>
+  ) : null;
 
   return (
     <div className="p-4 pb-24 max-w-3xl mx-auto min-w-0 break-words space-y-5" data-testid="workout-detail">
@@ -265,33 +277,16 @@ export default function WorkoutDetail() {
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
       {intelligenceLoading && <WorkoutCoachPending t={t} />}
       {intelligenceLoading && analysisDetails}
-      {!intelligenceLoading && hasFacts && <WorkoutFacts data={intelligence} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+      {canAccessAnalysis && !factsRendered && coachButton}
+      {!intelligenceLoading && <WorkoutFacts data={canAccessAnalysis ? intelligence : null} lang={lang} t={t} detailsAvailable={detailsAvailable}
+        synthesis={synthesisForFacts} action={coachButton}>
         {analysisDetails}
       </WorkoutFacts>}
       {!intelligenceLoading && <>
-      {hasAvailableSynthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
-        <h2 id="session-synthesis-title" className="text-base font-semibold">{t("workoutDetailExtended.sessionSynthesis")}</h2>
-        <p className="text-sm leading-relaxed" data-testid="synthesis-primary">{synthesisLabel(synthesisPrimary)}<strong>{synthesisPrimary.text}</strong></p>
-        {synthesisSupport.map((item) => <p key={item.code} className="text-sm leading-relaxed" data-testid="synthesis-supporting">{synthesisLabel(item)}{item.text}</p>)}
-        {synthesisLimitations.length > 0 && <div>
-          <h3 className="text-sm font-semibold">{t("workoutDetailExtended.synthesisLimitations")}</h3>
-          <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
-            {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
-          </ul>
-        </div>}
-      </section>}
-      {synthesis && !hasAvailableSynthesis && <>
-        <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
-          {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
-        </p>
-        {synthesisLimitations.length > 0 && <div>
-          <h3 className="text-sm font-semibold">{t("workoutDetailExtended.synthesisLimitations")}</h3>
-          <ul className="space-y-1 text-sm text-muted-foreground" data-testid="synthesis-limitations">
-            {synthesisLimitations.map((item) => <li key={item.code}>{item.text}</li>)}
-          </ul>
-        </div>}
-      </>}
-      {!hasFacts && analysisDetails}
+      {synthesis && !hasAvailableSynthesis && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
+        {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
+      </p>}
+      {!factsRendered && analysisDetails}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
@@ -308,16 +303,6 @@ export default function WorkoutDetail() {
       </section>}
       </>}
 
-      {canAccessAnalysis && <section aria-labelledby="coach-advice-title">
-        <Button
-          onClick={goToAskCoach}
-          data-testid="ask-coach-btn"
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 min-h-11 h-auto py-3 whitespace-normal text-sm flex items-center justify-center gap-2"
-        >
-          <MessageSquare className="w-3.5 h-3.5" />
-          {t("workoutDetailExtended.askCoach")}
-        </Button>
-      </section>}
     </div>
   );
 }
