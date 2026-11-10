@@ -398,17 +398,14 @@ test.each([
     phase_analysis: makeStructuredPhaseAnalysis(),
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
-  const section = await screen.findByTestId("session-synthesis");
-  expect(within(section).getByRole("heading", { name: title })).toBeInTheDocument();
-  expect(within(section).queryByText(translations[language].workoutDetailExtended.synthesisObservation)).not.toBeInTheDocument();
-  expect(within(section).queryByText(translations[language].workoutDetailExtended.synthesisInterpretation)).not.toBeInTheDocument();
+  const section = await screen.findByTestId("workout-evidence");
+  expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: title })).not.toBeInTheDocument();
   expect(screen.getAllByText(text)).toHaveLength(1);
-  expect(within(screen.getByTestId("synthesis-primary")).getByText(text).tagName).toBe("STRONG");
-  const support = screen.getAllByTestId("synthesis-supporting");
-  expect(support.map((item) => item.textContent)).toEqual(supplied.supporting.map((item) => item.text));
-  support.forEach((item) => expect(item.querySelector("strong")).toBeNull());
-  expect(screen.getByTestId("synthesis-primary").compareDocumentPosition(support[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(within(section).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Backend-supplied limitation."]);
+  // The backend order is preserved: primary first, then supporting items (max three markers).
+  const markers = within(section).getAllByTestId("session-marker").map((item) => item.textContent);
+  expect(markers).toEqual([text, ...supplied.supporting.map((item) => item.text)]);
+  expect(screen.getByTestId("workout-limitations")).toHaveTextContent("Backend-supplied limitation.");
   expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
   expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
@@ -417,9 +414,9 @@ test.each([
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
   expect(screen.getByTestId("session-classification")).toBeInTheDocument();
   expect(screen.getByTestId("available-intensity")).toHaveTextContent("Backend intensity.");
-  expect(section.compareDocumentPosition(screen.getByTestId("structured-phase-analysis")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(section.compareDocumentPosition(screen.getByTestId("ask-coach-btn")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByTestId("ask-coach-btn").compareDocumentPosition(screen.getByTestId("structured-phase-analysis")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
-  expect(screen.getByTestId("ask-coach-btn")).toBeInTheDocument();
 });
 
 test.each([
@@ -446,12 +443,7 @@ test.each([
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
 });
 
-test.each(["fr", "en", "es"])("WorkoutDetail labels factual observations and hides interpretations in %s", async (language) => {
-  const labels = {
-    fr: ["Observation factuelle", "Interprétation validée", "Limites"],
-    en: ["Factual observation", "Validated interpretation", "Limitations"],
-    es: ["Observación factual", "Interpretación validada", "Limitaciones"],
-  }[language];
+test.each(["fr", "en", "es"])("WorkoutDetail shows factual observations and hides interpretations in %s", async (language) => {
   mockAxios({ analysisPayload: {
     ...analysis,
     session_synthesis: sessionSynthesis({
@@ -463,15 +455,11 @@ test.each(["fr", "en", "es"])("WorkoutDetail labels factual observations and hid
     }),
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
-  const section = await screen.findByTestId("session-synthesis");
-  expect(within(screen.getByTestId("synthesis-primary")).getByText(labels[0])).toBeInTheDocument();
-  expect(screen.getByTestId("synthesis-primary")).toHaveTextContent("A factual measurement.");
-  expect(screen.queryByText(labels[1])).not.toBeInTheDocument();
-  const support = screen.getAllByTestId("synthesis-supporting");
-  expect(support).toHaveLength(1);
-  expect(support[0]).toHaveTextContent(/^Older untyped narrative\.$/);
-  expect(within(section).getByRole("heading", { name: labels[2] })).toBeInTheDocument();
-  expect(within(section).queryByText("Factual interpretation")).not.toBeInTheDocument();
+  const section = await screen.findByTestId("workout-evidence");
+  expect(within(section).getAllByTestId("session-marker").map((item) => item.textContent))
+    .toEqual(["A factual measurement.", "Older untyped narrative."]);
+  expect(screen.queryByText("Backend-selected primary.")).not.toBeInTheDocument();
+  expect(screen.getByTestId("workout-limitations")).toHaveTextContent("Backend-supplied limitation.");
 });
 
 test.each(["fr", "en", "es"])("WorkoutDetail rejects old recorded totals alone in %s without legacy duplication", async (language) => {
@@ -526,11 +514,9 @@ test.each([
     }] },
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
-  const section = await screen.findByTestId("session-synthesis");
+  const section = await screen.findByTestId("workout-evidence");
   expect(within(section).getByText(text)).toBeInTheDocument();
   expect(screen.getAllByText(limitation)).toHaveLength(1);
-  expect(within(section).getByText(translations[language].workoutDetailExtended.synthesisObservation)).toBeInTheDocument();
-  expect(within(section).queryByText(translations[language].workoutDetailExtended.synthesisInterpretation)).not.toBeInTheDocument();
   expect(screen.getAllByTestId("effort-regularity")).toHaveLength(1);
   expect(within(section).queryByTestId("effort-regularity")).not.toBeInTheDocument();
   expect(screen.queryByText("Legacy dispersion narrative.")).not.toBeInTheDocument();
@@ -552,11 +538,9 @@ test.each(["fr", "en", "es"].flatMap((language) =>
     coach_language: { version: "v1", conclusions: [coachConclusion({ text: totals.text })] },
   } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
-  const section = await screen.findByTestId("session-synthesis");
-  expect(screen.getByTestId("synthesis-primary")).toHaveTextContent(second.text);
-  expect(screen.queryByTestId("synthesis-supporting")).not.toBeInTheDocument();
+  const section = await screen.findByTestId("workout-evidence");
+  expect(within(section).getAllByTestId("session-marker").map((item) => item.textContent)).toEqual([second.text]);
   expect(screen.queryByText(first.text)).not.toBeInTheDocument();
-  expect(section).not.toHaveTextContent(translations[language].workoutDetailExtended.synthesisInterpretation);
   expect(within(section).queryByText(totals.text)).not.toBeInTheDocument();
   expect(screen.queryByText(totals.text)).not.toBeInTheDocument();
   expect(screen.queryByTestId("synthesis-abstention")).not.toBeInTheDocument();
@@ -580,7 +564,9 @@ test.each(["fr", "en", "es"])("WorkoutDetail shows no synthesis card when only i
   expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
   expect(screen.queryByText(primary.text)).not.toBeInTheDocument();
   expect(screen.queryByText(support.text)).not.toBeInTheDocument();
-  expect(screen.getByTestId("synthesis-limitations")).toHaveTextContent(limitation);
+  expect(screen.getByTestId("workout-limitations")).toHaveTextContent(limitation);
+  expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
+  expect(screen.queryByTestId("workout-evidence")).not.toBeInTheDocument();
   expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
 });
 
@@ -594,8 +580,8 @@ test("WorkoutDetail preserves backend limitations with compact insufficient abst
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   expect(await screen.findByTestId("synthesis-abstention")).toHaveTextContent("Not enough evidence.");
   expect(screen.queryByTestId("session-synthesis")).not.toBeInTheDocument();
-  expect(screen.getByTestId("synthesis-limitations")).toHaveTextContent("Backend-supplied limitation.");
-  expect(screen.getByRole("heading", { name: "Limitations" })).toBeInTheDocument();
+  expect(screen.getByTestId("workout-limitations")).toHaveTextContent("Backend-supplied limitation.");
+  expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
 });
 
 test.each(malformedSyntheses)("WorkoutDetail preserves legacy coach rendering for %s synthesis", async (_, supplied) => {
