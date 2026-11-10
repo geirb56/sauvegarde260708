@@ -164,7 +164,7 @@ async function act0() {
 }
 
 // ---- Workout sheet: a single analysis card, no second "Coach" ----
-const NarrativeWorkoutAnalysis = require("@/components/workout/NarrativeWorkoutAnalysis").default;
+const WorkoutFacts = require("@/components/workout/WorkoutFacts").default;
 const { useLanguage } = require("@/context/LanguageContext");
 
 const sheetData = (lang) => ({
@@ -184,7 +184,7 @@ const sheetData = (lang) => ({
 
 function Sheet({ data, lang }) {
   const { t } = useLanguage();
-  return <NarrativeWorkoutAnalysis data={data} lang={lang} t={t} detailsAvailable={false} />;
+  return <WorkoutFacts data={data} lang={lang} t={t} detailsAvailable={false} />;
 }
 
 describe.each([["fr", "Analyse de séance"], ["en", "Session analysis"], ["es", "Análisis de la sesión"]])(
@@ -194,16 +194,17 @@ describe.each([["fr", "Analyse de séance"], ["en", "Session analysis"], ["es", 
       const data = sheetData(lang);
       if (withComment) data.coach_comment = { status: "generated", language: lang, source: "coach_c396", text: "Commentaire" };
       render(<LanguageProvider><Sheet data={data} lang={lang} /></LanguageProvider>);
-      const card = screen.getByTestId("narrative-coach");
-      expect(card).toHaveTextContent(title);
-      expect(card.textContent).not.toMatch(/\b(le|the|el)\s+coach\b/i);
-      expect(screen.queryByText(/^(le |the |el )?coach$/i)).not.toBeInTheDocument();
-      // C388 data is preserved: observations, evidence, comparison, limitations.
+      const card = screen.getByTestId("workout-facts");
+      expect(card).not.toHaveTextContent(title);
+      // C416: narrative prose and coach comment never render on the sheet; facts, comparisons and limits do.
       const all = document.body.textContent;
-      ["C388 HEADLINE", "C388 ANALYSIS", "C388 INTERPRETATION", "LIMIT ONE"].forEach(s => expect(all).toContain(s));
+      ["C388 HEADLINE", "C388 ANALYSIS", "C388 INTERPRETATION", "C388 RECOMMENDATION", "Commentaire"]
+        .forEach(s => expect(all).not.toContain(s));
+      expect(screen.queryByTestId("coach-session-comment")).not.toBeInTheDocument();
       expect(screen.getByTestId("workout-evidence")).toHaveTextContent(/29/);
       expect(screen.getByTestId("workout-evidence")).toHaveTextContent(/6/);
       expect(screen.getByTestId("narrative-comparisons")).toHaveTextContent("-4");
+      expect(all).toContain("LIMIT ONE");
       expect(all).toContain("LIMIT TWO");
     });
   });

@@ -16,18 +16,16 @@ const classificationTypes = [
 ];
 const reliable = (confidence) => ["high", "medium"].includes(confidence);
 
-export const getCoachComment = (data, lang) => {
-  const comment = data?.coach_comment;
-  return comment?.status === "generated" && comment.language === lang
-    && comment.source === "coach_c396" && hasText(comment.text) ? comment.text.trim() : null;
-};
+export const getWorkoutFacts = (data) =>
+  (data?.workout_intelligence_v3?.version === "v3" ? data.workout_intelligence_v3 : null);
 
-export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, children, detailsAvailable = true }) {
+// C416: factual presentation only. The narrative prose (headline, analysis, interpretation,
+// recommendation) and the coach comment stay in the backend contracts and are interpreted in the Coach chat.
+export default function WorkoutFacts({ data, lang, t, children, detailsAvailable = true }) {
   const narrative = getWorkoutNarrative(data, lang);
-  if (!narrative) return null;
-  const coachComment = getCoachComment(data, lang);
+  const facts = getWorkoutFacts(data);
+  if (!facts && !narrative) return null;
 
-  const facts = data?.workout_intelligence_v3?.version === "v3" ? data.workout_intelligence_v3 : null;
   const classification = facts?.session_classification;
   const intensity = facts?.intensity_assessment;
   const history = facts?.historical_comparison;
@@ -62,7 +60,7 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
     && ["probable_improvement", "stable", "possible_decline"].includes(trend.status)) {
     evidence.push(["trend", text(trend.status)]);
   }
-  const limitations = [...new Set((Array.isArray(narrative.limitations) ? narrative.limitations : [])
+  const limitations = [...new Set((Array.isArray(narrative?.limitations) ? narrative.limitations : [])
     .filter(hasText))];
   const comparisonRows = [];
   if (history?.status === "available" && ["strong", "moderate"].includes(history.comparability)) {
@@ -77,22 +75,7 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
   }
 
   return (
-    <div className="min-w-0 space-y-4 break-words">
-      <section className="space-y-3 rounded-xl border border-border bg-card p-4" data-testid="narrative-coach" aria-labelledby="narrative-coach-title">
-        {coachComment
-          ? <>
-            <h2 id="narrative-coach-title" className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{text("coach")}</h2>
-            <p className="text-sm leading-relaxed" data-testid="coach-session-comment">{coachComment}</p>
-          </>
-          : <>
-            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{text("coach")}</p>
-            <h2 id="narrative-coach-title" className="font-heading text-xl font-semibold leading-tight">{narrative.headline}</h2>
-            <p className="text-sm leading-relaxed">{narrative.analysis}</p>
-            <p className="text-sm leading-relaxed">{narrative.interpretation}</p>
-            {hasText(narrative.recommendation) && <p className="text-sm leading-relaxed" data-testid="narrative-recommendation">{narrative.recommendation}</p>}
-          </>}
-        {limitations.length > 0 && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="narrative-limitation">{limitations[0]}</p>}
-      </section>
+    <div className="min-w-0 space-y-4 break-words" data-testid="workout-facts">
       {evidence.length > 0 && <section aria-labelledby="workout-evidence-title" data-testid="workout-evidence">
         <h2 id="workout-evidence-title" className="mb-2 text-base font-semibold">{text("evidence")}</h2>
         <dl className="grid grid-cols-1 gap-x-6 gap-y-3 border-y border-border py-3 sm:grid-cols-2">
@@ -101,24 +84,22 @@ export default function NarrativeWorkoutAnalysis({ data, analysis, lang, t, chil
             <dd className="text-sm font-medium">{value}</dd>
           </div>)}
         </dl>
+        {limitations.length > 0 && <ul className="mt-3 space-y-2 text-sm text-muted-foreground" data-testid="workout-limitations">
+          {limitations.map((item) => <li key={item}>{item}</li>)}
+        </ul>}
       </section>}
-      {(detailsAvailable || coachComment || comparisonRows.length > 0 || limitations.length > 1) && <details className="min-w-0 rounded-xl border border-border p-3" data-testid="workout-analysis-details">
+      {evidence.length === 0 && limitations.length > 0 && <ul className="space-y-2 text-sm text-muted-foreground" data-testid="workout-limitations">
+        {limitations.map((item) => <li key={item}>{item}</li>)}
+      </ul>}
+      {(detailsAvailable || comparisonRows.length > 0) && <details className="min-w-0 rounded-xl border border-border p-3" data-testid="workout-analysis-details">
         <summary className="min-h-11 cursor-pointer text-sm font-medium">{text("details")}</summary>
         <div className="space-y-4 pt-2">
-          {coachComment && <section data-testid="narrative-deterministic-facts" className="space-y-2 text-sm">
-            <p className="font-medium">{narrative.headline}</p>
-            <p>{narrative.analysis}</p>
-            <p>{narrative.interpretation}</p>
-          </section>}
           {children}
           {comparisonRows.length > 0 && <section data-testid="narrative-comparisons">
             <h3 className="mb-2 text-sm font-semibold">{text("history")}</h3>
             <dl className="space-y-2 text-sm">{comparisonRows.map(([key, value]) =>
               <div key={key}><dt className="text-muted-foreground">{text(key)}</dt><dd>{value}</dd></div>)}</dl>
           </section>}
-          {limitations.length > 1 && <ul className="space-y-2 text-sm text-muted-foreground">
-            {limitations.slice(1).map((item) => <li key={item}>{item}</li>)}
-          </ul>}
         </div>
       </details>}
     </div>
