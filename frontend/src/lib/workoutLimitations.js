@@ -25,7 +25,7 @@ export const mergeWorkoutLimitations = ({ synthesis = [], narrative = [] } = {})
     if (!hasText(text)) return;
     const clean = norm(text);
     const cat = category || CATEGORY_BY_TEXT.get(clean) || null;
-    const existing = merged.find((item) => item.text === clean || (cat && item.category === cat));
+    const existing = merged.find((item) => norm(item.text) === clean || (cat && item.category === cat));
     if (existing) {
       if (!existing.sources.includes(source)) existing.sources.push(source);
       return;
