@@ -89,12 +89,12 @@ async def load_scoped_workout_intelligence_v3(
 
 
 async def load_scoped_workout_intelligence_v3_with_narrative(
-    *, db: Any, user_id: str, workout_id: str, language: str,
+    *, db: Any, user_id: str, workout_id: str, language: str, provider_free: bool = False,
 ) -> Optional[tuple[dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3]]:
     """Reuse the same scoped evidence load; narrative failures cannot hide facts."""
     result = await _load_scoped_workout_intelligence_v3(
         db=db, user_id=user_id, workout_id=workout_id, language=language,
-        include_narrative=True,
+        include_narrative=True, provider_free=provider_free,
     )
     return result[:3] if result is not None else None
 
@@ -150,11 +150,18 @@ async def load_scoped_workout_intelligence_v3_with_v2(
     return workout, intelligence, evidence
 
 
+async def _deterministic_async(intelligence, language, **kwargs):
+    from narrative_coach_v3 import deterministic_fallback
+
+    return deterministic_fallback(intelligence, language, **kwargs)
+
+
 async def _load_scoped_workout_intelligence_v3(
     *, db: Any, user_id: str, workout_id: str, language: str,
     physiological_metrics: Optional[dict] = None,
     user_profile: Optional[dict] = None,
     include_narrative: bool = False,
+    provider_free: bool = False,
 ) -> Optional[tuple[
     dict[str, Any], Optional[WorkoutIntelligenceV3], NarrativeCoachV3,
     Optional[WorkoutAnalysisV2Response],
@@ -246,7 +253,8 @@ async def _load_scoped_workout_intelligence_v3(
         try:
             from narrative_coach_v3 import generate_narrative_coach_v3
 
-            narrative = await generate_narrative_coach_v3(
+            # C416: provider_free never reaches the optional LLM editor.
+            narrative = await (generate_narrative_coach_v3 if not provider_free else _deterministic_async)(
                 intelligence, language,
                 phase_analysis=v2_analysis.phase_analysis if v2_analysis is not None else None,
                 coach_language=v2_analysis.coach_language if v2_analysis is not None else None,

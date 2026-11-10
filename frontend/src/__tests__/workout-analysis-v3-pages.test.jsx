@@ -246,11 +246,12 @@ function renderPage(route, path, Page, language = "en") {
   return { ...result, refresh: () => result.rerender(tree()) };
 }
 
-function expectNoLegacyNarrative() {
-  ["coach-language", "session-synthesis", "synthesis-abstention", "meaning-text", "advice-text", "analysis-fallback"]
+// C416: the long Narrative V3 prose never renders on the session page; interpretation lives in the Coach chat.
+function expectNoNarrativeProse() {
+  languages.forEach((language) => ["headline", "analysis", "interpretation"].forEach((field) =>
+    expect(screen.queryByText(copy[language][field], { exact: true })).not.toBeInTheDocument()));
+  ["narrative-coach", "narrative-recommendation", "coach-session-comment", "narrative-deterministic-facts"]
     .forEach((id) => expect(screen.queryByTestId(id)).not.toBeInTheDocument());
-  [legacyText, legacyMeaning, legacyAdvice, legacySynthesis]
-    .forEach((text) => expect(screen.queryByText(text)).not.toBeInTheDocument());
 }
 
 function expectIndependentRequests(id = "w1", language = "en") {
@@ -288,12 +289,10 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     mockRequests({ analysis, intelligence });
     renderPage(route, path, Page, language);
 
-    const narrative = await screen.findByTestId("narrative-coach");
-    expect(within(narrative).getByRole("heading", { name: copy[language].headline })).toBeVisible();
-    expect(within(narrative).getByText(copy[language].analysis, { exact: true })).toBeVisible();
-    expect(within(narrative).getByText(copy[language].interpretation, { exact: true })).toBeVisible();
-    expect(screen.getAllByText(copy[language].headline, { exact: true })).toHaveLength(1);
-    expectNoLegacyNarrative();
+    const narrative = await screen.findByTestId("workout-facts");
+    expect(screen.queryByRole("heading", { name: copy[language].headline })).not.toBeInTheDocument();
+    if (Page === WorkoutDetail) expect(screen.getByText(legacySynthesis)).toBeVisible();
+    expectNoNarrativeProse();
     expect(narrative).not.toHaveTextContent(/deterministic_fallback|llm_validated|evidence_refs|session_classification\.evidence/);
     expect(narrative).not.toHaveTextContent("Private deterministic diagnosis.");
     expect(narrative).not.toHaveTextContent(/recommendation|recommandation|recomendación/i);
@@ -335,7 +334,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
   test.each(languages)("does not invent interval regularity when unavailable in %s", async (language) => {
     mockRequests({ analysis: makeAnalysis(false) });
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     const evidence = screen.getByTestId("workout-evidence");
     expect(evidence).toHaveTextContent("6");
     expect(evidence).toHaveTextContent("5");
@@ -349,7 +348,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     analysis.phase_analysis.effort_regularity.pace_dispersion_sec_per_km = dispersion;
     mockRequests({ analysis });
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     expect(screen.getByTestId("workout-evidence"))
       .not.toHaveTextContent(translations[language].workoutNarrative.regularity);
     expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
@@ -360,7 +359,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     analysis.phase_analysis.effort_regularity.pace_dispersion_sec_per_km = 0;
     mockRequests({ analysis });
     renderPage(route, path, Page);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent("0 s/km");
     expect(screen.getByTestId("effort-regularity")).toHaveTextContent("0 s/km");
   });
@@ -373,7 +372,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       },
     }) });
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     const evidence = screen.getByTestId("workout-evidence");
     expect(evidence).toHaveTextContent(copy[language].probable);
     expect(evidence).toHaveTextContent(translations[language].workoutNarrative.easy_run_probable);
@@ -387,7 +386,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       },
     }) });
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     const evidence = screen.getByTestId("workout-evidence");
     expect(evidence).toHaveTextContent(copy[language].unknown);
     expect(evidence).toHaveTextContent(translations[language].workoutNarrative.unknown);
@@ -411,34 +410,34 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       workoutPayload: { ...workout, name: "Treadmill Run", km_splits: [] },
     });
     renderPage(route, path, Page, language);
-    expect(await screen.findByTestId("narrative-coach")).toBeVisible();
+    expect(await screen.findByTestId("workout-facts")).toBeVisible();
     expect(screen.getByTestId("workout-evidence"))
       .toHaveTextContent(translations[language].workoutNarrative.unknown);
     expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
     expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
     expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
   });
 
-  test.each(languages)("distinguishes a reliable performance trend from a single observation in %s", async (language) => {
+  test.each(languages)("keeps the multi-session trend off the session sheet in %s", async (language) => {
     mockRequests({ intelligence: makeIntelligence(language, {
       performance_trend: {
         status: "probable_improvement", confidence: "high", observation_count: 8,
-        span_days: 42, earlier_median_pace_min_km: 6.2, later_median_pace_min_km: 6,
-        median_change_sec_per_km: -12, variation_confirmed: true,
+        span_days: 42, median_change_sec_per_km: -12, variation_confirmed: true,
       },
     }) });
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
-    expect(screen.getByTestId("workout-evidence")).toHaveTextContent(copy[language].improvement);
-    expect(screen.getByTestId("workout-evidence")).toHaveTextContent(translations[language].workoutNarrative.probable_improvement);
-    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent("probable_improvement");
+    await screen.findByTestId("workout-facts");
+    const w = translations[language].workoutNarrative;
+    const text = document.body.textContent;
+    [w.trend, w.probable_improvement, w.stable, w.possible_decline].forEach((label) => expect(text).not.toContain(label));
+    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(copy[language].improvement);
   });
 
   test.each(languages)("does not fabricate progress from insufficient history in %s", async (language) => {
     mockRequests();
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     const evidence = screen.getByTestId("workout-evidence");
     expect(evidence).toHaveTextContent(copy[language].insufficient);
     expect(evidence).toHaveTextContent(translations[language].workoutNarrative.insufficientHistory);
@@ -446,24 +445,14 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(evidence).not.toHaveTextContent(/insufficient_data|NaN|undefined/);
   });
 
-  test("does not promote a low-confidence trend to reliable progress", async () => {
-    mockRequests({ intelligence: makeIntelligence("en", {
-      performance_trend: { status: "probable_improvement", confidence: "low" },
-    }) });
-    renderPage(route, path, Page);
-    await screen.findByTestId("narrative-coach");
-    expect(screen.getByTestId("workout-evidence"))
-      .not.toHaveTextContent(translations.en.workoutNarrative.probable_improvement);
-  });
-
-  test.each(languages)("retains the V1 fallback when the %s V3 response has no narrative", async (language) => {
+  test.each(languages)("keeps V3 facts and V2 observations when the %s V3 response has no narrative", async (language) => {
     const intelligence = makeIntelligence(language);
     delete intelligence.narrative_coach_v3;
     mockRequests({ intelligence });
     renderPage(route, path, Page, language);
     expect(await screen.findByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
     await waitFor(() => expectIndependentRequests("w1", language));
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("workout-facts")).toBeInTheDocument();
     expect(screen.queryByText("Private deterministic diagnosis.")).not.toBeInTheDocument();
     expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
   });
@@ -475,7 +464,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     ["blank headline", { headline: " " }],
     ["missing analysis", { analysis: "" }],
     ["missing interpretation", { interpretation: "" }],
-  ])("retains V1 when V3 has %s", async (_, update) => {
+  ])("keeps facts and V2 observations when V3 prose has %s", async (_, update) => {
     const intelligence = makeIntelligence();
     intelligence.narrative_coach_v3 = update === null
       ? null : { ...intelligence.narrative_coach_v3, ...update };
@@ -483,7 +472,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     expect(await screen.findByTestId("meaning-text")).toHaveTextContent(legacyMeaning);
     await waitFor(() => expectIndependentRequests());
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("workout-facts")).toBeInTheDocument();
   });
 
   test.each(languages)("keeps the V1 fallback and a discreet localized status after a V3 error in %s", async (language) => {
@@ -494,7 +483,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(status).toHaveTextContent(translations[language].workoutNarrative.unavailable);
     expect(status).not.toHaveTextContent(/Private upstream|Error:|workout-intelligence|HTTP/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
     expect(screen.getByTestId("structured-phase-analysis")).toBeInTheDocument();
     expectIndependentRequests("w1", language);
   });
@@ -509,7 +498,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     await act(async () => {});
     expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-intelligence/"))).toBe(false);
     expect(axios.get.mock.calls.some(([url]) => url.includes("/coach/workout-analysis/"))).toBe(false);
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("workout-evidence")).not.toBeInTheDocument();
     expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
   });
@@ -518,7 +507,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     setAccess({ plan, allowed: true });
     mockRequests();
     renderPage(route, path, Page);
-    expect(await screen.findByTestId("narrative-coach")).toBeInTheDocument();
+    expect(await screen.findByTestId("workout-facts")).toBeInTheDocument();
     expect(useSubscription().hasFeature).toHaveBeenCalledWith("coach_workout_analysis");
     expectIndependentRequests();
   });
@@ -528,15 +517,68 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     mockRequests({ v3Request: () => pending.promise });
     renderPage(route, path, Page, language);
     expect(await screen.findByTestId("coach-pending")).toHaveTextContent(translations[language].workoutNarrative.pending);
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
     expect(screen.queryByText("Recorded session.")).not.toBeInTheDocument();
     expect(screen.getByTestId("structured-phase-analysis")).toBeInTheDocument();
     expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
     expectIndependentRequests("w1", language);
     await act(async () => { pending.resolve({ data: makeIntelligence(language) }); });
-    expect(await screen.findByTestId("narrative-coach")).toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expect(await screen.findByTestId("workout-facts")).toBeInTheDocument();
+    expectNoNarrativeProse();
     expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
+  });
+
+  test("never requests an AI comment when a session opens, even with a stored coach_comment", async () => {
+    const intelligence = makeIntelligence();
+    intelligence.coach_comment = { status: "generated", language: "en", source: "coach_c396", text: "Stored AI comment." };
+    mockRequests({ intelligence });
+    renderPage(route, path, Page);
+    await screen.findByTestId("workout-facts");
+    expect(axios.get.mock.calls.some(([url]) => url.includes("workout-comment"))).toBe(false);
+    expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/")).every(([url]) => url.includes("deterministic=true"))).toBe(true);
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(screen.queryByText("Stored AI comment.")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ask-coach-btn")).toBeInTheDocument();
+  });
+
+  test("keeps four efforts, three recoveries and limitations of a 4x interval session", async () => {
+    const analysis = makeAnalysis();
+    const phases = analysis.phase_analysis;
+    phases.efforts = phases.efforts.slice(0, 4);
+    phases.recoveries = phases.recoveries.slice(0, 3);
+    phases.phases = phases.phases.slice(0, 7);
+    phases.effort_regularity.effort_count = 4;
+    const intelligence = makeIntelligence();
+    intelligence.workout_intelligence_v3.session_classification.evidence = { effort_count: 4, recovery_count: 3 };
+    intelligence.narrative_coach_v3.limitations = ["Only four recorded efforts."];
+    mockRequests({ analysis, intelligence });
+    renderPage(route, path, Page);
+    const evidence = await screen.findByTestId("workout-evidence");
+    expect(evidence).toHaveTextContent("4");
+    expect(evidence).toHaveTextContent("3");
+    expect(screen.getByTestId("workout-limitations")).toHaveTextContent("Only four recorded efforts.");
+    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
+    expect(screen.getAllByTestId("phase-effort-row")).toHaveLength(4);
+    expect(screen.getAllByTestId("phase-recovery-row")).toHaveLength(3);
+  });
+
+  test("keeps Garmin facts and the comparison population of a continuous run", async () => {
+    const analysis = makeAnalysis();
+    analysis.phase_analysis = { available: false, phases: [], efforts: [], recoveries: [] };
+    const intelligence = makeIntelligence("en", {
+      session_classification: { type: "easy_run_probable", confidence: "medium", relative_effort: { status: "not_evaluated" } },
+      historical_comparison: {
+        status: "available", comparability: "strong", reference_count: 7, window_days: 90,
+        pace_at_comparable_hr: { reference_count: 7, pace_difference_sec_per_km: -5 },
+        hr_at_comparable_pace: { reference_count: 7, hr_difference_bpm: 2 },
+      },
+    });
+    mockRequests({ analysis, intelligence });
+    renderPage(route, path, Page);
+    expect(await screen.findByTestId("workout-evidence")).toHaveTextContent("7");
+    expect(document.body.textContent).toMatch(/150/);
+    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
+    expect(screen.getByTestId("narrative-comparisons")).toHaveTextContent("5");
   });
 
   test("ignores a late response for a previous workout route", async () => {
@@ -544,17 +586,19 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     const current = makeIntelligence();
     current.workout_id = "w2";
     current.workout_intelligence_v3.workout_id = "w2";
-    current.narrative_coach_v3.headline = "Current workout narrative.";
+    current.narrative_coach_v3.limitations = ["Current workout limit."];
     mockRequests({ v3Request: ({ id }) => (
       id === "w1" ? stale.promise : Promise.resolve({ data: current })
     ) });
     renderPage(route, path, Page);
     await waitFor(() => expectIndependentRequests());
     fireEvent.click(screen.getByRole("link", { name: "Next test workout" }));
-    expect(await screen.findByRole("heading", { name: "Current workout narrative." })).toBeVisible();
-    await act(async () => { stale.resolve({ data: makeIntelligence() }); });
-    expect(screen.getByTestId("narrative-coach")).toHaveTextContent("Current workout narrative.");
-    expect(screen.queryByText(copy.en.headline)).not.toBeInTheDocument();
+    expect(await screen.findByText("Current workout limit.")).toBeVisible();
+    const stalePayload = makeIntelligence();
+    stalePayload.narrative_coach_v3.limitations = ["Stale workout limit."];
+    await act(async () => { stale.resolve({ data: stalePayload }); });
+    expect(screen.getByTestId("workout-facts")).toHaveTextContent("Current workout limit.");
+    expect(screen.queryByText("Stale workout limit.")).not.toBeInTheDocument();
     expectIndependentRequests("w2");
   });
 
@@ -566,10 +610,10 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     await waitFor(() => expectIndependentRequests());
     fireEvent.click(screen.getByRole("button", { name: "Switch test language" }));
-    expect(await screen.findByRole("heading", { name: copy.es.headline })).toBeVisible();
+    expect(await screen.findByText(translations.es.workoutNarrative.type)).toBeVisible();
     await act(async () => { stale.resolve({ data: makeIntelligence("en") }); });
-    expect(screen.getByTestId("narrative-coach")).toHaveTextContent(copy.es.headline);
-    expect(screen.queryByText(copy.en.headline)).not.toBeInTheDocument();
+    expect(screen.getByTestId("workout-facts")).toHaveTextContent(translations.es.workoutNarrative.type);
+    expect(screen.queryByText(translations.en.workoutNarrative.type)).not.toBeInTheDocument();
     expectIndependentRequests("w1", "es");
   });
 
@@ -584,7 +628,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     });
     mockRequests({ intelligence, analysis });
     renderPage(route, path, Page, language);
-    expect(await screen.findByTestId("narrative-coach")).toHaveTextContent(mad);
+    expect(await screen.findByTestId("workout-facts")).not.toHaveTextContent("MAD");
     expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(/6[,.]6|7[,.]7/);
     const details = screen.getByTestId("workout-analysis-details");
     expect(details).not.toHaveAttribute("open");
@@ -596,23 +640,23 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(deviation).toHaveTextContent("4/6");
     expect(deviation).toHaveTextContent(translations[language].workoutDetailExtended.partialEffortComparison);
     expect(screen.getAllByText(/7[,.]7 s\/km/)).toHaveLength(1);
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
   });
 
   test.each(languages)("renders valid %s V3 and factual workout before slow V2", async (language) => {
     const pending = deferred();
     mockRequests({ v2Request: () => pending.promise });
     renderPage(route, path, Page, language);
-    expect(await screen.findByTestId("narrative-coach")).toBeVisible();
+    expect(await screen.findByTestId("workout-facts")).toBeVisible();
     expect(screen.getByText("Morning Run")).toBeVisible();
     expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
     expectIndependentRequests("w1", language);
     await act(async () => { pending.resolve({ data: makeAnalysis() }); });
-    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(screen.getByTestId("workout-facts")).toBeVisible();
     expect(screen.getByTestId("structured-phase-analysis").closest("details")).toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
   });
 
   test("shows factual workout and a local Coach placeholder while both analysis requests are pending", async () => {
@@ -623,12 +667,12 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(await screen.findByText("Morning Run")).toBeVisible();
     expect(screen.getByTestId("coach-pending")).toBeVisible();
     expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
     await act(async () => {
       v2.resolve({ data: makeAnalysis() });
       v3.resolve({ data: makeIntelligence() });
     });
-    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(screen.getByTestId("workout-facts")).toBeVisible();
   });
 
   test("does not declare missing factual data while its request is pending after analysis errors", async () => {
@@ -657,7 +701,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       expect(screen.queryByText(translations[language].workoutDetailExtended.analysisLoadError)).not.toBeInTheDocument();
       expect(screen.queryByTestId("analysis-not-found")).not.toBeInTheDocument();
       expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
-      expectNoLegacyNarrative();
+      expectNoNarrativeProse();
       await act(async () => { pendingV2.reject(new Error("V2 now terminal unavailable")); });
       if (Page !== SessionDetail) {
         expect(screen.getByText(translations[language].workoutDetailExtended.analysisLoadError)).toBeVisible();
@@ -677,14 +721,14 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       await act(async () => {});
       expect(screen.getByTestId("coach-pending")).toBeVisible();
       expect(screen.getByText("Morning Run")).toBeVisible();
-      expectNoLegacyNarrative();
+      expectNoNarrativeProse();
       await act(async () => { jest.advanceTimersByTime(2499); });
       expect(screen.getByTestId("coach-pending")).toBeVisible();
-      expectNoLegacyNarrative();
+      expectNoNarrativeProse();
       await act(async () => { jest.advanceTimersByTime(1); });
-      expect(screen.getByTestId("narrative-coach")).toBeVisible();
+      expect(screen.getByTestId("workout-facts")).toBeVisible();
       expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
-      expectNoLegacyNarrative();
+      expectNoNarrativeProse();
       expectIndependentRequests("w1", language);
     } finally {
       jest.useRealTimers();
@@ -703,10 +747,10 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
         avg_pace_min_km: NaN, avg_speed_kmh: Infinity, avg_heart_rate: null, km_splits: [] },
     });
     const { container } = renderPage(route, path, Page, language);
-    expect(await screen.findByTestId("narrative-coach")).toBeVisible();
+    expect(await screen.findByTestId("workout-facts")).toBeVisible();
     expect(container).not.toHaveTextContent(/NaN|Infinity|undefined|0 bpm|0 s\/km/);
     expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
   });
 
   test.each(languages)("does not flash a legacy header summary with missing %s metrics while V3 is pending", async (language) => {
@@ -729,11 +773,11 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(screen.queryByTestId("header-context")).not.toBeInTheDocument();
     expect(screen.queryByText(analysis.summary.text)).not.toBeInTheDocument();
     expect(container).not.toHaveTextContent(/NaN|Infinity|undefined|0 bpm|0 s\/km/);
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
     await act(async () => { pending.resolve({ data: makeIntelligence(language) }); });
-    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(screen.getByTestId("workout-facts")).toBeVisible();
     expect(screen.queryByText(analysis.summary.text)).not.toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
   });
 
   test("aborts every owned request on unmount and ignores late results", async () => {
@@ -748,7 +792,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     unmount();
     signals.forEach((signal) => expect(signal.aborted).toBe(true));
     await act(async () => { pending.resolve({ data: makeIntelligence() }); });
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
   });
 
   test("uses a finite real HTTP timeout and terminal error fallback", async () => {
@@ -773,7 +817,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       mockRequests({ v3Request: () => pending.promise });
       renderPage(route, path, Page, language);
       await screen.findByTestId("coach-pending");
-      expectNoLegacyNarrative();
+      expectNoNarrativeProse();
       await act(async () => {
         if (outcome === "HTTP500") {
           pending.reject(Object.assign(new Error("private"), { response: { status: 500 } }));
@@ -786,7 +830,8 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
         }
       });
       expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+      // C416: facts come from workout_intelligence_v3, so incomplete prose alone keeps them.
+      expect(Boolean(screen.queryByTestId("workout-facts"))).toBe(outcome === "incomplete");
       expect(screen.getAllByText(legacyMeaning)).toHaveLength(1);
       if (outcome === "HTTP500") {
         expect(screen.getByRole("status")).toHaveTextContent(translations[language].workoutNarrative.unavailable);
@@ -803,7 +848,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     analysis.phase_analysis.effort_regularity.first_to_last_pace_change_sec_per_km = 12;
     mockRequests({ analysis });
     renderPage(route, path, Page, language);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     const details = screen.getByTestId("workout-analysis-details");
     fireEvent.click(details.querySelector("summary"));
     expect(screen.getByTestId("effort-regularity")).toHaveTextContent(translations[language].workoutDetailExtended.firstToLastPace);
@@ -814,11 +859,11 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
   test("revocation hides completed Premium data and restoration starts a fresh scope", async () => {
     mockRequests();
     const { refresh } = renderPage(route, path, Page);
-    await screen.findByTestId("narrative-coach");
+    await screen.findByTestId("workout-facts");
     const previousSignals = axios.get.mock.calls.filter(([url]) => url.includes("/coach/")).map(([, options]) => options.signal);
     setAccess({ allowed: false, plan: "FREE" });
     refresh();
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
     expect(screen.queryByTestId("coach-pending")).not.toBeInTheDocument();
     previousSignals.forEach((signal) => expect(signal.aborted).toBe(true));
@@ -828,11 +873,11 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     setAccess();
     refresh();
     await screen.findByTestId("coach-pending");
-    expectNoLegacyNarrative();
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expectNoNarrativeProse();
+    expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
     await act(async () => { current.resolve({ data: makeIntelligence() }); });
-    expect(screen.getByTestId("narrative-coach")).toBeVisible();
+    expect(screen.getByTestId("workout-facts")).toBeVisible();
     expect(axios.get.mock.calls.filter(([url]) => url.includes("/coach/workout-intelligence/"))).toHaveLength(2);
   });
 
@@ -857,9 +902,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
       staleV3.resolve({ data: makeIntelligence() });
     });
     expect(screen.getByTestId("coach-pending")).toBeVisible();
-    expect(screen.queryByTestId("narrative-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
-    expectNoLegacyNarrative();
+    expectNoNarrativeProse();
     await act(async () => { freshV3.resolve({ data: {} }); });
     expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
     await act(async () => { freshV2.resolve({ data: makeAnalysis() }); });

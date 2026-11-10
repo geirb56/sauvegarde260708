@@ -15,18 +15,13 @@ export default function useWorkoutIntelligence(id, lang, allowed) {
     const controller = new AbortController();
     const { signal } = controller;
     setState({ scope, loading: true, error: false, data: null });
-    const base = `${API_BASE_URL}/coach/workout-intelligence/${encodeURIComponent(id)}?language=${lang}`;
-    // C400: the C396 comment is optional and slower; it never blocks or replaces the C388 facts.
-    const commentUrl = `${API_BASE_URL}/coach/workout-comment/${encodeURIComponent(id)}?language=${lang}`;
+    // C416: opening a session never triggers an AI generation: no /coach/workout-comment call,
+    // and deterministic=true keeps the backend narrative provider-free even if the LLM editor is enabled.
+    const base = `${API_BASE_URL}/coach/workout-intelligence/${encodeURIComponent(id)}?language=${lang}&deterministic=true`;
     axios.get(base, { signal, timeout: 15000 })
       .then(({ data }) => {
         if (signal.aborted) return;
         setState({ scope, data, loading: false, error: false });
-        axios.get(commentUrl, { signal, timeout: 30000 }).then(({ data: comment }) => {
-          if (signal.aborted || !comment) return;
-          setState((prev) => (prev?.scope === scope && prev.data
-            ? { ...prev, data: { ...prev.data, coach_comment: comment } } : prev));
-        }).catch(() => {});
       })
       .catch((error) => {
         if (!signal.aborted && !axios.isCancel(error)) {

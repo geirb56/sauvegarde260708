@@ -14,7 +14,7 @@ import { useUnitSystem } from "@/context/UnitContext";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
-import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
+import WorkoutFacts, { getWorkoutNarrative, getWorkoutFacts } from "@/components/workout/WorkoutFacts";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
 import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -54,7 +54,7 @@ export default function SessionDetail() {
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const { data: intelligence, error: intelligenceError, loading: intelligenceLoading, scope } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
-  const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
+  const hasFacts = canAccessAnalysis && Boolean(getWorkoutFacts(intelligence) || getWorkoutNarrative(intelligence, lang));
   const { unitSystem } = useUnitSystem();
   const [session, setSession] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -176,9 +176,9 @@ export default function SessionDetail() {
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
       {intelligenceLoading && <WorkoutCoachPending t={t} />}
-      {narrative && <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+      {hasFacts && !intelligenceLoading && <WorkoutFacts data={intelligence} lang={lang} t={t} detailsAvailable={detailsAvailable}>
         {analysisDetails}
-      </NarrativeWorkoutAnalysis>}
+      </WorkoutFacts>}
 
       <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
         <div className="flex items-center gap-2">
@@ -198,16 +198,16 @@ export default function SessionDetail() {
         </div>
       </section>
 
-      {!narrative && <>
+      {!hasFacts && <>
       {analysisDetails}
       </>}
 
       {canAccessAnalysis ? <>
-        {!intelligenceLoading && !narrative && analysisForRender && (observations.length > 0 || fallback || classification
+        {!intelligenceLoading && analysisForRender && (observations.length > 0 || fallback || classification
           || (analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text)) && <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            {t("workoutDetailExtended.meaning")}
+            {t("workoutDetailExtended.takeaways")}
           </h2>
         </div>
         {observations.length > 0 && <div className="space-y-2 text-sm leading-6" data-testid="meaning-text">
@@ -219,7 +219,7 @@ export default function SessionDetail() {
           <p className="text-sm">{t("analysis.intensity")}: {analysisForRender.signals.intensity.text}</p>
         )}
         </section>}
-        {(analysisForRender || narrative) && <Link to={`/coach?analyze=${encodeURIComponent(id)}`} data-testid="ask-coach-btn" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-3 text-sm font-mono uppercase tracking-wider text-foreground">
+        {(analysisForRender || hasFacts) && <Link to={`/coach?analyze=${encodeURIComponent(id)}`} data-testid="ask-coach-btn" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-3 text-sm font-mono uppercase tracking-wider text-foreground">
           <MessageSquare className="h-3.5 w-3.5" />
           {t("workoutDetailExtended.askCoach")}
         </Link>}

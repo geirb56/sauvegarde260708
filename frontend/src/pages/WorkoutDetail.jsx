@@ -12,7 +12,7 @@ import { formatPaceDisplay, getSessionClassification, getAnalysisObservations, g
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
-import NarrativeWorkoutAnalysis, { getWorkoutNarrative } from "@/components/workout/NarrativeWorkoutAnalysis";
+import WorkoutFacts, { getWorkoutNarrative, getWorkoutFacts } from "@/components/workout/WorkoutFacts";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
 import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { formatAnalysisNumber } from "@/lib/analysisFormat";
@@ -82,7 +82,7 @@ export default function WorkoutDetail() {
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const { data: intelligence, error: intelligenceError, loading: intelligenceLoading, scope } = useWorkoutIntelligence(id, lang, canAccessAnalysis);
-  const narrative = canAccessAnalysis && getWorkoutNarrative(intelligence, lang);
+  const hasFacts = canAccessAnalysis && Boolean(getWorkoutFacts(intelligence) || getWorkoutNarrative(intelligence, lang));
   const [workout, setWorkout] = useState(null);
   const [workoutScope, setWorkoutScope] = useState(null);
   const [workoutLoading, setWorkoutLoading] = useState(true);
@@ -190,7 +190,8 @@ export default function WorkoutDetail() {
   const synthesis = getSessionSynthesis(analysisForRender);
   const synthesisItems = synthesis
     ? [synthesis.primary, ...synthesis.supporting].filter((item) =>
-      item && !["synthesis.recorded_totals", "recorded_totals"].includes(item.code.trim()))
+      item && item.kind !== "interpretation"
+      && !["synthesis.recorded_totals", "recorded_totals"].includes(item.code.trim()))
     : [];
   const [synthesisPrimary, ...synthesisSupport] = synthesisItems;
   const synthesisLimitations = synthesis?.limitations || [];
@@ -250,9 +251,9 @@ export default function WorkoutDetail() {
               <dd className="text-base font-semibold">{value}</dd>
             </div>)}
           </dl>
-          {canAccessAnalysis && !narrative && analysisLoading ? (
+          {canAccessAnalysis && !hasFacts && analysisLoading ? (
             <AnalysisSkeleton />
-          ) : canAccessAnalysis && !narrative && analysisError ? (
+          ) : canAccessAnalysis && !hasFacts && analysisError ? (
             <AnalysisError t={t} />
           ) : !canAccessAnalysis && !subscriptionLoading ? (
             <WorkoutAnalysisAccessNotice t={t} />
@@ -262,9 +263,12 @@ export default function WorkoutDetail() {
       </section>
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
-      {intelligenceLoading ? <><WorkoutCoachPending t={t} />{analysisDetails}</> : narrative ? <NarrativeWorkoutAnalysis data={intelligence} analysis={analysisForRender} lang={lang} t={t} detailsAvailable={detailsAvailable}>
+      {intelligenceLoading && <WorkoutCoachPending t={t} />}
+      {intelligenceLoading && analysisDetails}
+      {!intelligenceLoading && hasFacts && <WorkoutFacts data={intelligence} lang={lang} t={t} detailsAvailable={detailsAvailable}>
         {analysisDetails}
-      </NarrativeWorkoutAnalysis> : <>
+      </WorkoutFacts>}
+      {!intelligenceLoading && <>
       {hasAvailableSynthesis && <section aria-labelledby="session-synthesis-title" className="space-y-2 rounded-xl border border-border bg-card p-4" data-testid="session-synthesis">
         <h2 id="session-synthesis-title" className="text-base font-semibold">{t("workoutDetailExtended.sessionSynthesis")}</h2>
         <p className="text-sm leading-relaxed" data-testid="synthesis-primary">{synthesisLabel(synthesisPrimary)}<strong>{synthesisPrimary.text}</strong></p>
@@ -287,7 +291,7 @@ export default function WorkoutDetail() {
           </ul>
         </div>}
       </>}
-      {analysisDetails}
+      {!hasFacts && analysisDetails}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
