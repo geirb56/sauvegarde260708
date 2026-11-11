@@ -12,7 +12,7 @@ import { formatPaceDisplay, getSessionClassification, getAnalysisObservations, g
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
-import WorkoutFacts, { getWorkoutNarrative, getWorkoutFacts } from "@/components/workout/WorkoutFacts";
+import WorkoutFacts, { DetailsDisclosure, getWorkoutNarrative, getWorkoutFacts } from "@/components/workout/WorkoutFacts";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
 import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { formatAnalysisNumber } from "@/lib/analysisFormat";
@@ -23,6 +23,10 @@ import {
   Bike,
   Footprints,
   AlertCircle,
+  Route,
+  Timer,
+  Gauge,
+  Heart,
 } from "lucide-react";
 
 import { API_BASE_URL } from "@/config";
@@ -218,49 +222,51 @@ export default function WorkoutDetail() {
     <Button
       onClick={goToAskCoach}
       data-testid="ask-coach-btn"
-      className="w-full bg-primary text-primary-foreground hover:bg-primary/90 min-h-11 h-auto py-3 whitespace-normal text-sm flex items-center justify-center gap-2"
+      className="w-full rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 min-h-12 h-auto py-3 whitespace-normal text-base font-semibold flex items-center justify-center gap-2 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
     >
-      <MessageSquare className="w-3.5 h-3.5" />
+      <MessageSquare className="w-4 h-4" aria-hidden="true" />
       {t("workoutDetailExtended.askCoach")}
     </Button>
   ) : null;
 
   return (
     <div className="p-4 pb-24 max-w-3xl mx-auto min-w-0 break-words space-y-5" data-testid="workout-detail">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link to={backTo} className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="w-4 h-4" />
-          <span className="font-mono text-[11px] uppercase tracking-widest">{t("workout.back")}</span>
+      <header className="flex items-center gap-3">
+        <Link to={backTo} aria-label={t("workout.back")}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border/60 bg-card text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+          <ArrowLeft className="w-5 h-5" aria-hidden="true" />
         </Link>
-        <div className="flex items-center gap-2">
-          <Icon className="w-4 h-4 text-muted-foreground" />
-          <span className="font-mono text-[11px] uppercase text-muted-foreground">{typeLabel}</span>
-        </div>
-      </div>
+        <h1 id="session-summary-title" className="min-w-0 flex-1 font-heading text-xl font-bold leading-tight">{t("workoutDetailExtended.sessionSummary")}</h1>
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary" data-testid="sport-icon">
+          <Icon className="w-5 h-5" aria-hidden="true" />
+        </span>
+      </header>
 
       <section aria-labelledby="session-summary-title" data-testid={hasAnalysis ? "coach-summary" : "session-summary"}>
-        <h2 id="session-summary-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.sessionSummary")}</h2>
-        <Card className="bg-card border-border">
-        <CardContent className="p-4 space-y-3">
-          <div>
-            <h1 className="font-heading text-xl font-bold leading-tight">{workout.name || typeLabel}</h1>
+        <Card className="bg-card border-border/60 rounded-2xl">
+        <CardContent className="p-4 space-y-4">
+          <div className="min-w-0">
+            <h2 className="font-heading text-lg font-bold leading-tight">{workout.name || typeLabel}</h2>
             <p className="text-sm text-muted-foreground mt-1">{dateStr} · {typeLabel}</p>
           </div>
-          <dl className="grid grid-cols-2 gap-3" data-testid="primary-metrics">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-5" data-testid="primary-metrics">
             {[
               Number.isFinite(workout.distance_km) && workout.distance_km > 0
-                ? ["distance", formatDistance(workout.distance_km, lang)] : null,
+                ? ["distance", formatDistance(workout.distance_km, lang), Route] : null,
               Number.isFinite(workout.duration_minutes) && workout.duration_minutes > 0
-                ? ["duration", formatDuration(workout.duration_minutes)] : null,
+                ? ["duration", formatDuration(workout.duration_minutes), Timer] : null,
               isCycle
-                ? (averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric", lang })])
+                ? (averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric", lang }), Gauge])
                 : (hasWorkoutPace
-                  ? ["averagePace", formatPaceDisplay(workout.avg_pace_min_km)]
-                  : averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric", lang })]),
-              Number.isFinite(avgHr) && avgHr > 0 ? ["averageHeartRate", formatHeartRate(avgHr)] : null,
-            ].filter(Boolean).map(([label, value]) => <div key={label} className="min-w-0">
-              <dt className="text-sm text-muted-foreground">{t(`workoutDetailExtended.${label}`)}</dt>
-              <dd className="text-base font-semibold">{value}</dd>
+                  ? ["averagePace", formatPaceDisplay(workout.avg_pace_min_km), Gauge]
+                  : averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric", lang }), Gauge]),
+              Number.isFinite(avgHr) && avgHr > 0 ? ["averageHeartRate", formatHeartRate(avgHr), Heart] : null,
+            ].filter(Boolean).map(([label, value, MetricIcon]) => <div key={label} className="min-w-0">
+              <dt className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <MetricIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0">{t(`workoutDetailExtended.${label}`)}</span>
+              </dt>
+              <dd className="mt-1 text-2xl font-bold leading-none tabular-nums">{value}</dd>
             </div>)}
           </dl>
           {canAccessAnalysis && !hasFacts && analysisLoading ? (
@@ -276,7 +282,7 @@ export default function WorkoutDetail() {
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
       {intelligenceLoading && <WorkoutCoachPending t={t} />}
-      {intelligenceLoading && analysisDetails}
+      {intelligenceLoading && detailsAvailable && <DetailsDisclosure title={t("workoutNarrative.details")}>{analysisDetails}</DetailsDisclosure>}
       {canAccessAnalysis && !factsRendered && coachButton}
       {!intelligenceLoading && <WorkoutFacts data={canAccessAnalysis ? intelligence : null} lang={lang} t={t} detailsAvailable={detailsAvailable}
         synthesis={synthesisForFacts} action={coachButton}>
@@ -286,7 +292,7 @@ export default function WorkoutDetail() {
       {synthesis && !hasAvailableSynthesis && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
         {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
       </p>}
-      {!factsRendered && analysisDetails}
+      {!factsRendered && detailsAvailable && <DetailsDisclosure title={t("workoutNarrative.details")}>{analysisDetails}</DetailsDisclosure>}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
