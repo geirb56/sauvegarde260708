@@ -1028,9 +1028,40 @@ describe("WorkoutDetail C417 consolidation", () => {
   test("never repeats the primary observation and keeps it out of any synthesis card", async () => {
     await open(analysisWith(synthesisWith()), continuousIntelligence());
     expect(screen.getAllByText(paceText)).toHaveLength(1);
-    expect(screen.getByTestId("workout-evidence")).toHaveTextContent(paceText);
+    expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(paceText);
+    expect(screen.getByTestId("marker-headline")).toHaveTextContent("21.4 s/km faster than your references");
+    expect(screen.getByTestId("marker-detail")).toHaveTextContent("This session: 6:06/km · References: 6:27/km");
+    expect(screen.getByTestId("workout-analysis-details")).toContainElement(screen.getByText(paceText));
     expect(screen.getAllByTestId("session-marker").length).toBeLessThanOrEqual(3);
     expect(screen.queryByTestId("synthesis-primary")).not.toBeInTheDocument();
+  });
+
+  test("renders a slower pace, a fractional gap and a comparable-distance caveat", async () => {
+    const synthesis = synthesisWith();
+    synthesis.primary.evidence.pace_difference_sec_per_km = 14.2;
+    await open(analysisWith(synthesis), continuousIntelligence());
+    expect(screen.getByTestId("marker-headline")).toHaveTextContent("14.2 s/km slower than your references");
+    expect(screen.getByTestId("comparable-note")).toHaveTextContent(translations.en.workoutNarrative.comparableNote);
+  });
+
+  test("keeps the sentence of an item without a structured projection", async () => {
+    const synthesis = synthesisWith();
+    synthesis.primary = {
+      code: "fact.pace_change", text: "Validated plain fact.", kind: "observation",
+      evidence: { pace_drop_min_km: 0.5 }, source_paths: ["x"], replaces_factual_codes: [],
+    };
+    await open(analysisWith(synthesis), continuousIntelligence());
+    expect(screen.getByTestId("workout-evidence")).toHaveTextContent("Validated plain fact.");
+    expect(screen.queryByTestId("marker-headline")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("comparable-note")).not.toBeInTheDocument();
+  });
+
+  test("shows the four primary metrics in the header card, closed details and one Coach button", async () => {
+    await open(analysisWith(synthesisWith()), continuousIntelligence());
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(translations.en.workoutDetailExtended.sessionSummary);
+    expect(within(screen.getByTestId("primary-metrics")).getAllByRole("definition")).toHaveLength(4);
+    expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
+    expect(screen.getByTestId("workout-analysis-details")).not.toHaveAttribute("open");
   });
 
   test("places the Coach button before the long technical sections and keeps its URL", async () => {
@@ -1050,7 +1081,8 @@ describe("WorkoutDetail C417 consolidation", () => {
     const references = screen.getByTestId("reference-populations");
     expect(references).toHaveTextContent("25 reference sessions");
     expect(references).toHaveTextContent("3 comparable sessions");
-    expect(references).toHaveTextContent("5 earlier sessions");
+    expect(references).not.toHaveTextContent("5 earlier sessions");
+    expect(screen.getByTestId("workout-evidence")).toHaveTextContent("5 sessions of comparable distance");
     expect(references).toHaveTextContent(translations.en.workoutNarrative.referencesNote);
     expect(references.textContent).not.toMatch(/33|\b8\b/);
   });
