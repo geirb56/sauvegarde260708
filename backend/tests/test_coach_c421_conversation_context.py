@@ -191,6 +191,99 @@ def test_current_plan_is_never_offered_as_the_session_prescription():
     assert csc.build_conversation_context(ctx)["athlete_context"]["recorded_prescription"]["status"] == "none_usable"
 
 
+# ------------------------------------------------------------------ PR #413 review corrections
+
+_CONFORMITY = "Your session type is consistent with the recorded prescription."
+_NEUTRAL = "The session was run at a steady effort."
+
+
+@pytest.mark.parametrize("timing,usable", [("recorded_before_session", True), ("recorded_after_session", False),
+                                           ("recording_time_unknown", False)])
+def test_no_conformity_conclusion_without_a_prescription_recorded_before_the_session(timing, usable):
+    ctx = _frame_with_prescription(_chat_input(), recording_timing=timing)
+    ctx["session_coaching_frame"]["v3_assessment"]["coach_assessment"]["evidence"].append(
+        {"code": "evidence.prescription", "text": "Prescription check: consistent (prescribed: easy)."})
+    ctx["session_coaching_frame"]["v3_assessment"]["classification"]["probable_type"] = "easy_run_probable"
+    ctx["validated_workout_observations"] = {"analysis": f"{_NEUTRAL} {_CONFORMITY}",
+                                             "headline": "Reading of the session."}
+    out = csc.build_conversation_context(ctx)
+    narrative = next(o for o in out["key_observations"] if o["code"] == "narrative.analysis") \
+        if any(o["code"] == "narrative.analysis" for o in out["key_observations"]) else None
+    conclusions = [c["code"] for c in out["allowed_conclusions"]]
+    if usable:
+        assert "evidence.prescription" in conclusions and _CONFORMITY in narrative["text"]
+    else:
+        assert "evidence.prescription" not in conclusions
+        assert "prescription" not in json.dumps(out["key_observations"]).lower()
+        assert narrative is None or narrative["text"] == _NEUTRAL  # the non-prescription sentence survives
+
+
+def test_fully_unclassified_garmin_phases_neither_hide_the_lap_pattern_nor_the_session_averages():
+    ctx = _chat_input(lap_pattern=_pattern())
+    ctx["workout_detail"]["analysis"]["phase_analysis"] = {"available": True, "phases": [
+        {"phase_type": "unknown", "duration_s": 600, "distance_m": 1500, "pace_sec_per_km": 400, "average_hr": 140},
+        {"phase_type": "unknown", "duration_s": 300, "distance_m": 900, "pace_sec_per_km": 333, "average_hr": 150}]}
+    out = csc.build_conversation_context(ctx)
+    assert out["recorded_structure"]["status"] == "recorded_unclassified"  # information kept, not a structure
+    assert [p["duration_s"] for p in out["recorded_structure"]["phases"]] == [600, 300]
+    assert out["inferred_structure"]["status"] == "pattern_observed"
+    assert out["inferred_structure"]["repetition_count"] == 4
+    bare = _chat_input()
+    bare["workout_detail"]["analysis"]["phase_analysis"] = ctx["workout_detail"]["analysis"]["phase_analysis"]
+    alone = csc.build_conversation_context(bare)
+    assert "avg_pace" in alone["session"]  # no classified structure: whole-session figures stay
+
+
+def test_pacing_measures_are_read_from_the_projected_display_fields():
+    ctx = _chat_input()
+    ctx["workout_detail"]["analysis"]["pacing"] = {
+        "available": True, "fastest_split_display": "5:10/km", "slowest_split_display": "5:40/km",
+        "pace_drop_display": "+0:12/km", "negative_split": False}
+    pacing = next(o for o in csc.build_conversation_context(ctx)["key_observations"] if o["code"] == "split_pacing")
+    assert (pacing["fastest_split"], pacing["slowest_split"], pacing["pace_drop"]) == (
+        "5:10/km", "5:40/km", "+0:12/km")
+    ctx["workout_detail"]["analysis"]["pacing"] = {"available": True, "fastest_split_min_km": 5.0,
+                                                   "slowest_split_min_km": 5.5}
+    fallback = next(o for o in csc.build_conversation_context(ctx)["key_observations"] if o["code"] == "split_pacing")
+    assert fallback["fastest_split"] == "5:00/km" and fallback["slowest_split"] == "5:30/km"
+
+
+def test_null_or_zero_heart_rates_do_not_make_hr_usable():
+    current = _w("cur", DAY, hr=None, pace=5.2, duration=40, distance=6.0, max_hr=None)
+    ctx = _chat_input(current=current, history=[])
+    ctx["workout_detail"]["analysis"]["phase_analysis"] = {"available": True, "phases": [
+        {"phase_type": "effort", "duration_s": 60, "pace_sec_per_km": 230, "average_hr": 0, "max_hr": 0},
+        {"phase_type": "recovery", "duration_s": 60, "pace_sec_per_km": 390, "average_hr": float("nan")}]}
+    out = csc.build_conversation_context(ctx)
+    assert out["recorded_structure"]["status"] == "recorded_by_garmin"
+    assert "avg_hr_bpm" not in json.dumps(out["recorded_structure"]) and "max_hr_bpm" not in json.dumps(
+        out["recorded_structure"])
+    assert "hr_unusable" in _codes(out["material_limitations"])
+    zero_laps = build_observed_lap_pattern_context({"observed_lap_pattern": detect_lap_pattern(
+        *build(SHAPE_0511_FOUR, hr=lambda i: 0))})
+    inferred = csc.build_conversation_context(
+        _chat_input(current=current, history=[], lap_pattern=zero_laps))["inferred_structure"]
+    assert '"avg_hr_bpm": 0' not in json.dumps(inferred)
+    assert "hr_unusable" in _codes(csc.build_conversation_context(
+        _chat_input(current=current, history=[], lap_pattern=zero_laps))["material_limitations"])
+
+
+def test_comparisons_keep_their_comparability_status_and_qualifying_limits():
+    out = csc.build_conversation_context(_chat_input())
+    similar = next(c for c in out["validated_comparisons"] if c["metric"].startswith("pace_and_hr_vs_similar"))
+    assert similar["comparable"] is False and similar["pace_comparability"] == "distance_only"
+    assert similar["pace_nature_status"] == "unknown" and similar["limits"] == ["session_nature_unknown"]
+    assert "session_nature_unknown" not in _codes(out["material_limitations"])  # stated once, on the comparison
+    from coach_context_v2 import compact_validated_comparisons
+
+    frame = {"v3_assessment": {"historical_comparison": {
+        "comparability": "moderate", "provenance": {"activity_count": 4, "known_limits": ["terrain_weather_not_controlled"]}}},
+        "evidence_contract": {"validated_comparisons": [{"metric": "pace_and_hr_at_comparable_effort", "values": {}}]}}
+    (effort,) = compact_validated_comparisons(frame)
+    assert effort["comparability"] == "moderate"
+    assert effort["provenance"]["known_limits"] == ["terrain_weather_not_controlled"]
+
+
 def test_validated_comparisons_keep_their_population_and_provenance():
     ctx = _chat_input()
     frame = ctx["session_coaching_frame"]
@@ -210,7 +303,8 @@ def test_validated_comparisons_keep_their_population_and_provenance():
     assert relative["provenance"]["period_start"] == "2026-03-01" and relative["session_avg_hr_bpm"] == 160
     similar = next(c for c in out["validated_comparisons"] if c["metric"].startswith("pace_and_hr_vs_similar"))
     assert similar["activity_count"] and "reference_population" in similar
-    assert "comparison_conditions" in _codes(out["material_limitations"])
+    assert relative["provenance"]["known_limits"] == ["terrain_weather_not_controlled"]
+    assert "comparison_conditions" not in _codes(out["material_limitations"])  # carried by the comparison itself
 
 
 def test_no_progress_is_derived_from_a_single_session():

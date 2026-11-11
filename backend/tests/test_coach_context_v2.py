@@ -1173,30 +1173,21 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
 
     response, context = await _call_coach(fake_db, workout_id="w-selected")
     assert response.status_code == 200
-    workout_detail = context.get("workout_detail")
-    assert workout_detail is not None
-    assert "id" not in workout_detail  # C408-C: technical ids are not sent to the LLM
-    assert "name" not in workout_detail  # C408-B: free-text titles are not evidence (may contain a place)
-    assert workout_detail["distance_km"] == 12.0
-    assert workout_detail["duration_minutes"] == 60.0
-    assert workout_detail["avg_heart_rate"] == 155
-    assert workout_detail["max_heart_rate"] == 172
-    assert workout_detail["elevation_gain_m"] == 80.0
+    session = context.get("session")  # C421 conversational schema (no raw workout_detail copy)
+    assert session is not None and "workout_detail" not in context
+    dumped = json.dumps(context)
+    assert '"id"' not in json.dumps(session) and '"w-selected"' not in dumped  # C408-C: no technical id
+    assert "Selected" not in dumped and "Earlier Run" not in dumped  # C408-B: free-text titles are not evidence
+    assert session["distance_km"] == 12.0
+    assert session["duration_minutes"] == 60.0
+    assert session["avg_hr_bpm"] == 155
+    assert session["max_hr_bpm"] == 172
+    assert session["elevation_gain_m"] == 80.0
 
-    analysis = workout_detail.get("analysis")
-    assert analysis is not None
-    assert analysis["version"] == "v2"
-    assert "id" not in analysis["workout"]  # C408-C
-    assert "summary" in analysis
-    assert "signals" in analysis
-    assert "physiology" in analysis
-    assert "pacing" in analysis
-    assert "comparison" in analysis
-    assert "evidence" in analysis
-    assert isinstance(analysis["comparison"]["similar"], dict)
-    assert analysis["comparison"]["similar"]["available"] is True
-    assert "workout_ids" not in analysis["comparison"]["similar"]  # C408-C
-    assert analysis["comparison"]["similar"]["sample_count"] >= 1
+    similar = next(c for c in context["validated_comparisons"]
+                   if c["metric"] == "pace_and_hr_vs_similar_distance_sessions")  # V2 comparison, with provenance
+    assert similar["activity_count"] >= 1 and "reference_population" in similar
+    assert "workout_ids" not in dumped  # C408-C
 
 
 @pytest.mark.asyncio
@@ -1292,18 +1283,18 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
     )
 
     assert response.status_code == 200
-    assert "id" not in context["workout_detail"]  # C408-C
+    assert "id" not in context["session"] and '"garmin-selected-0928"' not in json.dumps(context)  # C408-C
     assert "recent_workouts" not in context  # C408-B: selected session context, strictly prior history
-    recent = context["history_as_of_session"]["sessions"]
+    recent = context["athlete_context"]["history_before_session"]["sessions_most_recent_first"]
     # Only the strictly prior session and the same-day session proven earlier by its timestamp.
     assert sorted(item["distance_km"] for item in recent) == [9.0, 10.4]
     for current_only in ("current_training_context", "stats_7d", "stats_30d", "readiness", "performance",
                          "recent_workouts_coverage"):
         assert current_only not in context
-    assert context["history_as_of_session"]["observation_window_days"] == 30
-    assert context["history_as_of_session"]["truncated"] is False
-    assert context["selected_workout_history_cutoff"] == "2026-09-28T10:00:00+00:00"
-    assert context["selected_workout_history_cutoff_precision"] == "strict_timestamp_exclusive"
+    history = context["athlete_context"]["history_before_session"]
+    assert history["observation_window_days"] == 30
+    assert history["truncated"] is False
+    assert history["cutoff_precision"] == "strict_timestamp_exclusive"
 
 
 @pytest.mark.parametrize("as_model", [False, True], ids=["dict", "CoachRecentWorkout"])
@@ -1958,15 +1949,9 @@ async def test_coach_analyze_with_minimal_garmin_workout_pipeline():
 
     response, context = await _call_coach(fake_db, workout_id="garmin-real-pipeline-1")
     assert response.status_code == 200
-    detail = context.get("workout_detail")
-    assert detail is not None
-    assert "id" not in detail  # C408-C
-    assert detail["max_heart_rate"] == 178
-    assert detail["elevation_gain_m"] == 65.0
-    assert detail["avg_speed_kmh"] == 12.22
-
-    analysis = detail.get("analysis")
-    assert analysis is not None
-    assert analysis["evidence"]["has_elevation"] is True
-    assert analysis["evidence"]["has_cadence"] is True
-    assert analysis["physiology"]["max_hr"] == 178
+    session = context.get("session")  # C421 conversational schema
+    assert session is not None and "workout_detail" not in context
+    assert "id" not in session  # C408-C
+    assert session["max_hr_bpm"] == 178
+    assert session["elevation_gain_m"] == 65.0
+    assert session["avg_pace"] == "4:55/km"  # 3.394 m/s, the average speed the V2 analysis derived

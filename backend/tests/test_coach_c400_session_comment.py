@@ -101,10 +101,14 @@ async def test_comment_and_chat_receive_identical_context():
     assert resp.json()["status"] == "generated"
     chat_context = chat_llm.await_args.kwargs["context"]
     comment_context = llm.await_args.args[0]
-    # C402: same session facts, but a selected context (no current Training V2 / load / readiness).
-    for key in ("validated_workout_observations", "selected_workout_permissions"):
-        assert comment_context[key] == chat_context[key]
-    assert comment_context["workout_detail"]["distance_km"] == chat_context["workout_detail"]["distance_km"]
+    # C402/C421: same session facts, but a selected context (no current Training V2 / load / readiness).
+    assert comment_context["selected_workout_permissions"] == \
+        chat_context["scientific_permissions"]["selected_workout_permissions"]
+    chat_narrative = {o["code"]: o["text"] for o in chat_context["key_observations"] if o["source"] == "v3_narrative"}
+    for key in ("headline", "analysis"):
+        if comment_context["validated_workout_observations"].get(key):
+            assert chat_narrative[f"narrative.{key}"] == comment_context["validated_workout_observations"][key]
+    assert comment_context["workout_detail"]["distance_km"] == chat_context["session"]["distance_km"]
     for chat_only in ("training_state", "readiness", "training_load", "performance", "today", "weekly_target"):
         assert chat_only not in comment_context
 

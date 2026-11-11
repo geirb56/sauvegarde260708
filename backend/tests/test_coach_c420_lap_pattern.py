@@ -80,7 +80,10 @@ async def test_comment_context_contains_the_observed_0511_pattern():
 async def test_chat_context_also_contains_the_pattern():
     ctx, _ = await _context(
         SHAPE_0511, lambda **kw: server._build_coach_llm_context(workout_analysis_allowed=True, **kw))
-    assert ctx["observed_lap_pattern"]["pattern"]["repetition_count"] == 7
+    assert ctx["inferred_structure"]["repetition_count"] == 7  # C421: conversational schema
+    assert ctx["inferred_structure"]["status"] == "pattern_observed"
+    assert ctx["inferred_structure"]["fast"]["typical_duration_s"] == 60
+    assert "observed_lap_pattern" not in ctx
 
 
 @pytest.mark.asyncio

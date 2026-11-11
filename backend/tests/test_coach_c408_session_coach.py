@@ -3,6 +3,7 @@
 MongoDB and the LLM are mocked; fixtures are synthetic. LLM answer quality is not assessed here.
 """
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -80,7 +81,7 @@ async def test_frame_and_workout_id_reach_llm_and_followup_keeps_workout():
         context = llm.await_args.kwargs["context"]
         history = llm.await_args.kwargs["conversation_history"]
     assert first.status_code == second.status_code == 200
-    assert "workout_id" not in context["session_coaching_frame"]  # C408-C: no technical id in the prompt
+    assert '"workout_id"' not in json.dumps(context)  # C408-C: no technical id in the prompt (C421: whole context)
     assert any(m["content"] == "Analyse cette séance" for m in history)
     assert {d["workout_id"] for d in fake_db.conversations._docs} == {"w1"}
 
@@ -131,10 +132,11 @@ async def test_v3_assessment_reaches_llm_from_a_single_evidence_load():
     ):
         llm = server.llm_coach.enrich_chat_response
         response = await _post({"message": "Analyse", "workout_id": "w1", "language": "en"})
-        frame = llm.await_args.kwargs["context"]["session_coaching_frame"]
+        context = llm.await_args.kwargs["context"]
     assert response.status_code == 200
     loader.assert_awaited_once()
-    assert frame["v3_assessment"]["classification"]["probable_type"] == "easy_run_probable"
+    hypothesis = [c for c in context["allowed_conclusions"] if c["code"] == "session_type_hypothesis"]
+    assert [c["value"] for c in hypothesis] == ["easy_run_probable"]
     assert llm.await_count == 1
 
 
@@ -146,4 +148,6 @@ async def test_unavailable_v3_is_explicit_not_empty():
     ):
         llm = server.llm_coach.enrich_chat_response
         await _post({"message": "Analyse", "workout_id": "w1", "language": "en"})
-        assert llm.await_args.kwargs["context"]["session_coaching_frame"]["v3_assessment"] == "unavailable"
+        context = llm.await_args.kwargs["context"]
+    assert context["allowed_conclusions"] == []  # nothing V3 can be relayed
+    assert "session_type_unknown" in {limit["code"] for limit in context["material_limitations"]}

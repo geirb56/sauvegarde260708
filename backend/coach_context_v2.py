@@ -992,12 +992,23 @@ def _display_pace_sec(value: Any) -> Optional[str]:
     return _format_pace_min_km(Decimal(str(number)) / 60) if number is not None and number >= 0 else None
 
 
+def _usable_hr(value: Any) -> Optional[Any]:
+    """A heart-rate reading only when it is a finite positive number (0 or garbage is not a measurement)."""
+    number = _finite_number(value)
+    return value if number is not None and number > 0 else None
+
+
 def _present(mapping: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in mapping.items() if value is not None and value != [] and value != {}}
 
 
 def compact_recorded_structure(phase_analysis: Any) -> dict[str, Any]:
-    """Garmin-recorded phases (V2 phase_analysis) as a compact block; ``status`` says when none exist."""
+    """Garmin-recorded phases (V2 phase_analysis) as a compact block; ``status`` says what exists.
+
+    ``recorded_by_garmin`` requires at least one classified phase (effort, recovery, warmup, cooldown).
+    Phases that are all ``unknown`` are kept as ``recorded_unclassified``: their figures are information,
+    but they are not a classified structure and never outrank a lap pattern.
+    """
     if not isinstance(phase_analysis, dict) or not phase_analysis.get("available") or not phase_analysis.get("phases"):
         return {"status": "none_recorded"}
     phases = []
@@ -1010,9 +1021,13 @@ def compact_recorded_structure(phase_analysis: Any) -> dict[str, Any]:
             "duration_s": phase.get("duration_s"),
             "distance_m": phase.get("distance_m"),
             "pace": _display_pace_sec(phase.get("pace_sec_per_km")),
-            "avg_hr_bpm": phase.get("average_hr"),
-            "max_hr_bpm": phase.get("max_hr"),
+            "avg_hr_bpm": _usable_hr(phase.get("average_hr")),
+            "max_hr_bpm": _usable_hr(phase.get("max_hr")),
         }))
+    classified = any(p.get("type") not in (None, "unknown") for p in phases)
+    if not classified:
+        return {"status": "recorded_unclassified", "phases": phases,
+                "rule": "Garmin recorded these phases without classifying them: no effort/recovery structure."}
     regularity = phase_analysis.get("effort_regularity") or {}
     out: dict[str, Any] = {"status": "recorded_by_garmin", "phases": phases}
     if regularity.get("available"):
@@ -1030,17 +1045,19 @@ def _compact_segments(block: Any) -> Optional[dict[str, Any]]:
         return None
     repetitions = [
         _present({"n": index, "duration_s": seg.get("duration_s"),
-                  "pace": _display_pace_sec(seg.get("pace_sec_per_km")), "avg_hr_bpm": seg.get("avg_hr_bpm")})
+                  "pace": _display_pace_sec(seg.get("pace_sec_per_km")), "avg_hr_bpm": _usable_hr(seg.get("avg_hr_bpm"))})
         for index, seg in enumerate((s for s in block.get("segments") or [] if isinstance(s, dict)), start=1)
     ]
     return _present({
         "typical_duration_s": block.get("typical_duration_s"),
         "typical_pace": _display_pace_sec(block.get("typical_pace_sec_per_km")),
         "repetitions": repetitions,
-        "avg_hr_first_bpm": block.get("avg_hr_first_bpm") if block.get("hr_evolution_available") else None,
-        "avg_hr_last_bpm": block.get("avg_hr_last_bpm") if block.get("hr_evolution_available") else None,
+        "avg_hr_first_bpm": _usable_hr(block.get("avg_hr_first_bpm")) if block.get("hr_evolution_available") else None,
+        "avg_hr_last_bpm": _usable_hr(block.get("avg_hr_last_bpm")) if block.get("hr_evolution_available") else None,
         "avg_hr_change_first_to_last_bpm":
-            block.get("avg_hr_change_first_to_last_bpm") if block.get("hr_evolution_available") else None,
+            block.get("avg_hr_change_first_to_last_bpm")
+            if block.get("hr_evolution_available") and _usable_hr(block.get("avg_hr_first_bpm"))
+            and _usable_hr(block.get("avg_hr_last_bpm")) else None,
     })
 
 
@@ -1089,13 +1106,17 @@ def _compact_provenance(provenance: Any) -> dict[str, Any]:
         "period_end": provenance.get("period_end"),
         "window_days": criteria.get("window_days"),
         "excludes": criteria.get("excludes"),
+        "known_limits": provenance.get("known_limits"),
         "distance_is_a_selection_criterion": criteria.get("distance_is_a_selection_criterion"),
         "confidence": provenance.get("confidence"),
     })
 
 
-def compact_validated_comparisons(frame: Any) -> list[dict[str, Any]]:
-    """Comparisons the V2/V3 engines validated, each with its provenance and reference population."""
+def compact_validated_comparisons(frame: Any, analysis: Any = None) -> list[dict[str, Any]]:
+    """Comparisons the V2/V3 engines validated, each with its provenance, reference population,
+    comparability status and the limits that qualify it (``analysis`` is the V2 workout analysis)."""
+    similar = ((analysis or {}).get("comparison") or {}).get("similar") if isinstance(analysis, dict) else None
+    similar = similar if isinstance(similar, dict) else {}
     if not isinstance(frame, dict) or not isinstance(frame.get("v3_assessment"), dict):
         v3, contract = {}, ((frame or {}).get("evidence_contract") or {}) if isinstance(frame, dict) else {}
     else:
@@ -1115,16 +1136,30 @@ def compact_validated_comparisons(frame: Any) -> list[dict[str, Any]]:
                 "reference_hr_q1_bpm": relative.get("hr_q1_bpm"),
                 "reference_hr_median_bpm": relative.get("hr_median_bpm"),
                 "reference_hr_q3_bpm": relative.get("hr_q3_bpm"),
+                "reference_status": relative.get("status"),
                 "provenance": _compact_provenance(relative.get("provenance")),
                 "meaning": "a position among the athlete's own comparable sessions, not an effort zone",
             }))
         elif metric == "pace_and_hr_at_comparable_effort":
             out.append(_present({
                 "metric": metric, "values": item.get("values"),
+                "comparability": historical.get("comparability"),
                 "provenance": _compact_provenance(historical.get("provenance")),
             }))
         elif metric == "pace_and_hr_vs_similar_distance_sessions":
-            out.append({k: v for k, v in item.items() if k not in {"limits", "source_path"}})
+            entry = {k: v for k, v in item.items() if k != "source_path"}
+            entry.update(_present({
+                "comparable": similar.get("comparable"),
+                "pace_comparability": similar.get("pace_comparability"),
+                "hr_comparability": similar.get("hr_comparability"),
+                "pace_structure_status": similar.get("pace_structure_status"),
+                "hr_structure_status": similar.get("hr_structure_status"),
+                "pace_nature_status": similar.get("pace_nature_status"),
+                "hr_nature_status": similar.get("hr_nature_status"),
+                "heart_rate_difference_bpm": similar.get("heart_rate_difference_bpm"),
+                "hr_sample_count": similar.get("hr_sample_count"),
+            }))
+            out.append(entry)
         else:
             out.append({k: v for k, v in item.items() if k not in {"source_path", "meaning", "ratio_precision"}})
     return out
@@ -1154,8 +1189,12 @@ def compact_recorded_prescription(frame: Any) -> dict[str, Any]:
     })
 
 
-def compact_allowed_conclusions(frame: Any) -> list[dict[str, Any]]:
-    """V3 conclusions the Coach may relay (diagnosis/evidence items and a hypothesised type)."""
+def compact_allowed_conclusions(frame: Any, *, prescription_usable: bool = False) -> list[dict[str, Any]]:
+    """V3 conclusions the Coach may relay (diagnosis/evidence items and a hypothesised type).
+
+    A prescription-derived conclusion (``evidence.prescription``, ``prescription.*``) is relayed only when
+    the prescription was recorded before the session (``prescription_usable``), like recorded_prescription.
+    """
     v3 = (frame or {}).get("v3_assessment") if isinstance(frame, dict) else None
     if not isinstance(v3, dict):
         return []
@@ -1170,13 +1209,37 @@ def compact_allowed_conclusions(frame: Any) -> list[dict[str, Any]]:
     coach = v3.get("coach_assessment") or {}
     for item in (coach.get("diagnosis") or []) + (coach.get("evidence") or []):
         if isinstance(item, dict) and item.get("code") and item.get("code") != "diagnosis.unknown":
+            if not prescription_usable and "prescription" in str(item["code"]):
+                continue
             out.append({"code": item["code"], "text": item.get("text")})
     return out
 
 
+def comparison_limit_topics(comparisons: Any) -> set[str]:
+    """Limit topics already attached to a validated comparison (its own ``limits``/``known_limits``)."""
+    topics: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"limits", "known_limits"} and isinstance(item, list):
+                    for code in item:
+                        topic = _LIMIT_TOPIC_BY_CODE.get(str(code)) or _LIMIT_TOPIC_BY_CODE.get(f"limitations.{code}")
+                        if topic:
+                            topics.add(topic)
+                else:
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(comparisons)
+    return topics
+
+
 def consolidate_limitations(
     items: list[Any], *, structure_present: bool, comparisons_present: bool, session_type_unknown: bool,
-    structure_has_hr: bool = False,
+    structure_has_hr: bool = False, attached_topics: Optional[set[str]] = None,
 ) -> list[dict[str, str]]:
     """One entry per material uncertainty, whichever engine expressed it and however it was worded.
 
@@ -1210,6 +1273,9 @@ def consolidate_limitations(
         topics.pop("no_validated_comparison", None)
     else:
         for topic in _COMPARISON_ONLY_TOPICS:
+            topics.pop(topic, None)
+    for topic in attached_topics or ():  # carried by the comparison itself: stated once
+        if topic in _COMPARISON_ONLY_TOPICS:
             topics.pop(topic, None)
     return [{"code": topic, "text": text} for topic, text in topics.items()]
 

@@ -7,6 +7,7 @@ never happen, and the Training V2 week/today endpoints (which persist) must not 
 """
 
 from contextlib import contextmanager
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -106,7 +107,7 @@ async def test_initial_analysis_does_not_mutate_training_v2():
     assert _training_writes(writes) == []
     assert {w[0] for w in writes} <= ALLOWED_WRITE_COLLECTIONS
     assert any(w == ("conversations", "insert_one") for w in writes)  # chat history still works
-    assert "workout_id" not in contexts[0]["session_coaching_frame"]  # C408-C
+    assert '"workout_id"' not in json.dumps(contexts[0])  # C408-C (C421: whole chat context)
 
 
 async def test_rerun_on_same_session_does_not_mutate_training_v2():
@@ -122,16 +123,18 @@ async def test_historical_prescription_consultation_is_read_only():
 
     fake_db = _FakeDB()
     _, contexts, writes = await _consult(fake_db, loader=_evidence(prescription=_prescription(True)))
-    recorded = contexts[0]["session_coaching_frame"]["session_intent"]["recorded_historical_prescription"]
-    assert recorded["planned_date"] == DAY
+    recorded = contexts[0]["athlete_context"]["recorded_prescription"]
+    # C421: the snapshot is dated the session day only, so it is not provably earlier: never a known intent
+    assert recorded["status"] == "none_usable" and recorded["reason"] == "recording_time_unknown"
+    assert "planned_date" not in recorded and "prescribed_workout_type" not in recorded
     assert _training_writes(writes) == []
 
 
 async def test_missing_snapshot_is_read_only_and_explicit():
     fake_db = _FakeDB()
     _, contexts, writes = await _consult(fake_db, loader=_evidence(prescription=None))
-    intent = contexts[0]["session_coaching_frame"]["session_intent"]
-    assert intent["recorded_historical_prescription"] == "none_recorded_for_session_date"
+    recorded = contexts[0]["athlete_context"]["recorded_prescription"]
+    assert recorded == {"status": "none_usable", "reason": "none_recorded_for_session_date"}
     assert _training_writes(writes) == []
 
 
@@ -140,7 +143,8 @@ async def test_backend_evidence_error_is_read_only():
     loader = AsyncMock(side_effect=RuntimeError("mongo down"))
     responses, contexts, writes = await _consult(fake_db, loader=loader)
     assert responses[0].status_code == 200
-    assert contexts[0]["session_coaching_frame"]["v3_assessment"] == "unavailable"
+    assert contexts[0]["allowed_conclusions"] == []  # V3 unavailable: nothing to relay
+    assert "session_type_unknown" in {x["code"] for x in contexts[0]["material_limitations"]}
     assert _training_writes(writes) == []
 
 
@@ -151,7 +155,7 @@ async def test_selected_session_context_excludes_current_plan_and_title():
     for current_only in ("training_week", "today", "readiness", "load", "performance", "paces",
                          "current_training_context", "recent_workouts", "stats_7d", "stats_30d"):
         assert current_only not in context
-    assert "name" not in context["workout_detail"]
+    assert "name" not in context["session"] and "workout_detail" not in context  # C421: title never sent
 
 
 async def test_general_chat_without_workout_still_loads_training_payloads():

@@ -280,28 +280,38 @@ def _analysis_observations(analysis: dict) -> list:
 
 def _session_block(detail: dict, structured: bool) -> dict:
     """Identity and measures of the session; whole-session averages only when no structure replaces them."""
+    from coach_context_v2 import _usable_hr
+
     block = {
         "date": detail.get("date"), "type": detail.get("type"),
         "distance_km": detail.get("distance_km"), "duration_minutes": detail.get("duration_minutes"),
-        "max_hr_bpm": detail.get("max_hr"), "elevation_gain_m": detail.get("elevation_gain_m"),
+        "max_hr_bpm": _usable_hr(detail.get("max_hr")), "elevation_gain_m": detail.get("elevation_gain_m"),
     }
     if not structured:  # an average over warm-up, repetitions and recoveries says little about what was run
-        block.update({"avg_pace": detail.get("avg_pace_display"), "avg_hr_bpm": detail.get("avg_hr")})
+        block.update({"avg_pace": detail.get("avg_pace_display"), "avg_hr_bpm": _usable_hr(detail.get("avg_hr"))})
     block["first_km_splits"] = detail.get("km_splits")
     block["hr_zone_distribution"] = detail.get("zones")
     return {k: v for k, v in block.items() if v not in (None, [], {})}
 
 
 def _pacing_observation(pacing: Any) -> Optional[dict]:
+    """Split pacing from V2. The server projects paces to ``*_display`` strings (numeric keys removed);
+    the numeric ``*_min_km`` fields are only a fallback for an unprojected context."""
     from coach_context_v2 import _format_pace_delta_min_km, _format_pace_min_km
 
     if not isinstance(pacing, dict) or not pacing.get("available"):
         return None
+
+    def pace(display_key: str, numeric_key: str, fmt) -> Optional[str]:
+        if pacing.get(display_key):
+            return pacing[display_key]
+        return fmt(pacing[numeric_key]) if pacing.get(numeric_key) is not None else None
+
     item = {
         "code": "split_pacing", "source": "v2_pacing",
-        "fastest_split": _format_pace_min_km(pacing.get("fastest_split_min_km")) if pacing.get("fastest_split_min_km") is not None else None,
-        "slowest_split": _format_pace_min_km(pacing.get("slowest_split_min_km")) if pacing.get("slowest_split_min_km") is not None else None,
-        "pace_drop": _format_pace_delta_min_km(pacing.get("pace_drop_min_km")) if pacing.get("pace_drop_min_km") is not None else None,
+        "fastest_split": pace("fastest_split_display", "fastest_split_min_km", _format_pace_min_km),
+        "slowest_split": pace("slowest_split_display", "slowest_split_min_km", _format_pace_min_km),
+        "pace_drop": pace("pace_drop_display", "pace_drop_min_km", _format_pace_delta_min_km),
         "negative_split": pacing.get("negative_split"),
     }
     return item if any(v is not None for k, v in item.items() if k not in {"code", "source"}) else None
@@ -346,15 +356,20 @@ def build_conversation_context(llm_context: dict) -> dict:
     """
     from coach_context_v2 import (
         compact_allowed_conclusions, compact_inferred_structure, compact_recorded_prescription,
-        compact_recorded_structure, compact_validated_comparisons, consolidate_limitations,
+        compact_recorded_structure, compact_validated_comparisons, comparison_limit_topics,
+        consolidate_limitations,
     )
 
     frame_source = llm_context.get("session_coaching_frame")
     access = llm_context.get("coach_workout_analysis_allowed")
+    raw_validated = llm_context.get("validated_workout_observations")
     llm_context = build_comment_context(llm_context)  # C400 selection (history, goal, permissions); unchanged
     detail = llm_context.get("workout_detail")
     out: dict = {"language": llm_context.get("language"), "coach_workout_analysis_allowed": access}
     if not isinstance(detail, dict) or not detail:
+        narrative = _narrative_observations(raw_validated, False, False)  # V3 observations exist without a detail
+        if narrative:
+            out["key_observations"] = narrative
         return {k: v for k, v in out.items() if v is not None}
     analysis = detail.get("analysis") if isinstance(detail.get("analysis"), dict) else {}
     frame = frame_source if isinstance(frame_source, dict) else {}
@@ -370,19 +385,17 @@ def build_conversation_context(llm_context: dict) -> dict:
 
     v3 = frame.get("v3_assessment") if isinstance(frame.get("v3_assessment"), dict) else {}
     probable_type = (v3.get("classification") or {}).get("probable_type", "unknown")
-    comparisons = compact_validated_comparisons(frame)
+    comparisons = compact_validated_comparisons(frame, analysis)
+    prescription = compact_recorded_prescription(frame)
+    prescription_usable = prescription.get("status") == "recorded_before_session"
     observations = _analysis_observations(analysis)
     pacing = _pacing_observation(analysis.get("pacing"))
     if pacing:
         observations.append(pacing)
     validated = llm_context.get("validated_workout_observations")
-    if isinstance(validated, dict) and probable_type != "unknown":  # unknown type: the limit below says it once
-        for source, key in (("v3_narrative", "headline"), ("v3_narrative", "analysis"),
-                            ("v3_narrative", "interpretation")):
-            if key == "interpretation" and not comparisons:
-                continue
-            if validated.get(key):
-                observations.append({"code": f"narrative.{key}", "source": source, "text": validated[key]})
+    observations += _narrative_observations(validated, bool(comparisons), prescription_usable)
+    if not prescription_usable:
+        observations = [o for o in observations if "prescription" not in str(o.get("code"))]
 
     history = llm_context.get("history_as_of_session") or {}
     window = history.get("window") or {}
@@ -390,6 +403,7 @@ def build_conversation_context(llm_context: dict) -> dict:
         "eligible_count": history.get("eligible_count"), "included_count": history.get("included_count"),
         "truncated": history.get("truncated"), "window_start": window.get("start_date_inclusive"),
         "observation_window_days": history.get("observation_window_days"),
+        "cutoff_precision": llm_context.get("selected_workout_history_cutoff_precision"),
         "sessions_most_recent_first": history.get("sessions") or [],
         "note": "only sessions provably before this one; similarity to it is not implied; no trend established",
     }}
@@ -405,13 +419,14 @@ def build_conversation_context(llm_context: dict) -> dict:
             "status": "current_declared_goal", "valid_at_session_date": "unknown",
             "usage": "general relevance only; not proof that the session was designed for it",
         }
-    athlete["recorded_prescription"] = compact_recorded_prescription(frame)
+    athlete["recorded_prescription"] = prescription
 
     limitations = consolidate_limitations(
         _limitation_items(analysis, frame, recorded_present),
         structure_present=structured, comparisons_present=bool(comparisons),
         session_type_unknown=probable_type == "unknown",
         structure_has_hr='"avg_hr_bpm"' in json.dumps([recorded, inferred]),
+        attached_topics=comparison_limit_topics(comparisons),
     )
     permissions = copy.deepcopy(llm_context.get("selected_workout_permissions") or {})
     reliable = llm_context.get("reliable_physiology") or {}
@@ -427,11 +442,34 @@ def build_conversation_context(llm_context: dict) -> dict:
         "key_observations": observations,
         "validated_comparisons": comparisons,
         "athlete_context": athlete,
-        "allowed_conclusions": compact_allowed_conclusions(frame),
+        "allowed_conclusions": compact_allowed_conclusions(frame, prescription_usable=prescription_usable),
         "material_limitations": limitations,
         "scientific_permissions": scientific,
     })
     return strip_technical_ids(_prune(out), selected_id=str(detail.get("id") or ""))
+
+
+def _narrative_observations(validated: Any, with_interpretation: bool, prescription_usable: bool) -> list:
+    """V3 narrative headline/analysis (and interpretation when comparisons exist). Its own limitations go through
+    material_limitations; a sentence about a prescription is dropped unless it was recorded before the session."""
+    out: list = []
+    if not isinstance(validated, dict):
+        return out
+    for key in ("headline", "analysis", "interpretation"):
+        if key == "interpretation" and not with_interpretation:
+            continue
+        text = validated.get(key)
+        if text and not prescription_usable:
+            text = _without_prescription_sentences(text)
+        if text:
+            out.append({"code": f"narrative.{key}", "source": "v3_narrative", "text": text})
+    return out
+
+
+def _without_prescription_sentences(text: str) -> str:
+    """Drop the sentences that speak of a prescription (FR/EN/ES stem 'prescri'), keep the rest."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(s for s in sentences if "prescri" not in s.lower())
 
 
 def _prune(value: Any) -> Any:
