@@ -6,7 +6,7 @@ and the read-only loader in ``workout_intelligence_v3_service``.
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -436,6 +436,8 @@ class WorkoutIntelligenceV3(BaseModel):
     coach_assessment: WIV3CoachAssessment
     effort_pace_observations: WIV3EffortPaceObservations = Field(default_factory=WIV3EffortPaceObservations)
     effort_duration_observations: WIV3EffortDurationObservations = Field(default_factory=WIV3EffortDurationObservations)
+    # C420: inferred from cached Garmin laps (garmin_lap_pattern_v1); never a recorded phase or classification.
+    observed_lap_pattern: Optional[Dict[str, Any]] = None
 
 
 class WorkoutIntelligenceV3Response(BaseModel):

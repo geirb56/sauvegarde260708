@@ -96,7 +96,12 @@ from training_v2.plan_goal import GoalType
 from training_v2.training_paces_authority import load_canonical_training_paces
 from training_v2.snapshot_persistence import invalidate_future_snapshots
 import coach_evidence_guard
-from coach_context_v2 import build_coach_context_v2, build_llm_coach_context, build_session_coaching_frame
+from coach_context_v2 import (
+    build_coach_context_v2,
+    build_llm_coach_context,
+    build_observed_lap_pattern_context,
+    build_session_coaching_frame,
+)
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
@@ -2156,9 +2161,12 @@ async def _assemble_coach_llm_context(
     if not goal_declared:
         llm_context.pop("goal", None)
     if workout_id is not None and workout_analysis_allowed:
+        intelligence_dump = scoped_intelligence.model_dump(mode="json") if scoped_intelligence is not None else None
+        lap_pattern = build_observed_lap_pattern_context(intelligence_dump)
+        if lap_pattern is not None:
+            llm_context["observed_lap_pattern"] = lap_pattern
         frame = build_session_coaching_frame(
-            llm_context, goal_declared=goal_declared,
-            intelligence=scoped_intelligence.model_dump(mode="json") if scoped_intelligence is not None else None,
+            llm_context, goal_declared=goal_declared, intelligence=intelligence_dump,
         )
         if frame is not None:
             llm_context["session_coaching_frame"] = frame

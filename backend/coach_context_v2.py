@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -842,6 +843,29 @@ def build_evidence_contract(
         "usage": "Cite measured_facts exactly. Describe a comparison only with its provenance population. "
                  "State a not_demonstrated item as a limit, once, only when it helps the answer.",
     }
+
+
+def build_observed_lap_pattern_context(intelligence: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """C420: the lap pattern detected by V3 (cached Garmin laps), relayed unchanged for the LLM.
+
+    A detected pattern outranks the global averages as a description of what was done, but it
+    stays an inference: never a recorded phase, a prescription or a certain classification.
+    Undetected structure is relayed only as a status so the Coach does not invent one.
+    """
+    pattern = (intelligence or {}).get("observed_lap_pattern")
+    if not isinstance(pattern, dict) or pattern.get("schema") != "garmin_lap_pattern_v1":
+        return None
+    out = copy.deepcopy(pattern)
+    if out.get("status") == "pattern_observed":
+        out["priority"] = "describes what was done; prefer it over whole-session average pace and HR"
+        out["rule"] = (
+            "State the alternation as an observation inferred from Garmin laps, with its confidence. "
+            "Do not call slow laps programmed recoveries, do not claim a prescribed workout, "
+            "and do not add durations, paces or heart rates that are not listed here."
+        )
+    else:
+        out["rule"] = "No alternation was established from the laps; the structure is unknown, do not invent one."
+    return out
 
 
 def build_session_coaching_frame(
