@@ -295,35 +295,29 @@ from test_coach_contract_unified import _FakeDB, _STUB_REPLIES, _analyze_environ
 
 
 @_pytest.mark.asyncio
-async def test_rejected_reply_is_replaced_by_fallback_without_training_writes():
+async def test_reply_is_returned_unchanged_without_guard_or_fallback_c418():
+    """C418: no post-generation verification, repair or substitution in the chat."""
     fake_db = _FakeDB()
-    fallback = "Fallback factual reply built from the contract only."
+    long_reply = "Réponse du coach. " * 80  # > 700 characters, kept whole
     with (
         _analyze_environment(fake_db, _premium_access),
         _owned_workout(fake_db),
         _record_writes(fake_db) as writes,
-        patch.object(server.coach_evidence_guard, "verify_chat_reply",
-                     return_value={"passed": False, "level": "x", "rejected_checks": ["hr_rise_read_as_intensity"]}),
-        patch.object(server.coach_evidence_guard, "build_contract_fallback", return_value=fallback),
+        patch.object(server.coach_evidence_guard, "resolve_chat_reply") as resolve,
+        patch.object(server.coach_evidence_guard, "verify_chat_reply") as verify,
+        patch.object(server.coach_evidence_guard, "build_contract_fallback") as fallback,
     ):
+        llm = server.llm_coach.enrich_chat_response
+        llm.side_effect = AsyncMock(return_value=(long_reply, True, {}))
         response = await _post({"message": "Comment this session", "workout_id": "w1", "language": "en"})
-    assert response.status_code == 200
     body = response.json()
-    assert body["response"] == fallback
-    assert body["verification"]["response_source"] == "contract_fallback"
-    assert body["verification"]["rejected_checks"] == ["hr_rise_read_as_intensity"]
+    assert response.status_code == 200 and body["response"] == long_reply and len(long_reply) > 700
+    assert body["verification"]["response_source"] == "llm_direct_unverified"
+    assert body["verification"]["passed"] is None and body["verification"]["rejected_checks"] == []
+    resolve.assert_not_called()
+    verify.assert_not_called()
+    fallback.assert_not_called()
+    assert llm.await_count == 1
     assert {w[0] for w in writes} <= ALLOWED_WRITE_COLLECTIONS
-
-
-@_pytest.mark.asyncio
-async def test_passing_reply_is_kept_and_marked_checked():
-    fake_db = _FakeDB()
-    with (
-        _analyze_environment(fake_db, _premium_access),
-        _owned_workout(fake_db),
-    ):
-        response = await _post({"message": "Comment this session", "workout_id": "w1", "language": "en"})
-    body = response.json()
-    assert response.status_code == 200 and body["response"] == _STUB_REPLIES["en"]
-    assert body["verification"]["response_source"] == "llm_reply_checked"
-    assert "check_ms" in body["verification"]
+    assistant = [d for d in fake_db.conversations._docs if d["role"] == "assistant"]
+    assert len(assistant) == 1 and assistant[0]["content"] == long_reply

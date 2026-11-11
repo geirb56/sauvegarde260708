@@ -41,6 +41,10 @@ def _chat(db, access=_trial_access):
         yield loader
 
 
+def _llm_contexts():
+    return [c.kwargs["context"] for c in server.llm_coach.enrich_chat_response.await_args_list]
+
+
 def _assistants(db, user="user-a"):
     return [d for d in db.conversations._docs if d["role"] == "assistant" and d["user_id"] == user]
 
@@ -60,15 +64,18 @@ async def test_intermediate_acknowledgement_keeps_the_same_two_activities():
         r3 = await _post({"message": "D'accord, je vois.", "language": "fr"})
         r4 = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
         total = _llm_calls()
+        last_context = _llm_contexts()[-1]
     assert [r.status_code for r in (r1, r2, r3, r4)] == [200] * 4
-    assert total == calls + 1  # only the acknowledgement reaches the model
+    assert total == calls + 2  # C418: the acknowledgement and the cardio comparison reach the model
+    assert last_context["comparison_request"]["focus"] == "hr"
+    assert {a["id"] for a in last_context["comparison_contract"]["activities"]} == {"wA", "wB"}
     refs = [d.get("coach_refs") for d in _assistants(db)]
     assert refs[0]["workout_ids"] == ["wA"]
     assert refs[1]["workout_ids"] == ["wB", "wA"] and refs[1]["kind"] == "pair"
     assert refs[2]["workout_ids"] == ["wB", "wA"] and refs[2]["carried"] == 1
     assert refs[3]["workout_ids"] == ["wB", "wA"] and "carried" not in refs[3]
-    text = r4.json()["response"]
-    assert "160 bpm" in text and "127 bpm" in text and "33 bpm" in text
+    assert [a["avg_hr"] for a in last_context["comparison_contract"]["activities"]] == [160, 127]
+    assert last_context["comparison_contract"]["deltas"]["avg_hr"]["gap"] == 33
 
 
 async def test_explicit_change_of_subject_abandons_the_previous_context():
@@ -217,13 +224,14 @@ async def test_comparison_from_a_selected_activity_uses_it_as_first_reference():
         followup = await _post({"message": "Et au niveau du cardio ?", "workout_id": "wA", "language": "fr"})
         general = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
         total = _llm_calls()
+        contexts = _llm_contexts()[-3:]
     assert response.status_code == followup.status_code == 200
-    assert total == calls + 1  # only the general-chat message, with no references, reaches the model
+    assert total == calls + 3  # C418: both comparison turns are worded by the model, then the general chat
     body = response.json()
-    assert "21,27 km" in body["response"] and "9,33 km" in body["response"]
-    assert body["verification"]["response_source"] == "c409_comparison_contract"
-    assert "160 bpm" in followup.json()["response"] and "127 bpm" in followup.json()["response"]
-    assert "160 bpm" not in general.json()["response"]
+    assert [a["distance_km"] for a in contexts[0]["comparison_contract"]["activities"]] == [21.27, 9.33]
+    assert [a["avg_hr"] for a in contexts[1]["comparison_contract"]["activities"]] == [160, 127]
+    assert "comparison_contract" not in contexts[2]  # no references for the general message
+    assert body["verification"]["response_source"] == "llm_direct_unverified"
     assert loader.await_args_list[0].kwargs["workout_id"] == "wA" and loader.await_count == 2
     stored = [d for d in db.conversations._docs if d["role"] == "assistant"]
     assert [d["workout_id"] for d in stored] == ["wA", "wA", None]

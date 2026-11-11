@@ -10,7 +10,7 @@ import pytest
 from test_coach_c409_activity_conversation import (
     A, B, TODAY, _db, _history_runs, _post, _run, _turn,
 )
-from test_coach_c409_review_fixes import _assistants, _chat, _llm_calls
+from test_coach_c409_review_fixes import _assistants, _chat, _llm_calls, _llm_contexts
 from test_coach_contract_unified import _free_access
 import coach_activity_conversation as cac
 
@@ -203,11 +203,12 @@ async def test_history_followup_through_the_server_and_stored_refs():
                           "language": "fr"})
         calls = _llm_calls()
         r2 = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
-        assert _llm_calls() == calls
+        assert _llm_calls() == calls + 1  # C418: the follow-up is worded by the model
+        contract = _llm_contexts()[-1]["comparison_contract"]
     assert r1.status_code == r2.status_code == 200
+    assert contract["kind"] == "history" and contract["reference"]["id"] == "wA"
     refs = [d["coach_refs"] for d in _assistants(db)]
     assert refs[0]["kind"] == refs[1]["kind"] == "history" and refs[1]["workout_ids"] == ["wA"]
-    assert "127 bpm" in r2.json()["response"]
 
 
 # ---- G. continuity without seeded references
@@ -219,10 +220,12 @@ async def test_real_three_turn_continuity_without_injected_refs():
         persisted = _assistants(db)[0]["coach_refs"]
         r2 = await _post({"message": "Compare-la avec celle du 13 septembre.", "language": "fr"})
         r3 = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
+        context = _llm_contexts()[-1]
     assert r1.status_code == r2.status_code == r3.status_code == 200
     assert persisted["workout_ids"] == ["wA"]
     assert [d["coach_refs"]["workout_ids"] for d in _assistants(db)[1:]] == [["wB", "wA"]] * 2
-    assert "160 bpm" in r3.json()["response"] and "33 bpm" in r3.json()["response"]
+    assert context["comparison_request"]["focus"] == "hr"
+    assert context["comparison_contract"]["deltas"]["avg_hr"]["gap"] == 33
 
 
 # ---- obsolete remarks: regression tests

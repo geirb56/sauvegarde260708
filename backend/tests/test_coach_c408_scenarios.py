@@ -184,10 +184,10 @@ def test_context_reaches_the_prompt_json_with_the_selected_workout():
         import asyncio
         asyncio.run(llm_coach.enrich_chat_response("Analyse cette séance.", context, [], "u"))
     prompt = call.await_args.args[1]
-    payload = json.loads(prompt.split("COACH CONTEXT V2 JSON:\n", 1)[1].split("\n\n", 1)[0])
+    payload = json.loads(prompt.split("DONNÉES RUNINDEX (JSON):\n", 1)[1].split("\n\n", 1)[0])
     assert payload["session_coaching_frame"]["workout_id"] == "cur"
     assert payload["session_coaching_frame"]["v3_assessment"]["classification"]["probable_type"] == "easy_run_probable"
-    assert "MODE: selected_workout_initial" in prompt
+    assert "MODE:" not in prompt
 
 
 # ---- E: analysis then two follow-ups on the same workout ---------------------------------------

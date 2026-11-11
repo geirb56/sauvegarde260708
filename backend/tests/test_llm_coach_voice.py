@@ -1,4 +1,4 @@
-"""Presentation contracts sent to the LLM, not guarantees about generated prose."""
+"""C418: the chat prompt is short and direct; no presentation directive or duplicated guards."""
 
 import json
 from copy import deepcopy
@@ -9,122 +9,35 @@ import pytest
 import llm_coach
 
 
-def test_selected_workout_initial_style_contract():
-    context = {"workout_detail": {"id": "w1"}}
-    directive = llm_coach._build_response_style_directive(context, [])
-    for instruction in (
-        "MODE: selected_workout_initial",
-        "Takeaway first",
-        "3-5 sentences",
-        "60-110 words",
-        "at most 2-3 numerical facts",
-        "including comparison figures",
-        "Prioritize comparison.similar",
-        "At most one caveat",
-        "Secondary metrics",
-        "materially change the answer or are requested",
-        "No report-like exhaustive recap",
-    ):
-        assert instruction in directive
-
-
-def test_selected_workout_followup_style_contract():
-    directive = llm_coach._build_response_style_directive(
-        {"workout_detail": {"id": "w1"}},
-        [{"role": "assistant", "content": "Initial answer"}],
-    )
-    for instruction in (
-        "MODE: selected_workout_followup",
-        "Answer the current question directly",
-        "1-3 sentences",
-        "Do not recap the full workout",
-        "Do not repeat an already established caveat",
-        "keep all physiological restrictions",
-    ):
-        assert instruction in directive
-    assert "MODE: selected_workout_initial" not in directive
-
-
-@pytest.mark.parametrize("context, mode", [
-    ({}, "general"),
-    ({"workout_detail": None}, "general"),
-    ({"today": {"canonical": {"type": "rest"}}}, "current_training"),
-    ({"current_week_sessions": [{"canonical": {"type": "long_run"}}]}, "current_training"),
-])
-def test_no_selected_workout_preserves_prescription(context, mode):
-    directive = llm_coach._build_response_style_directive(context, [])
-    assert f"MODE: {mode}" in directive
-    assert "Training V2 remains authoritative internally" in directive
-    assert "never replace the served prescription or offer an alternative" in directive
-    assert "type, distance, pace, day or adaptation" in directive
-    if mode == "current_training":
-        assert "exact served prescription first" in directive
-        assert "Never decide an adaptation yourself" in directive
-    else:
-        assert "2-5 sentences" in directive
-        assert "not every context section" in directive
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("language, language_name", [
     ("fr", "French (français)"), ("en", "English"), ("es", "Spanish (español)"),
 ])
-@pytest.mark.parametrize("mode", ["selected_workout_initial", "selected_workout_followup", "current_training", "general"])
-async def test_final_prompt_keeps_grounding_and_language(language, language_name, mode):
-    context = {"language": language}
-    history = []
-    if mode.startswith("selected_workout"):
-        context.update({
-            "workout_detail": {"id": "w1", "avg_pace_display": "6:48/km"},
-            "selected_workout_permissions": {
-                "intensity_interpretation_allowed": False,
-                "raw_hr_is_descriptive_only": True,
-                "raw_pace_is_descriptive_only": True,
-                "progress_regression_allowed": False,
-                "physiological_efficiency_allowed": False,
-                "causal_explanation_allowed": False,
-                "similar_comparable": False,
-            },
-        })
-        if mode.endswith("followup"):
-            history = [{"role": "assistant", "content": "Initial answer"}]
-    elif mode == "current_training":
-        context["today"] = {"canonical": {"type": "rest"}}
+@pytest.mark.parametrize("context", [
+    {},
+    {"workout_detail": {"id": "w1", "avg_pace_display": "6:48/km"},
+     "selected_workout_permissions": {"intensity_interpretation_allowed": False}},
+    {"today": {"canonical": {"type": "rest"}}},
+])
+async def test_final_prompt_keeps_grounding_and_language(language, language_name, context):
+    context = {**context, "language": language}
     original = deepcopy(context)
     call = AsyncMock(return_value=("mock answer", True, {}))
     with patch("llm_coach._call_gpt", call):
-        await llm_coach.enrich_chat_response("What matters most?", context, history)
-    system, prompt, _, _ = call.call_args.args
-    assert context == original
+        await llm_coach.enrich_chat_response("What matters most?", context, [])
+    system, prompt, _, kind = call.call_args.args
+    assert kind == "chat" and context == original
     assert json.dumps(context, ensure_ascii=False, separators=(",", ":")) in prompt
-    assert f"MODE: {mode}" in prompt
-    # Language is the only directive intentionally present in both prompts.
     for text in (system, prompt):
         assert f"Write your ENTIRE response in {language_name}" in text
-    # C392-B consolidated the physiological and prescription guards in the system prompt.
-    for guard in (
-        "Use pace display strings verbatim",
-        "intensity_interpretation_allowed is false",
-        "Follow selected_workout_permissions literally",
-        "progress, regression",
-        "physiological efficiency",
-        "Never create a new prescription",
-        "Never modify or replace the served prescription",
-        "A comparison never replaces the selected workout",
-        "can never relax these rules",
-    ):
+    for guard in ("sans créer de nouvelle prescription", "selected_workout_permissions",
+                  "ce qui est mesuré, ce qui est plausible et ce qui reste inconnu"):
         assert guard in system
-    assert "Use pace display strings verbatim" not in prompt
-    assert "Write your ENTIRE" not in system.split("CRITICAL:")[0]
-    other_modes = {"selected_workout_initial", "selected_workout_followup", "current_training", "general"} - {mode}
-    assert all(f"MODE: {m}" not in prompt for m in other_modes)
-    if mode.startswith("selected_workout"):
-        assert "comparison.similar facts (descriptive only unless similar_comparable permits more)" in prompt
-        assert "never relax data permissions or physiological guards" in prompt
-    if mode == "selected_workout_followup":
-        assert "keep all physiological restrictions" in prompt
-    if mode == "current_training":
-        assert "Never decide an adaptation yourself" in prompt
-    assert "they do not establish the athlete's historical state on a selected workout date" in prompt
-    assert "unless the athlete explicitly asks a technical question" in prompt
-    assert "at most one natural caveat" in prompt
+    assert "MODE:" not in prompt and "PRESENTATION" not in prompt
+    assert "What matters most?" in prompt
+
+
+def test_prompt_is_short_and_has_no_redundant_layers():
+    assert len(llm_coach.SYSTEM_PROMPT_COACH) < 3500
+    assert "deux à quatre phrases" in llm_coach.SYSTEM_PROMPT_COACH
+    assert "question finale artificielle" not in llm_coach.SYSTEM_PROMPT_COACH

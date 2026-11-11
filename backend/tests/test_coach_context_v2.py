@@ -868,12 +868,10 @@ def test_system_prompt_coach_declares_v2_authority_rules():
     import llm_coach
 
     prompt = llm_coach.SYSTEM_PROMPT_COACH
-    assert "The Training V2 engine decides the prescription. The Coach only explains it." in prompt
     assert "You have access to ALL their real training data" not in prompt
-    assert "Never create a new prescription" in prompt
-    assert "Never modify or replace the served prescription" in prompt
-    assert "recent_workouts" in prompt
-    assert "Workout Analysis V2" in prompt
+    assert "sans créer de nouvelle prescription" in prompt
+    assert "sans remplacer celle qui est servie" in prompt
+    assert "Les comparaisons et prescriptions ont été calculées par les moteurs RunIndex" in prompt
 
 
 @pytest.mark.asyncio
@@ -941,7 +939,7 @@ async def test_llm_prompts_include_recent_facts_and_block_unsupported_inferences
     }
     captured = {}
 
-    async def _capture_prompts(system_prompt, user_prompt, user_id, context_type):
+    async def _capture_prompts(system_prompt, user_prompt, user_id, context_type, **_):
         captured.update(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -964,15 +962,10 @@ async def test_llm_prompts_include_recent_facts_and_block_unsupported_inferences
     assert '"avg_heart_rate":160' in prompts
     assert '"distance_km":10.18' in prompts
     assert '"avg_heart_rate":127' in prompts
-    assert "descriptive facts only" in prompts
-    assert "do not establish physiological intensity" in prompts
-    assert "Never infer threshold, LT1/LT2, easy/hard effort, progress, regression, or physiological efficiency" in prompts
-    assert "does not prove progress" in prompts
-    assert "available Workout Analysis V2 fields" in prompts
-    assert "If analysis is absent" in prompts
-    assert "recent_workouts is a bounded selection" in prompts
-    assert "if truncated do not claim to have reviewed all sessions" in prompts
-    assert "Training V2 remains the sole prescription authority" in prompts
+    assert "ne prouve pas une progression" in prompts
+    assert "N'invente ni seuils (LT1/LT2)" in prompts
+    assert "ce qui reste inconnu" in prompts
+    assert "sans créer de nouvelle prescription" in prompts
     if analysis_available:
         assert '"available":false' in prompts
 
@@ -1619,7 +1612,7 @@ async def test_llm_receives_only_display_paces_and_explicit_interpretation_polic
     })
     captured = {}
 
-    async def _capture(system_prompt, user_prompt, user_id, context_type):
+    async def _capture(system_prompt, user_prompt, user_id, context_type, **_):
         captured["system_prompt"] = system_prompt
         captured["user_prompt"] = user_prompt
         return "captured", True, {}
@@ -1642,7 +1635,7 @@ async def test_llm_receives_only_display_paces_and_explicit_interpretation_polic
         assert f'"{raw_key}"' not in prompt
         assert str(raw_value) not in prompt
         assert f'"{display_key}":"{display}"' in prompt
-    assert "Use pace display strings verbatim" in prompt
+    assert "allures telles qu'elles sont écrites" in prompt
     assert '"intensity_interpretation_allowed":false' in prompt
     assert '"progress_regression_allowed":false' in prompt
     assert '"physiological_efficiency_allowed":false' in prompt

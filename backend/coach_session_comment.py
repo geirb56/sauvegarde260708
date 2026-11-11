@@ -251,6 +251,32 @@ def build_session_chat_context(llm_context: dict) -> dict:
     return strip_technical_ids(out, selected_id=str((llm_context.get("workout_detail") or {}).get("id") or ""))
 
 
+def build_comparison_chat_context(turn: dict, language: str) -> dict:
+    """C418: read-only context of a C409 comparison turn, built only from its computed contract.
+
+    No Training V2 payload, readiness, load or prediction: a comparison never uses the athlete's
+    current state as evidence of the state on the sessions' dates. C409 stays the authority for values.
+    """
+    contract = copy.deepcopy(turn["contract"])
+    return {
+        "language": language,
+        "coach_workout_analysis_allowed": True,
+        "comparison_request": {
+            "nature": contract.get("kind"),
+            "focus": turn.get("focus"),
+            "explanation_requested": bool(turn.get("why")),
+        },
+        "comparison_contract": contract,
+        # Deterministic C409 rendering: reference for the already computed gaps, not a reply.
+        "comparison_computed_summary": turn.get("text"),
+        "comparison_notes": [
+            "Values, gaps and missing data come from RunIndex; explain them without recomputing.",
+            "comparison_computed_summary holds the gaps already computed by RunIndex: reuse its figures, never restate it as a report.",
+            "Only allowed_interpretations are supported; undemonstrated_conclusions must not be concluded.",
+        ],
+    }
+
+
 # ------------------------------------------------------------------ fact scope
 
 def _walk(value: Any, path: tuple, out: list) -> None:
