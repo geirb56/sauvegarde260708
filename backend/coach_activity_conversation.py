@@ -1088,7 +1088,7 @@ async def _resolve_selector(db: Any, user_id: str, selector: dict, language: str
 
 
 async def _history_reference_choices(db: Any, user_id: str, history: dict, language: str,
-                                     today: date) -> dict:
+                                     today: date, focus: Optional[str] = None, why: bool = False) -> dict:
     """Similar-distance history without a reference: offer the latest runs instead of a dead end."""
     runs = (await _latest_runs(db, user_id, None, limit=3))
     if not runs:
@@ -1097,7 +1097,8 @@ async def _history_reference_choices(db: Any, user_id: str, history: dict, langu
               f"{_choice_label(w, i, language).split(') ', 1)[1]}" for i, w in enumerate(runs, 1)]
     prompt = t("c_history_reference", language, n=history["count"], listing=" ; ".join(labels))
     return _reply(prompt, _refs("single", [], pending=_pending(
-        [_choice_entry(w) for w in runs], {"action": "history", "history": history}, prompt)))
+        [_choice_entry(w) for w in runs],
+        {"action": "history", "history": history, "focus": focus, "why": why}, prompt)))
 
 
 async def _pair_response(db: Any, user_id: str, ids: list[str], language: str, today: date,
@@ -1196,12 +1197,31 @@ async def resolve_turn(*, db: Any, user_id: str, message: str, language: str, to
         return {"kind": "passthrough", "refs": carried_refs(memory, p)}
     turn = await _resolve(db=db, user_id=user_id, language=language, today=today, memory=memory, p=p,
                           selected_id=selected_id)
+    if turn["kind"] == "compare":
+        turn["continues"] = _continues_comparison(memory, turn)
     if selected_id is not None and turn["kind"] == "single":
         # The scope already is the opened activity: the normal selected-workout path answers.
         turn = {"kind": "passthrough", "refs": _refs("single", [selected_id], primary=selected_id)}
     if turn["kind"] == "passthrough" and "refs" not in turn:
         turn["refs"] = carried_refs(memory, p)
     return turn
+
+
+def _continues_comparison(memory: Optional[dict], turn: dict) -> bool:
+    """True when a comparison turn is the follow-up of the same pair / history of the memory."""
+    refs = turn.get("refs") or {}
+    if not memory or memory.get("kind") != refs.get("kind"):
+        return False
+    if set(memory.get("workout_ids", [])) != set(refs.get("workout_ids", [])):
+        return False
+    return refs.get("kind") != "history" or memory.get("history") == refs.get("history")
+
+
+def _history_focus(p: dict) -> Optional[str]:
+    """Focus of a history request; "same distance" selects the runs, it is not a distance focus."""
+    if p["focus"] == "distance" and p["history"] is not None and _SAME_DISTANCE_RE.search(_norm(p["text"])):
+        return None
+    return p["focus"]
 
 
 async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory: Optional[dict],
@@ -1239,7 +1259,8 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
                 return await _before_pair(db, user_id, picked, language, today,
                                           intent.get("focus"), bool(intent.get("why")))
             if intent.get("action") == "history" and isinstance(history, dict):
-                return await _history_turn(db, user_id, choice["id"], history, language, today)
+                return await _history_turn(db, user_id, choice["id"], history, language, today,
+                                           intent.get("focus"), bool(intent.get("why")))
             if others:
                 return await _pair_response(db, user_id, [others[0], choice["id"]], language, today,
                                             intent.get("focus"), bool(intent.get("why")))
@@ -1260,7 +1281,8 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
             if "workout" not in resolved:
                 if resolved.get("choices"):
                     return _reply(resolved["reply"], _refs("single", [], pending=_pending(
-                        resolved["choices"], {"action": "history", "history": p["history"]}, resolved["reply"])))
+                        resolved["choices"], {"action": "history", "history": p["history"],
+                                              "focus": _history_focus(p), "why": p["why"]}, resolved["reply"])))
                 return _reply(resolved["reply"], None)
             ref_id = resolved["workout"]["id"]
         elif len(ids) == 1:
@@ -1273,12 +1295,14 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
                     choices.append({"id": i, "date": f["date"]})
             prompt = _clarify_text(language, "which_reference", today)
             return _reply(prompt, _refs("pair", ids, pending=_pending(
-                choices, {"action": "history", "history": p["history"]}, prompt)))
+                choices, {"action": "history", "history": p["history"],
+                          "focus": _history_focus(p), "why": p["why"]}, prompt)))
         if ref_id is None:
             if p["history"]["kind"] == "similar":
-                return await _history_reference_choices(db, user_id, p["history"], language, today)
+                return await _history_reference_choices(db, user_id, p["history"], language, today,
+                                                        _history_focus(p), p["why"])
             return _reply(_clarify_text(language, "referent", today), None)
-        return await _history_turn(db, user_id, ref_id, p["history"], language, today)
+        return await _history_turn(db, user_id, ref_id, p["history"], language, today, _history_focus(p), p["why"])
 
     # C0) "<named date> versus the one before it": the named date alone anchors the comparison
     if p["before_date"]:
@@ -1344,7 +1368,7 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
             return await _pair_response(db, user_id, ids, language, today, p["focus"], p["why"])
         if mem_kind == "history" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]):
             history = (memory or {}).get("history")
-            return await _history_turn(db, user_id, ids[0], history, language, today, p["focus"])
+            return await _history_turn(db, user_id, ids[0], history, language, today, p["focus"], p["why"])
         if mem_kind == "single" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]):
             return _single(ids[0], continues=True)
     if p["anaphora"]:
@@ -1353,7 +1377,7 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
 
 
 async def _history_turn(db: Any, user_id: str, workout_id: str, history: dict, language: str, today: date,
-                        focus: Optional[str] = None) -> dict:
+                        focus: Optional[str] = None, why: bool = False) -> dict:
     reference = await load_activity_facts(db, user_id, workout_id)
     if reference is None or not reference["date"]:
         return _reply(_clarify_text(language, "referent", today), None)
@@ -1361,7 +1385,7 @@ async def _history_turn(db: Any, user_id: str, workout_id: str, history: dict, l
     refs = _refs("history", [workout_id], primary=workout_id)
     refs["history"] = {"kind": history["kind"], "count": history["count"]}
     return {"kind": "compare", "text": render_history(contract, language, today, focus), "refs": refs,
-            "contract": contract, "focus": focus}
+            "contract": contract, "focus": focus, "why": why}
 
 
 def today_for(now_utc: datetime) -> date:

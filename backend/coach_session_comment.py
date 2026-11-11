@@ -267,8 +267,11 @@ def build_comparison_chat_context(turn: dict, language: str) -> dict:
             "explanation_requested": bool(turn.get("why")),
         },
         "comparison_contract": contract,
+        # Deterministic C409 rendering: reference for the already computed gaps, not a reply.
+        "comparison_computed_summary": turn.get("text"),
         "comparison_notes": [
             "Values, gaps and missing data come from RunIndex; explain them without recomputing.",
+            "comparison_computed_summary holds the gaps already computed by RunIndex: reuse its figures, never restate it as a report.",
             "Only allowed_interpretations are supported; undemonstrated_conclusions must not be concluded.",
         ],
     }

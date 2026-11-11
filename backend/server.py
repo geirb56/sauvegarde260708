@@ -1991,6 +1991,21 @@ def _start_coach_refund(
 COACH_HISTORY_LIMIT = 8
 
 
+def _comparison_exchanges(history: list[dict]) -> list[dict]:
+    """Trailing exchanges that belong to the current comparison (assistant replies carrying a C409 contract)."""
+    start = len(history)
+    i = len(history) - 1
+    while i >= 0:
+        doc = history[i]
+        if doc.get("role") == "assistant" and doc.get("coach_contract"):
+            j = i - 1
+            if j >= 0 and history[j].get("role") == "user":
+                start, i = j, j - 1
+                continue
+        break
+    return history[start:]
+
+
 async def _load_coach_evidence(*, user_id: str, workout_id: str, language: str):
     """Owner-scoped, read-only, provider-free (V3 narrative, V3 intelligence) in one pass.
 
@@ -2371,14 +2386,17 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             request.workout_id is None and activity_turn["kind"] == "single"
             and not activity_turn.get("continues")
         )
-        if starts_new_subject:
-            # A freshly designated activity must not inherit earlier turns about other activities.
+        new_comparison = comparison_turn is not None and not comparison_turn.get("continues")
+        if starts_new_subject or new_comparison:
+            # A freshly designated activity or comparison must not inherit earlier turns about other subjects.
             conversation_history = []
         else:
             conversation_history = await db.conversations.find(
                 conversation_scope
             ).sort("timestamp", -1).limit(COACH_HISTORY_LIMIT).to_list(COACH_HISTORY_LIMIT)
             conversation_history = list(reversed(conversation_history))  # Chronological order
+            if comparison_turn is not None:
+                conversation_history = _comparison_exchanges(conversation_history)
 
         if comparison_turn is not None:
             llm_context = coach_session_comment.build_comparison_chat_context(comparison_turn, language)
