@@ -1948,32 +1948,6 @@ _COACH_UNAVAILABLE = {
 _NARRATIVE_NOT_LOADED = object()  # distinguishes "not attempted" from "attempted, unavailable (None)"
 
 
-async def _coach_degraded_workout_reply(
-    *, user_id: str, workout_id: str, language: str, narrative=_NARRATIVE_NOT_LOADED,
-) -> Optional[str]:
-    """Deterministic factual reply for a selected workout; None if unusable.
-
-    Read-only and provider-free: no second LLM call, no prescription text.
-    A narrative load already attempted for this request (even if it returned None
-    or failed) is never repeated.
-    """
-    if narrative is _NARRATIVE_NOT_LOADED:
-        try:
-            narrative = await load_scoped_workout_deterministic_narrative(
-                db=db, user_id=user_id, workout_id=workout_id, language=language,
-            )
-        except Exception:
-            logger.exception("[Coach] Deterministic fallback unavailable")
-            return None
-    if narrative is None or narrative.generation_mode != "deterministic_fallback":
-        return None
-    parts = [narrative.headline, narrative.analysis, narrative.interpretation, *narrative.limitations]
-    body = "\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
-    if not body:
-        return None
-    return f"{_COACH_DEGRADED_NOTICE.get(language, _COACH_DEGRADED_NOTICE['en'])}\n\n{body}"
-
-
 # Strong references so a refund outlives a cancelled request until it completes.
 _COACH_REFUND_TASKS: set = set()
 
@@ -2356,13 +2330,14 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             raise HTTPException(status_code=404, detail="Workout not found")
         workout, workout_analysis = selected_workout
         effective_workout_id = activity_turn["workout_id"]
-    deterministic_turn = activity_turn if activity_turn["kind"] in ("reply", "compare") else None
+    # C418: clarifications/absences stay deterministic; a computed comparison is worded by the model.
+    deterministic_turn = activity_turn if activity_turn["kind"] == "reply" else None
+    comparison_turn = activity_turn if activity_turn["kind"] == "compare" else None
 
     is_unlimited = user_access.is_unlimited_chat
     reservation: Optional[dict] = None
     user_msg_id: Optional[str] = None
     refund_task: Optional[asyncio.Future] = None
-    scoped_narrative = _NARRATIVE_NOT_LOADED
 
     if is_unlimited:
         month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -2405,13 +2380,14 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             ).sort("timestamp", -1).limit(COACH_HISTORY_LIMIT).to_list(COACH_HISTORY_LIMIT)
             conversation_history = list(reversed(conversation_history))  # Chronological order
 
-        llm_context, loaded_narrative = await _build_coach_llm_context(
-            user=user, language=language, workout=workout, workout_analysis=workout_analysis,
-            workout_analysis_allowed=workout_analysis_allowed, workout_id=effective_workout_id,
-            now_utc=now_utc,
-        )
-        if loaded_narrative is not _NARRATIVE_NOT_LOADED:
-            scoped_narrative = loaded_narrative
+        if comparison_turn is not None:
+            llm_context = coach_session_comment.build_comparison_chat_context(comparison_turn, language)
+        else:
+            llm_context, _ = await _build_coach_llm_context(
+                user=user, language=language, workout=workout, workout_analysis=workout_analysis,
+                workout_analysis_allowed=workout_analysis_allowed, workout_id=effective_workout_id,
+                now_utc=now_utc,
+            )
 
         # 6. Stocker le message utilisateur
         user_msg_id = str(uuid.uuid4())
@@ -2436,39 +2412,15 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             logger.warning(f"LLM chat failed: {meta}")
             refund_task = _start_coach_refund(reservation, user_msg_id)
             await asyncio.shield(refund_task)
-            if effective_workout_id is not None:
-                degraded = await _coach_degraded_workout_reply(
-                    user_id=user_id, workout_id=effective_workout_id, language=language,
-                    narrative=scoped_narrative,
-                )
-                if degraded is not None:
-                    return CoachResponse(response=degraded, message_id="", degraded=True)
             raise HTTPException(
                 status_code=503,
                 detail=_COACH_UNAVAILABLE.get(language, _COACH_UNAVAILABLE["en"]),
             )
 
+        # C418: the generated text is the reply; no post-generation check, repair or substitution.
         response_text = llm_response
-        verification: Optional[dict] = None
-        if effective_workout_id is not None and workout_analysis_allowed:
-            # C408-C: one deterministic check of the single generated reply; no second LLM call.
-            check_started = time.perf_counter()
-            resolved = coach_evidence_guard.resolve_chat_reply(
-                response_text, llm_context, language, question=user_message)
-            verification = {k: resolved[k] for k in ("passed", "level", "rejected_checks")}
-            if not resolved["passed"]:
-                logger.warning("[Coach] Reply rejected by evidence guard: %s", verification["rejected_checks"])
-                if resolved["text"] is None:
-                    refund_task = _start_coach_refund(reservation, user_msg_id)
-                    await asyncio.shield(refund_task)
-                    raise HTTPException(
-                        status_code=503,
-                        detail=_COACH_UNAVAILABLE.get(language, _COACH_UNAVAILABLE["en"]),
-                    )
-                response_text = resolved["text"]
-                verification["removed_sentences"] = resolved["removed_sentences"]
-            verification["response_source"] = resolved["response_source"]
-            verification["check_ms"] = round((time.perf_counter() - check_started) * 1000, 2)
+        verification = {"passed": None, "level": "none", "rejected_checks": [],
+                        "response_source": "llm_direct_unverified"}
 
         # 8. Stocker la réponse assistant
         msg_id = str(uuid.uuid4())
@@ -2480,7 +2432,9 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             "workout_id": request.workout_id,
             "coach_workout_analysis_allowed": workout_analysis_allowed,
             **({"coach_refs": activity_turn["refs"]} if activity_turn.get("refs") else {}),
-            **({"verification": verification} if verification is not None else {}),
+            **({"coach_contract": _compact_comparison_contract(comparison_turn["contract"])}
+               if comparison_turn is not None else {}),
+            "verification": verification,
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
 

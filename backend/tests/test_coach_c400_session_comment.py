@@ -404,7 +404,7 @@ def test_session_comment_prompt_carries_factual_guardrails():
     for needle in ("session_synthesis", "history_as_of_session", "similar_comparison_available",
                    "intensity_interpretation_allowed", "LT1/LT2", "declared_goal", "never as a routine caveat"):
         assert needle in p
-    assert llm_coach.SYSTEM_PROMPT_COACH.startswith("You are RunIndex")
+    assert llm_coach.SYSTEM_PROMPT_COACH.startswith("Tu es le Coach RunIndex")
 
 
 async def test_chat_keeps_chat_prompt():

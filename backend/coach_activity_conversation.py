@@ -1110,7 +1110,7 @@ async def _pair_response(db: Any, user_id: str, ids: list[str], language: str, t
     contract = build_comparison_contract(facts[0], facts[1])
     text = render_pair(contract, language, today, focus=focus, why=why)
     refs = _refs("pair", [f["id"] for f in contract["activities"]], primary=ids[0])
-    return {"kind": "compare", "text": text, "refs": refs, "contract": contract}
+    return {"kind": "compare", "text": text, "refs": refs, "contract": contract, "focus": focus, "why": why}
 
 
 def _single(workout_id: str, *, continues: bool = False) -> dict:
@@ -1361,7 +1361,7 @@ async def _history_turn(db: Any, user_id: str, workout_id: str, history: dict, l
     refs = _refs("history", [workout_id], primary=workout_id)
     refs["history"] = {"kind": history["kind"], "count": history["count"]}
     return {"kind": "compare", "text": render_history(contract, language, today, focus), "refs": refs,
-            "contract": contract}
+            "contract": contract, "focus": focus}
 
 
 def today_for(now_utc: datetime) -> date:

@@ -98,33 +98,29 @@ async def test_general_chat_failure_is_explicit_503_localized(name, result, lang
 
 @pytest.mark.parametrize("name,result", FAILURES)
 @pytest.mark.parametrize("access", [_trial_access, _premium_access])
-async def test_selected_workout_failure_returns_degraded_factual_reply(name, result, access):
+async def test_selected_workout_failure_is_controlled_503_without_substitute(name, result, access):
+    """C418: no deterministic substitute reply; unavailability, refund, no assistant message."""
     fake_db = _FakeDB()
     with (
         _analyze_environment(fake_db, access),
         _owned_workout(fake_db),
         patch("server.load_scoped_workout_coach_evidence",
-              AsyncMock(return_value=(_narrative(), None))) as fallback,
+              AsyncMock(return_value=(_narrative(), None))),
     ):
         llm = server.llm_coach.enrich_chat_response
         llm.side_effect = _llm(result)
         response = await _post({"message": "analyse", "workout_id": "w1", "language": "en"})
-    body = response.json()
-    assert response.status_code == 200
-    assert body["degraded"] is True and body["message_id"] == ""
-    assert "temporarily unavailable" in body["response"]
-    assert "Observed 10 km." in body["response"] and "Limited data." in body["response"]
-    assert "SHOULD NOT APPEAR" not in body["response"]  # no competing prescription
+    assert response.status_code == 503
+    assert "currently unavailable" in response.json()["detail"]
     assert llm.await_count == 1  # no second LLM call
-    fallback.assert_awaited_once_with(db=fake_db, user_id="user-a", workout_id="w1", language="en")
     assert [d["role"] for d in fake_db.conversations._docs] == ["user"]
 
 
 @pytest.mark.parametrize("language,fragment", [
-    ("fr", "temporairement indisponible"), ("es", "no está disponible temporalmente"),
-    ("en", "temporarily unavailable"),
+    ("fr", "pas disponible actuellement"), ("es", "no está disponible actualmente"),
+    ("en", "currently unavailable"),
 ])
-async def test_degraded_notice_is_localized(language, fragment):
+async def test_unavailable_notice_is_localized(language, fragment):
     fake_db = _FakeDB()
     with (
         _analyze_environment(fake_db, _trial_access),
@@ -134,7 +130,8 @@ async def test_degraded_notice_is_localized(language, fragment):
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
         response = await _post({"message": "x", "workout_id": "w1", "language": language})
-    assert fragment in response.json()["response"]
+    assert response.status_code == 503
+    assert fragment in response.json()["detail"]
 
 
 @pytest.mark.parametrize("narrative", [

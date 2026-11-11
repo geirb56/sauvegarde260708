@@ -110,17 +110,18 @@ async def test_count_alone_does_not_turn_a_message_into_a_history(message):
     assert cac.parse_message(message, TODAY)["history"] is None
 
 
-async def test_e2e_history_text_returned_by_the_endpoint_without_model_call():
+async def test_e2e_history_contract_is_sent_to_the_model():
     db = c409._db(c409.A(), c409.B(), *_runs_around_12_10())
     with c409._server_env(db), patch("coach_activity_conversation.today_for", return_value=TODAY):
         llm = c409.server.llm_coach.enrich_chat_response
         before = llm.await_count
         response = await _post({"message": "Montre-moi mes 3 sorties précédentes de même distance que celle du 12 octobre.",
                                 "language": "fr"})
-        assert llm.await_count == before
-    body = response.json()["response"]
-    assert response.status_code == 200 and "3 séances retenues" in body
-    assert "3 octobre" in body and "4 octobre" in body and "5 octobre" in body and "7:21/km" in body
+        assert llm.await_count == before + 1
+        contract = llm.await_args.kwargs["context"]["comparison_contract"]
+    assert response.status_code == 200
+    assert contract["kind"] == "history" and len(contract["population"]) == 3
+    assert [f["date"] for f in contract["population"]] == ["2026-10-03", "2026-10-04", "2026-10-05"]
 
 
 # ---------------------------------------------------------------- D: "celle d'avant" and equivalents

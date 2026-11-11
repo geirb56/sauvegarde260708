@@ -606,7 +606,7 @@ def test_shared_adapter_marks_context_specific_truncation(monkeypatch):
     response, success, metadata = asyncio.run(llm_coach._call_gpt(
         "system", "prompt", "anonymous", "chat",
     ))
-    assert success and len(response) == 700 and metadata["response_truncated"]
+    assert success and len(response) == 2500 and not metadata["response_truncated"]  # C418: chat is not cut
 
 
 def test_default_adapter_missing_key_has_no_placeholder_latency(monkeypatch):

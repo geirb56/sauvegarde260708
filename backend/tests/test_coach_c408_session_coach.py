@@ -61,14 +61,12 @@ def test_frame_absent_without_selected_workout():
 def test_prompt_contract_for_coach_judgment():
     p = llm_coach.SYSTEM_PROMPT_COACH
     for fragment in (
-        "session_coaching_frame",
-        "COACH JUDGMENT",
-        "Never present (3) as (1)",
-        "three levels of proof",
-        "give no priority, no rest advice and no next-session suggestion",
-        "feelings are not known",
-        "do not append an artificial closing question",
-        "Never present the maximum HR observed in an activity as the athlete's physiological max HR",
+        "ce qui est mesuré, ce qui est plausible et ce qui reste inconnu",
+        "ne prouve pas une progression",
+        "N'invente aucune donnée physiologique",
+        "N'invente ni seuils (LT1/LT2), ni VO2max, ni VMA",
+        "la FC maximale d'une séance n'est pas la FC maximale physiologique",
+        "conclusions artificielles",
     ):
         assert fragment in p
 

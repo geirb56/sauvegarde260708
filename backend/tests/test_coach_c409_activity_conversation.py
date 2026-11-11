@@ -13,6 +13,7 @@ from test_coach_contract_unified import _Collection, _FakeDB, _analyze_environme
 import server
 import coach_activity_conversation as cac
 from test_coach_c393_fallback_quota import _post
+from test_coach_contract_unified import _STUB_REPLIES
 
 pytestmark = pytest.mark.asyncio
 
@@ -341,7 +342,7 @@ class _Detail:
         return {"workout_detail": {"id": "x", "date": "2026-10-12", "type": "run", "avg_hr": 127.0}}
 
 
-async def test_full_conversation_path_memory_and_no_model_call_for_comparisons():
+async def test_full_conversation_path_memory_and_llm_wording_for_comparisons():
     db = _db(A(), B())
     with (
         _server_env(db),
@@ -362,14 +363,23 @@ async def test_full_conversation_path_memory_and_no_model_call_for_comparisons()
         r3 = await _post({"message": "Et au niveau du cardio ?", "language": "fr"})
         r4 = await _post({"message": "Est-ce que je progresse ?", "language": "fr"})
     assert r2.status_code == r3.status_code == r4.status_code == 200
-    assert llm.await_count == calls_after_1  # comparisons and follow-ups are answered from the contract
-    assert "21,27 km" in r2.json()["response"] and "11,94 km" in r2.json()["response"]
-    assert "160 bpm" in r3.json()["response"] and "33 bpm" in r3.json()["response"]
-    assert "Je ne peux pas conclure que tu progresses" in r4.json()["response"]
+    # C418: comparisons and their follow-ups are worded by the model from the computed contract.
+    assert llm.await_count == calls_after_1 + 3
+    contexts = [c.kwargs["context"] for c in llm.await_args_list[calls_after_1:]]
+    for ctx in contexts:
+        assert ctx["comparison_request"]["nature"] == "pair"
+        assert "today" not in ctx and "readiness" not in ctx
+        assert {a["id"] for a in ctx["comparison_contract"]["activities"]} == {"wA", "wB"}
+    assert contexts[1]["comparison_request"]["focus"] == "hr"
+    assert contexts[0]["comparison_contract"]["deltas"]["distance_km"]["gap"] == 11.94
+    assert contexts[1]["comparison_contract"]["deltas"]["avg_hr"]["gap"] == 33
+    assert all(r.json()["response"] == _STUB_REPLIES["fr"] for r in (r2, r3, r4))
     assistants = [d for d in db.conversations._docs if d["role"] == "assistant"]
     assert [d["coach_refs"]["workout_ids"] for d in assistants[-3:]] == [["wB", "wA"]] * 3
     assert all(d["workout_id"] is None for d in db.conversations._docs)
-    assert r2.json()["verification"]["response_source"] == "c409_comparison_contract"
+    assert r2.json()["verification"]["response_source"] == "llm_direct_unverified"
+    assert all(d.get("coach_contract", {}).get("kind") == "pair" for d in assistants[-3:])
+    assert len([d for d in db.conversations._docs if d["role"] == "user"]) == 4
 
 
 async def test_failed_first_turn_stores_no_reference_and_later_turns_ask_for_the_session():

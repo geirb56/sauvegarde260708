@@ -45,22 +45,22 @@ async def test_validated_observations_reach_llm_context_once_without_recommendat
     assert "SHOULD NOT APPEAR" not in str(obs) and "recommendation" not in obs
 
 
-async def test_degraded_reply_reuses_loaded_narrative():
+async def test_failure_is_a_controlled_503_without_degraded_reply():
     fake_db = _FakeDB()
     with (
         _analyze_environment(fake_db, _premium_access),
         _owned_workout(fake_db),
         patch("server.load_scoped_workout_coach_evidence",
-              AsyncMock(return_value=(_narrative(), None))) as loader,
+              AsyncMock(return_value=(_narrative(), None))),
     ):
         server.llm_coach.enrich_chat_response.side_effect = _llm((None, False, {}))
         response = await _post({"message": "x", "workout_id": "w1", "language": "en"})
-    assert response.json()["degraded"] is True
-    loader.assert_awaited_once()
+    assert response.status_code == 503
+    assert not [d for d in fake_db.conversations._docs if d["role"] == "assistant"]
 
 
 @pytest.mark.parametrize("outcome", [None, RuntimeError("boom")])
-async def test_unavailable_narrative_is_not_reloaded_for_fallback(outcome):
+async def test_unavailable_narrative_is_loaded_once(outcome):
     fake_db = _FakeDB()
     mock = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=outcome)
     with (
@@ -75,15 +75,12 @@ async def test_unavailable_narrative_is_not_reloaded_for_fallback(outcome):
     assert fake_db.coach_quota_counters._docs == [] or fake_db.coach_quota_counters._docs[0]["count"] == 0
 
 
-async def test_prompt_allows_recent_workouts_but_keeps_roles_and_limits():
+async def test_prompt_keeps_roles_and_limits():
     p = llm_coach.SYSTEM_PROMPT_COACH
-    assert "Only the selected workout and comparison.similar sessions are available" not in p
     for fragment in (
-        "recent_workouts are factual context you may cite",
-        "selected (active) workout is the subject",
-        "comparison.similar sessions are the only supported basis",
-        "Never invent a session",
-        "A comparison never replaces the selected workout",
+        "La séance sélectionnée est le sujet",
+        "Ne cite que des séances présentes dans les données",
+        "selected_workout_permissions",
     ):
         assert fragment in p
 
@@ -120,19 +117,14 @@ async def test_history_window_is_wider_than_c393_baseline():
     assert server.COACH_HISTORY_LIMIT >= 8
 
 
-async def test_prompt_contract_covers_reasoning_followups_and_limits():
+async def test_prompt_contract_covers_followups_and_limits():
     p = llm_coach.SYSTEM_PROMPT_COACH
     for fragment in (
-        "validated_workout_observations", "Follow-ups",
-        "never invent LT1/LT2", "Never create a new prescription",
-        # C392-B general-hypothesis contract replaces the former "hypotheses" keyword.
-        "C. Hypothesis: you may explain a general physiological mechanism",
-        "labeled as general knowledge",
-        "never present a hypothesis as an established cause",
-        "never present a general explanation as proof of this athlete's progress",
-        # C394 continuity: follow-ups stay attached to the selected workout.
-        "refer to the selected workout and the previous answer's subject",
-        "ask one short clarification question",
+        "les questions de suite portent sur elle et sur ta réponse précédente",
+        "pose une courte question",
+        "N'invente ni seuils (LT1/LT2)",
+        "sans créer de nouvelle prescription",
+        "ce qui est mesuré, ce qui est plausible et ce qui reste inconnu",
     ):
         assert fragment in p
 
