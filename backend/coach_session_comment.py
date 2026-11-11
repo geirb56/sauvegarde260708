@@ -168,7 +168,7 @@ def build_comment_context(llm_context: dict) -> dict:
     permissions = copy.deepcopy(llm_context.get("selected_workout_permissions") or {})
     out["workout_detail"] = detail  # A. analysed session
     out["selected_workout_permissions"] = permissions
-    for key in ("validated_workout_observations", "selected_workout_history_cutoff",
+    for key in ("observed_lap_pattern", "validated_workout_observations", "selected_workout_history_cutoff",
                 "selected_workout_history_cutoff_precision"):
         if key in llm_context:
             out[key] = copy.deepcopy(llm_context[key])
@@ -372,6 +372,7 @@ def split_session_facts(context: dict) -> tuple[list, list]:
     session: list = []
     _walk(detail, (), session)
     _walk(context.get("validated_workout_observations") or {}, ("observations",), session)
+    _walk(context.get("observed_lap_pattern") or {}, ("observations", "lap_pattern"), session)
     frame_session, frame_references = _frame_facts(context)
     _walk(frame_session, ("observations", "frame"), session)
     compared: list = []

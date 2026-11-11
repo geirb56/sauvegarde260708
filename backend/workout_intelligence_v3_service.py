@@ -24,6 +24,7 @@ import logging
 from typing import Any, Optional
 
 from garmin.domain_adapter import garmin_local_start_time
+from garmin_laps_analysis import detect_lap_pattern
 from narrative_coach_v3_models import NarrativeCoachV3
 from hybrid_coach_v2_c372 import ScopedV2Evidence
 from training_v2.prescription_snapshot import PrescriptionSnapshot
@@ -173,6 +174,7 @@ async def _load_scoped_workout_intelligence_v3(
     phases = None
     current_type = None
     local_date = None
+    lap_pattern = None
     if _is_garmin_workout(workout):
         ext_id = _extract_garmin_external_id(workout)
         if ext_id:
@@ -180,6 +182,10 @@ async def _load_scoped_workout_intelligence_v3(
             if activity_doc:
                 workout = enrich_workout_from_garmin_activity(workout, activity_doc)
                 phases = _cached_activity_phases(activity_doc)
+                try:
+                    lap_pattern = detect_lap_pattern(workout, activity_doc)  # cached laps only
+                except Exception:
+                    logger.warning("Lap pattern unavailable for workout_id=%s", workout_id)
                 current_type = _reliable_activity_type(activity_doc)
                 local_start = garmin_local_start_time(activity_doc)
                 local_date = local_start[:10] if local_start and len(local_start) >= 10 else None
@@ -245,6 +251,8 @@ async def _load_scoped_workout_intelligence_v3(
             prescription=prescription,
         )
         intelligence = build_workout_intelligence_v3(data, language)
+        if lap_pattern is not None and lap_pattern.get("status") != "unavailable":
+            intelligence = intelligence.model_copy(update={"observed_lap_pattern": lap_pattern})
     except Exception:
         logger.exception("Workout Intelligence V3 unavailable for workout_id=%s", workout_id)
         intelligence = None
