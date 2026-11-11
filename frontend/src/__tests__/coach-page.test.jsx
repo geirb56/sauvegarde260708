@@ -312,9 +312,9 @@ describe("Coach page", () => {
   });
 
   test.each([
-    ["en", "Analyze this workout and tell me what matters most: Tempo Run"],
-    ["fr", "Analyse cette séance et dis-moi ce qu'il faut retenir : Tempo Run"],
-    ["es", "Analiza esta sesión y dime qué es lo más importante: Tempo Run"],
+    ["en", "Analyze this workout and tell me what matters."],
+    ["fr", "Analyse cette séance et dis-moi ce qui est important."],
+    ["es", "Analiza esta sesión y dime qué es lo importante."],
   ])("workout auto-analysis posts takeaway message, workout_id, and language in %s", async (language, message) => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     axios.get.mockImplementation((url) => {

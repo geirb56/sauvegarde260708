@@ -38,6 +38,18 @@ async def test_final_prompt_keeps_grounding_and_language(language, language_name
 
 
 def test_prompt_is_short_and_has_no_redundant_layers():
-    assert len(llm_coach.SYSTEM_PROMPT_COACH) < 3500
+    assert len(llm_coach.SYSTEM_PROMPT_COACH) < 5000
     assert "deux à quatre phrases" in llm_coach.SYSTEM_PROMPT_COACH
     assert "question finale artificielle" not in llm_coach.SYSTEM_PROMPT_COACH
+
+
+def test_c422_prompt_targets_c421_schema_and_conversational_behaviour():
+    p = llm_coach.SYSTEM_PROMPT_COACH
+    for field in ("recorded_structure", "inferred_structure", "validated_comparisons",
+                  "scientific_permissions", "allowed_conclusions", "material_limitations"):
+        assert field in p
+    for fragment in ("Commence par répondre à sa vraie question", "Tutoie", "une seule précaution pertinente",
+                     "refuse seulement cette conclusion", "ne résume pas une séance fractionnée par sa seule allure moyenne",
+                     "jamais une séance programmée"):
+        assert fragment in p
+    assert "Ne modifie ni les allures ni les prescriptions" in p

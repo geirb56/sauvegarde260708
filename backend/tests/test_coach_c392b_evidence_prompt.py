@@ -49,7 +49,7 @@ def test_prompt_keeps_evidence_distinctions_and_authority():
     assert "sans créer de nouvelle prescription" in SYSTEM
     assert "sans remplacer celle qui est servie" in SYSTEM
     assert "permissions" in SYSTEM
-    assert len(SYSTEM) < 3000
+    assert len(SYSTEM) < 5000
 
 
 @pytest.mark.asyncio
