@@ -186,7 +186,8 @@ def test_explicit_intensity_labels_are_reported_not_interpreted():
     for lap in activity["activity_laps"]["laps"][5:7]:
         lap["intensity_type"] = "REST"
     result = detect_lap_pattern(workout, activity)
-    assert {"code": "intensity_labels_recorded_not_interpreted", "labels": ["REST"]} in result["anomalies"]
+    assert {"code": "intensity_labels_recorded_not_interpreted", "labels": ["REST"],
+            "lap_positions_by_label": {"REST": [6, 7]}} in result["anomalies"]
     assert result["pattern"]["repetition_count"] == 7  # label never decides the role of a lap
 
 
@@ -297,3 +298,102 @@ def test_aberrant_19m_lap_does_not_distort_detection():
     assert 17 not in [s["lap_position"] for r in ("fast_segments", "slow_segments")
                       for s in result["pattern"][r]["segments"]]
     assert result["pattern"]["fast_segments"]["typical_pace_sec_per_km"] == 230
+
+
+# ---------------------------------------------------------------- C420B chronology correction
+
+def restamp(activity, offsets=None, drop_at=None, gap=0):
+    """Rewrite starts from elapsed times, adding per-lap rounding offsets and an optional real gap."""
+    laps = activity["activity_laps"]["laps"]
+    start = datetime.fromisoformat(laps[0]["start_time_gmt"])
+    for i, lap in enumerate(laps):
+        if drop_at is not None and i == drop_at:
+            start += timedelta(seconds=gap)
+        lap["start_time_gmt"] = (start + timedelta(seconds=(offsets or {}).get(i, 0))).isoformat()
+        start += timedelta(seconds=lap["elapsed_duration_s"])
+
+
+@pytest.mark.parametrize("rounding", [1.0, 1.5, 2.0, -2.0])
+def test_timestamp_rounding_up_to_two_seconds_is_accepted(rounding):
+    workout, activity = session_0511()
+    restamp(activity, {i: rounding if i % 2 else 0 for i in range(23)})
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "pattern_observed" and result["pattern"]["repetition_count"] == 7
+    assert not [a for a in result["anomalies"] if a["code"].startswith("chronology_")]
+
+
+def test_real_interruption_beyond_rounding_breaks_the_chain():
+    workout, activity = session_0511()
+    restamp(activity, drop_at=11, gap=5)  # 5 s unrecorded between lap 11 and 12
+    result = detect_lap_pattern(workout, activity)
+    assert {"code": "chronology_gap", "lap_position": 12} in result["anomalies"]
+    assert result["status"] == "pattern_observed"
+    positions = [s["lap_position"] for s in result["pattern"]["fast_segments"]["segments"]]
+    assert not (set(positions) & {5, 11} and set(positions) & {13, 15})  # chain never crosses the gap
+    assert result["pattern"]["repetition_count"] < 7 and result["confidence"] == "low"
+
+
+def test_isolated_chronology_anomaly_keeps_the_locally_reliable_pattern():
+    workout, activity = session_0511()
+    restamp(activity, drop_at=20, gap=30)  # anomaly inside the cool-down only
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "pattern_observed" and result["pattern"]["repetition_count"] == 7
+    assert "probable_cooldown" not in result
+    assert {"code": "chronology_gap", "lap_position": 21} in result["anomalies"]
+
+
+def test_widespread_chronology_breaks_abstain():
+    workout, activity = session_0511()
+    restamp(activity, {i: 10 * i for i in range(23)})
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "unavailable" and result["reason"] == "chronology_incoherent"
+
+
+def test_recorded_pause_with_coherent_chronology_still_excluded():
+    specs = [(300, 360)] + [(60, 230), (60, 390)] * 4 + [(60, 230)] + [(300, 360)]
+    workout, activity = build(specs, **{"4": {"elapsed_duration_s": 70}})
+    restamp(activity)
+    result = detect_lap_pattern(workout, activity)
+    assert {"code": "recorded_pause", "lap_position": 5} in result["anomalies"]
+    assert not [a for a in result["anomalies"] if a["code"].startswith("chronology_")]
+
+
+def test_laps_covering_part_of_the_session_are_flagged_not_rejected():
+    workout, activity = session_0511()
+    workout["distance_km"] *= 1.3
+    workout["duration_minutes"] *= 1.3
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "pattern_observed"
+    partial = [a for a in result["anomalies"] if a["code"] == "laps_cover_partial_session"]
+    assert partial and 0.7 < partial[0]["covered_distance_ratio"] < 0.8
+    assert result["confidence"] == "low"
+    assert "probable_warmup" not in result and "probable_cooldown" not in result
+
+
+def test_laps_covering_too_little_or_more_than_the_session_stay_unavailable():
+    workout, activity = session_0511()
+    workout["distance_km"] *= 3
+    workout["duration_minutes"] *= 3
+    assert detect_lap_pattern(workout, activity)["reason"] == "coverage_incomplete"
+    workout, activity = session_0511()
+    workout["distance_km"] *= 0.8
+    workout["duration_minutes"] *= 0.8
+    assert detect_lap_pattern(workout, activity)["reason"] == "coverage_incomplete"
+
+
+def test_rounding_noise_never_creates_a_pattern_in_a_continuous_run():
+    specs = [(300, 360)] + [(60, 355), (60, 362)] * 6 + [(300, 360)]
+    workout, activity = build(specs)
+    restamp(activity, {i: (i % 3) - 1 for i in range(len(specs))})
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] in ("no_pattern_observed", "unknown")
+
+
+def test_labels_are_reported_with_positions_without_changing_roles():
+    workout, activity = session_0511()
+    for i in (4, 6):
+        activity["activity_laps"]["laps"][i]["intensity_type"] = "INTERVAL"
+    result = detect_lap_pattern(workout, activity)
+    label = next(a for a in result["anomalies"] if a["code"] == "intensity_labels_recorded_not_interpreted")
+    assert label["lap_positions_by_label"] == {"INTERVAL": [5, 7]}
+    assert result["pattern"]["repetition_count"] == 7
