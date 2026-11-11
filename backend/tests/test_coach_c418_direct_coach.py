@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from test_coach_contract_unified import _STUB_REPLIES, _free_access, _trial_access  # sets env first
+from datetime import datetime, timezone
 import coach_activity_conversation as cac
 import coach_session_comment as csc
 import server
@@ -286,3 +287,73 @@ async def test_continues_flag_is_computed_by_c409():
     memory = first["refs"]
     again = await _turn(db, "Et au niveau du cardio ?", memory=memory)
     assert again["continues"] is True and again["focus"] == "hr"
+
+
+# ---------------------------------------------------------------- relances « pourquoi »
+
+WHY_FR = ["Pourquoi ?", "Et pourquoi ?", "Pourquoi cet écart ?"]
+
+
+async def test_short_why_after_pair_reuses_same_pair_and_summary():
+    db = _db(A(), B())
+    out, count = await _chat_turns(db, [PAIR_MESSAGES["fr"], *WHY_FR, "Et pourquoi la fréquence cardiaque est différente ?"])
+    assert count == 5
+    first = out[0][1]["context"]
+    for r, kw in out[1:]:
+        ctx = kw["context"]
+        assert {a["id"] for a in ctx["comparison_contract"]["activities"]} == {"wA", "wB"}
+        assert ctx["comparison_contract"] == first["comparison_contract"]
+        assert ctx["comparison_computed_summary"]
+        assert ctx["comparison_request"]["explanation_requested"] is True
+        assert kw["conversation_history"]  # relevant exchange kept
+    assert out[4][1]["context"]["comparison_request"]["focus"] == "hr"
+    turn = await _turn(db, "Pourquoi cet écart ?", memory=(await _turn(db, PAIR_MESSAGES["fr"]))["refs"])
+    assert turn["kind"] == "compare" and turn["continues"] is True and turn["why"] is True
+
+
+async def test_short_why_after_history_keeps_reference_and_population():
+    db = _db(A(), B(), *_history_runs())
+    out, _ = await _chat_turns(db, [HIST.split(",")[0], *WHY_FR])
+    base = out[0][1]["context"]["comparison_contract"]
+    for r, kw in out[1:]:
+        ctx = kw["context"]
+        assert ctx["comparison_contract"] == base
+        assert ctx["comparison_request"]["explanation_requested"] is True
+        assert ctx["comparison_computed_summary"]
+
+
+@pytest.mark.parametrize("language,message,why", [
+    ("en", PAIR_MESSAGES["en"], "Why is there a gap?"),
+    ("es", PAIR_MESSAGES["es"], "¿Por qué?"),
+])
+async def test_why_followup_languages(language, message, why):
+    out, _ = await _chat_turns(_db(A(), B()), [message, why], language)
+    ctx = out[1][1]["context"]
+    assert {a["id"] for a in ctx["comparison_contract"]["activities"]} == {"wA", "wB"}
+    assert ctx["comparison_request"]["explanation_requested"] is True
+
+
+async def test_why_without_comparison_invents_nothing():
+    db = _db(A(), B())
+    for msgs in (["Pourquoi ?"], ["Pourquoi cet écart ?"]):
+        with patch("server._build_coach_llm_context", AsyncMock(return_value=({"plan": True}, None))):
+            out, _ = await _chat_turns(db, msgs)
+        assert out[0][1]["context"] == {"plan": True}
+    turn = await _turn(db, "Pourquoi cet écart ?")
+    assert turn["kind"] != "compare"
+
+
+async def test_why_after_topic_change_expired_memory_or_other_user():
+    db = _db(A(), B())
+    first = await _turn(db, PAIR_MESSAGES["fr"])
+    assert (await _turn(db, "Pourquoi ?", memory=None))["kind"] != "compare"
+    stale = {"coach_refs": first["refs"], "timestamp": "2026-11-07T00:00:00+00:00"}
+    old = cac.usable_memory(stale, datetime(2026, 11, 8, 12, tzinfo=timezone.utc))
+    assert old is None
+    changed = await _turn(db, "Changeons de sujet, pourquoi courir en zone 2 ?", memory=first["refs"])
+    assert changed["kind"] != "compare"
+    other = await _turn(db, "Pourquoi ?", memory=first["refs"], user="user-b")
+    assert other["kind"] != "compare"
+    long_q = await _turn(db, "Pourquoi est-ce que je me sens toujours fatigué le matin quand je dors peu et que je cours tôt ?",
+                         memory=first["refs"])
+    assert long_q["kind"] != "compare"

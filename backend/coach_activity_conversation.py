@@ -332,7 +332,7 @@ def needs_memory(parsed: dict) -> bool:
     return bool(
         parsed["anaphora"] or parsed["compare"] or parsed["history"] is not None
         or parsed["ordinal"] is not None or parsed["focus"] is not None or parsed["followup"]
-        or parsed["selectors"]
+        or parsed["selectors"] or parsed["why"]
     )
 
 
@@ -1364,12 +1364,16 @@ async def _resolve(*, db: Any, user_id: str, language: str, today: date, memory:
 
     # E) follow-up on the sessions of the previous turn
     if ids and not p["plan_related"]:
-        if mem_kind == "pair" and len(ids) == 2 and (p["focus"] or p["both"] or p["anaphora"]):
+        # A short "why ?" continues the active comparison; a long general question does not.
+        short_why = p["why"] and len(p["text"].split()) <= _CARRY_MAX_WORDS
+        if mem_kind == "pair" and len(ids) == 2 and (p["focus"] or p["both"] or p["anaphora"] or short_why):
             return await _pair_response(db, user_id, ids, language, today, p["focus"], p["why"])
-        if mem_kind == "history" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]):
+        if mem_kind == "history" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]
+                                                         or short_why):
             history = (memory or {}).get("history")
             return await _history_turn(db, user_id, ids[0], history, language, today, p["focus"], p["why"])
-        if mem_kind == "single" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]):
+        if mem_kind == "single" and len(ids) == 1 and (p["focus"] or p["anaphora"] or p["followup"]
+                                                        or short_why):
             return _single(ids[0], continues=True)
     if p["anaphora"]:
         return _reply(_clarify_text(language, "referent", today), None)
