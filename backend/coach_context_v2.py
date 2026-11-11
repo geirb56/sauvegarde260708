@@ -935,6 +935,285 @@ def build_session_coaching_frame(
     return frame
 
 
+# ------------------------------------------------- C421: conversational projection (chat only)
+# Read-only projections of results already computed by V2/V3 for the chat LLM. They never change the
+# V2/V3/frame outputs (still used by C400, the guards and the tests); they only choose what the
+# conversational context repeats, and merge the same uncertainty expressed by several engines.
+
+_PHYSIOLOGY_LIMITS = {
+    "limitations.intensity", "limit.no_thresholds", "limit.average_hr", "limit.relative_not_physiological",
+    "personal_thresholds_not_persisted", "average_hr_is_not_time_in_zone", "no_reliable_personal_threshold",
+    "missing_threshold_for_this_hr_range", "fcmax_declaration_date_unknown", "hr_above_reference_fcmax",
+    "variation_is_not_physiological_proof", "unavailable.intensity", "meaning.intensity_unavailable",
+}
+# Already carried by scientific_permissions or by the athlete_context prescription status.
+_COVERED_ELSEWHERE = _PHYSIOLOGY_LIMITS | {
+    "isolated_variation_not_confirmed", "status_sensitive_to_criteria", "limit.isolated",
+    "intervals_not_identifiable_without_phases", "structured_phases_without_identifiable_type",
+    "intensity_unknown_volume_based_only", "synthesis.hr_observation",
+}
+_LIMIT_TOPIC_BY_CODE = {
+    **{code: "hr_unusable" for code in (
+        "limitations.heart_rate", "limit.hr_unusable", "hr_missing", "current_hr_unusable", "unavailable.hr")},
+    **{code: "no_splits" for code in (
+        "limitations.splits", "no_splits_whole_session_averages_only", "limitations.phase_splits")},
+    "no_recorded_session_structure": "structure_unknown",
+    **{code: "no_validated_comparison" for code in (
+        "limit.no_history", "limitations.no_comparable_reference", "limitations.baseline",
+        "limitations.baseline_descriptive", "limitations.comparability", "habitual_duration_unavailable",
+        "insufficient_comparability", "no_comparable_reference")},
+    **{code: "comparison_small_sample" for code in (
+        "limitations.sample_too_small", "limitations.pace_sample_too_small", "limitations.hr_sample_too_small")},
+    **{code: "comparison_conditions" for code in (
+        "terrain_weather_not_controlled", "limit.structure_unknown", "reference_structure_unknown")},
+    "limitations.session_nature_unknown": "session_nature_unknown",
+    **{code: "recorded_phases_limited" for code in (
+        "limitations.phase_classification", "limitations.phase_classification_partial",
+        "limitations.phase_missing", "limitations.phase_quality", "limitations.phase_regularity",
+        "limitations.phase_hr")},
+}
+_LIMIT_TOPIC_TEXT = {
+    "hr_unusable": "Heart rate is missing or unusable: no heart-rate reading of this session.",
+    "no_splits": "No split data: the pace distribution inside the session is unknown.",
+    "structure_unknown": "No recorded or inferred session structure: whole-session figures only; do not infer intervals.",
+    "no_validated_comparison": "No validated comparison with earlier sessions: say nothing about how this session "
+                               "compares or about progress.",
+    "comparison_small_sample": "Small reference sample: present the comparison cautiously.",
+    "comparison_conditions": "Terrain, weather and reference structure are not controlled: a gap is not proof of change.",
+    "session_nature_unknown": "Training-versus-race nature is not recorded.",
+    "session_type_unknown": "The session type cannot be determined reliably: do not name one as fact.",
+    "recorded_phases_limited": "Recorded phases are partly unclassified or incomplete: describe only what is listed.",
+}
+_COMPARISON_ONLY_TOPICS = {"comparison_small_sample", "comparison_conditions", "session_nature_unknown"}
+
+
+def _display_pace_sec(value: Any) -> Optional[str]:
+    number = _finite_number(value)
+    return _format_pace_min_km(Decimal(str(number)) / 60) if number is not None and number >= 0 else None
+
+
+def _present(mapping: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in mapping.items() if value is not None and value != [] and value != {}}
+
+
+def compact_recorded_structure(phase_analysis: Any) -> dict[str, Any]:
+    """Garmin-recorded phases (V2 phase_analysis) as a compact block; ``status`` says when none exist."""
+    if not isinstance(phase_analysis, dict) or not phase_analysis.get("available") or not phase_analysis.get("phases"):
+        return {"status": "none_recorded"}
+    phases = []
+    for phase in phase_analysis.get("phases") or []:
+        if not isinstance(phase, dict):
+            continue
+        phases.append(_present({
+            "type": phase.get("phase_type"),
+            "n": phase.get("effort_number") or phase.get("recovery_number"),
+            "duration_s": phase.get("duration_s"),
+            "distance_m": phase.get("distance_m"),
+            "pace": _display_pace_sec(phase.get("pace_sec_per_km")),
+            "avg_hr_bpm": phase.get("average_hr"),
+            "max_hr_bpm": phase.get("max_hr"),
+        }))
+    regularity = phase_analysis.get("effort_regularity") or {}
+    out: dict[str, Any] = {"status": "recorded_by_garmin", "phases": phases}
+    if regularity.get("available"):
+        out["effort_regularity"] = _present({
+            "effort_count": regularity.get("effort_count"),
+            "comparable_effort_count": regularity.get("comparable_effort_count"),
+            "average_pace": _display_pace_sec(regularity.get("average_pace_sec_per_km")),
+            "first_to_last_pace_change_sec_per_km": regularity.get("first_to_last_pace_change_sec_per_km"),
+        })
+    return out
+
+
+def _compact_segments(block: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(block, dict):
+        return None
+    repetitions = [
+        _present({"n": index, "duration_s": seg.get("duration_s"),
+                  "pace": _display_pace_sec(seg.get("pace_sec_per_km")), "avg_hr_bpm": seg.get("avg_hr_bpm")})
+        for index, seg in enumerate((s for s in block.get("segments") or [] if isinstance(s, dict)), start=1)
+    ]
+    return _present({
+        "typical_duration_s": block.get("typical_duration_s"),
+        "typical_pace": _display_pace_sec(block.get("typical_pace_sec_per_km")),
+        "repetitions": repetitions,
+        "avg_hr_first_bpm": block.get("avg_hr_first_bpm") if block.get("hr_evolution_available") else None,
+        "avg_hr_last_bpm": block.get("avg_hr_last_bpm") if block.get("hr_evolution_available") else None,
+        "avg_hr_change_first_to_last_bpm":
+            block.get("avg_hr_change_first_to_last_bpm") if block.get("hr_evolution_available") else None,
+    })
+
+
+def _compact_edge(block: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(block, dict):
+        return None
+    return _present({"lap_count": block.get("lap_count"), "duration_s": block.get("duration_s"),
+                     "distance_m": block.get("length_m"), "pace": _display_pace_sec(block.get("pace_sec_per_km"))})
+
+
+def compact_inferred_structure(pattern: Any) -> dict[str, Any]:
+    """The C420/C420B lap pattern without its repeated rules and lap bookkeeping.
+
+    Figures are copied from the detector, never recomputed: only the detected repetitions are listed.
+    """
+    if not isinstance(pattern, dict) or pattern.get("schema") != "garmin_lap_pattern_v1":
+        return {"status": "not_available"}
+    if pattern.get("status") != "pattern_observed" or not isinstance(pattern.get("pattern"), dict):
+        return {"status": "no_pattern_established", "rule": "Structure unknown: do not invent one."}
+    detail = pattern["pattern"]
+    return _present({
+        "status": "pattern_observed",
+        "source": "inferred_from_garmin_laps",
+        "confidence": pattern.get("confidence"),
+        "type": detail.get("type"),
+        "repetition_count": detail.get("repetition_count"),
+        "fast": _compact_segments(detail.get("fast_segments")),
+        "slow": _compact_segments(detail.get("slow_segments")),
+        "warmup_probable": _compact_edge(pattern.get("probable_warmup")),
+        "cooldown_probable": _compact_edge(pattern.get("probable_cooldown")),
+        "anomalies": [a.get("code") for a in pattern.get("anomalies") or [] if isinstance(a, dict) and a.get("code")],
+        "rule": "Inferred from laps: never a recorded phase or a prescription; slow laps are not proven programmed "
+                "recoveries; it describes what was done better than whole-session averages; add no figure absent here.",
+    })
+
+
+def _compact_provenance(provenance: Any) -> dict[str, Any]:
+    if not isinstance(provenance, dict):
+        return {}
+    criteria = provenance.get("selection_criteria") or {}
+    return _present({
+        "reference_population": provenance.get("reference_population"),
+        "activity_count": provenance.get("activity_count"),
+        "sub_populations": provenance.get("sub_populations"),
+        "period_start": provenance.get("period_start"),
+        "period_end": provenance.get("period_end"),
+        "window_days": criteria.get("window_days"),
+        "excludes": criteria.get("excludes"),
+        "distance_is_a_selection_criterion": criteria.get("distance_is_a_selection_criterion"),
+        "confidence": provenance.get("confidence"),
+    })
+
+
+def compact_validated_comparisons(frame: Any) -> list[dict[str, Any]]:
+    """Comparisons the V2/V3 engines validated, each with its provenance and reference population."""
+    if not isinstance(frame, dict) or not isinstance(frame.get("v3_assessment"), dict):
+        v3, contract = {}, ((frame or {}).get("evidence_contract") or {}) if isinstance(frame, dict) else {}
+    else:
+        v3, contract = frame["v3_assessment"], frame.get("evidence_contract") or {}
+    relative = (v3.get("classification") or {}).get("relative_effort") or {}
+    historical = v3.get("historical_comparison") or {}
+    out: list[dict[str, Any]] = []
+    for item in contract.get("validated_comparisons") or []:
+        if not isinstance(item, dict):
+            continue
+        metric = item.get("metric")
+        if metric == "average_hr_relative_position":
+            out.append(_present({
+                "metric": metric,
+                "relative_position": relative.get("relative_position"),
+                "session_avg_hr_bpm": relative.get("current_hr_bpm"),
+                "reference_hr_q1_bpm": relative.get("hr_q1_bpm"),
+                "reference_hr_median_bpm": relative.get("hr_median_bpm"),
+                "reference_hr_q3_bpm": relative.get("hr_q3_bpm"),
+                "provenance": _compact_provenance(relative.get("provenance")),
+                "meaning": "a position among the athlete's own comparable sessions, not an effort zone",
+            }))
+        elif metric == "pace_and_hr_at_comparable_effort":
+            out.append(_present({
+                "metric": metric, "values": item.get("values"),
+                "provenance": _compact_provenance(historical.get("provenance")),
+            }))
+        elif metric == "pace_and_hr_vs_similar_distance_sessions":
+            out.append({k: v for k, v in item.items() if k not in {"limits", "source_path"}})
+        else:
+            out.append({k: v for k, v in item.items() if k not in {"source_path", "meaning", "ratio_precision"}})
+    return out
+
+
+def compact_recorded_prescription(frame: Any) -> dict[str, Any]:
+    """The historical prescription, only when recorded before the session started."""
+    intent = (frame or {}).get("session_intent") if isinstance(frame, dict) else None
+    recorded = (intent or {}).get("recorded_historical_prescription")
+    if not isinstance(recorded, dict):
+        return {"status": "none_usable", "reason": recorded or "not_available"}
+    if recorded.get("recording_timing") != "recorded_before_session":
+        return {"status": "none_usable", "reason": recorded.get("recording_timing"),
+                "rule": "A prescription recorded after the start, or at an unknown time, is not a known intent."}
+    return _present({
+        "status": "recorded_before_session",
+        "planned_date": recorded.get("planned_date"),
+        "recorded_at": recorded.get("recorded_at"),
+        "prescribed_workout_type": recorded.get("prescribed_workout_type"),
+        "prescribed_intensity_class": recorded.get("prescribed_intensity_class"),
+        "prescribed_distance_km": recorded.get("prescribed_distance_km"),
+        "prescribed_duration_minutes": recorded.get("prescribed_duration_minutes"),
+        "conformity": recorded.get("assessment_status"),
+        "observed_classification": recorded.get("observed_classification"),
+        "rule": "Historical record; whether the athlete saw or followed it is unknown. An indeterminate conformity "
+                "is not a deviation.",
+    })
+
+
+def compact_allowed_conclusions(frame: Any) -> list[dict[str, Any]]:
+    """V3 conclusions the Coach may relay (diagnosis/evidence items and a hypothesised type)."""
+    v3 = (frame or {}).get("v3_assessment") if isinstance(frame, dict) else None
+    if not isinstance(v3, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    classification = v3.get("classification") or {}
+    if classification.get("probable_type") not in (None, "unknown"):
+        out.append({
+            "code": "session_type_hypothesis", "value": classification.get("probable_type"),
+            "confidence": classification.get("confidence"),
+            "status": "hypothesis from observed data, not a prescription",
+        })
+    coach = v3.get("coach_assessment") or {}
+    for item in (coach.get("diagnosis") or []) + (coach.get("evidence") or []):
+        if isinstance(item, dict) and item.get("code") and item.get("code") != "diagnosis.unknown":
+            out.append({"code": item["code"], "text": item.get("text")})
+    return out
+
+
+def consolidate_limitations(
+    items: list[Any], *, structure_present: bool, comparisons_present: bool, session_type_unknown: bool,
+    structure_has_hr: bool = False,
+) -> list[dict[str, str]]:
+    """One entry per material uncertainty, whichever engine expressed it and however it was worded.
+
+    Items are (code or None, text). Limits already carried by scientific_permissions are dropped; limits
+    that cannot change a conclusion given the available structure/comparisons are dropped; the rest is
+    merged into a single compact wording per topic. Unknown codes are kept once with their own text.
+    """
+    topics: dict[str, str] = {}
+    for code, text in items:
+        code = str(code) if code else None
+        if code in _COVERED_ELSEWHERE:
+            continue
+        topic = _LIMIT_TOPIC_BY_CODE.get(code)
+        if topic is None:
+            if not text:
+                continue
+            topic = code or " ".join(str(text).lower().split())
+            topics.setdefault(topic, str(text))
+        else:
+            topics.setdefault(topic, _LIMIT_TOPIC_TEXT[topic])
+    if session_type_unknown and not structure_present:
+        topics.setdefault("session_type_unknown", _LIMIT_TOPIC_TEXT["session_type_unknown"])
+    if structure_has_hr:  # heart rates are listed per phase/repetition: the whole-session gap no longer matters
+        topics.pop("hr_unusable", None)
+    if structure_present:
+        topics.pop("structure_unknown", None)
+        topics.pop("no_splits", None)
+    elif "no_splits" in topics and "structure_unknown" in topics:
+        topics.pop("no_splits")  # whole-session figures only already says it
+    if comparisons_present:
+        topics.pop("no_validated_comparison", None)
+    else:
+        for topic in _COMPARISON_ONLY_TOPICS:
+            topics.pop(topic, None)
+    return [{"code": topic, "text": text} for topic, text in topics.items()]
+
+
 def _build_plan_goal(resolved_goal: Any) -> PlanGoal:
     return build_plan_goal(
         goal_type=resolved_goal.mapped_goal,
