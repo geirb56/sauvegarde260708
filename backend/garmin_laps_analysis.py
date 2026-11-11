@@ -338,9 +338,17 @@ PATTERN_MIN_PACE_CONTRAST = 0.10      # slow cluster at least 10 % slower than t
 PATTERN_DURATION_TOLERANCE_S = 10     # same-role laps must match within max(10 s, 15 %)
 PATTERN_DURATION_TOLERANCE_RATIO = 0.15
 PATTERN_ABERRANT_PACE_RATIO = 3.0     # lap pace > 3x or < 1/3 of the median lap pace is aberrant
+# C420B: Garmin start times carry second precision, so consecutive starts may differ from the
+# previous elapsed time by rounding (up to 2 s). This is independent from the 1 s pause /
+# kilometre-split tolerance (CHRONOLOGY_TOLERANCE_S). Cumulative drift may grow by 0.25 s per lap.
+TIMESTAMP_ROUNDING_TOLERANCE_S = 2
+TIMESTAMP_DRIFT_PER_LAP_S = 0.25
+PAUSE_TOLERANCE_S = CHRONOLOGY_TOLERANCE_S
+CHRONOLOGY_MAX_BREAK_RATIO = 0.25     # more broken junctions than this: chronology unusable
+PARTIAL_COVERAGE_MIN_RATIO = 0.5      # laps must cover at least half of the summary to be exploited
 _BLOCKING_REASONS = frozenset({
     "not_garmin", "activity_missing", "laps_missing", "laps_invalid", "laps_empty",
-    "summary_missing", "chronology_incoherent", "time_incoherent", "coverage_incomplete",
+    "summary_missing", "time_incoherent",
 })
 
 
@@ -418,6 +426,35 @@ def _role_summary(segments):
     return summary
 
 
+def _chronology_breaks(laps):
+    """Lap positions whose start does not follow the previous lap (real gap or overlap).
+
+    Rounding up to TIMESTAMP_ROUNDING_TOLERANCE_S is accepted locally; cumulative drift is
+    measured from the last break so a break never hides behind earlier rounding. Returns
+    (breaks, junctions); breaks maps position -> "gap" | "overlap". Callers guarantee that
+    every start_time_gmt is present and valid.
+    """
+    stamps = [lap.get("start_time_gmt") for lap in laps]
+    if any(stamp is None for stamp in stamps):
+        return {}, 0
+    starts = [_timestamp(stamp) for stamp in stamps]
+    breaks = {}
+    anchor, cumulative = 0, 0.0
+    for i in range(1, len(laps)):
+        previous = laps[i - 1]
+        step = previous["elapsed_duration_s"] if previous.get("elapsed_duration_s") is not None \
+            else previous["duration_s"]
+        cumulative += step
+        local = (starts[i] - starts[i - 1]).total_seconds() - step
+        drift = (starts[i] - starts[anchor]).total_seconds() - cumulative
+        allowed = TIMESTAMP_ROUNDING_TOLERANCE_S + TIMESTAMP_DRIFT_PER_LAP_S * (i - 1 - anchor)
+        if starts[i] < starts[i - 1] or abs(local) > TIMESTAMP_ROUNDING_TOLERANCE_S or abs(drift) > allowed:
+            signed = local if abs(local) > TIMESTAMP_ROUNDING_TOLERANCE_S else drift
+            breaks[i] = "gap" if signed > 0 else "overlap"
+            anchor, cumulative = i, 0.0
+    return breaks, len(laps) - 1
+
+
 def _unknown(status, reason, lap_count=0, anomalies=()):
     return {
         "schema": LAP_PATTERN_SCHEMA, "status": status, "reason": reason,
@@ -426,11 +463,12 @@ def _unknown(status, reason, lap_count=0, anomalies=()):
     }
 
 
-def _chains(laps, fast, slow):
+def _chains(laps, fast, slow, breaks=frozenset()):
     """Maximal runs of fast laps separated by exactly one slow lap, duration-consistent."""
     runs, current = [], []
     for position in sorted(fast):
-        if current and position - current[-1] == 2 and (position - 1) in slow:
+        if (current and position - current[-1] == 2 and (position - 1) in slow
+                and (position - 1) not in breaks and position not in breaks):
             current.append(position)
         else:
             if current:
@@ -491,13 +529,49 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     laps = activity_doc["activity_laps"]["laps"]
     count = len(laps)
     anomalies = []
+    # C420B: chronology and coverage are judged locally here; the shared assessment
+    # (C350) keeps its strict 1 s rule and is not weakened.
+    try:
+        breaks, junctions = _chronology_breaks(laps)
+    except (OverflowError, TypeError, ValueError):
+        return _unknown("unavailable", "laps_invalid", count)
+    if junctions and len(breaks) > CHRONOLOGY_MAX_BREAK_RATIO * junctions:
+        return _unknown("unavailable", "chronology_incoherent", count)
+    for position, kind in sorted(breaks.items()):
+        anomalies.append({"code": "chronology_" + kind, "lap_position": position + 1})
+    covered_m = sum(lap["distance_m"] for lap in laps)
+    covered_s = sum(lap["duration_s"] for lap in laps)
+    summary_m, summary_s = workout["distance_km"] * 1000, workout["duration_minutes"] * 60
+    def coverage(covered, summary, tolerance):
+        if abs(covered - summary) <= tolerance:
+            return "full"
+        if summary - tolerance > covered >= PARTIAL_COVERAGE_MIN_RATIO * summary:
+            return "partial"
+        return "incomplete"
+
+    states = (coverage(covered_m, summary_m, SUMMARY_DISTANCE_TOLERANCE_M),
+              coverage(covered_s, summary_s, SUMMARY_DURATION_TOLERANCE_S))
+    if "incomplete" in states:
+        return _unknown("unavailable", "coverage_incomplete", count)
+    partial = "partial" in states
+    if partial:
+        anomalies.append({
+            "code": "laps_cover_partial_session",
+            "covered_distance_ratio": round(covered_m / summary_m, 3),
+            "covered_duration_ratio": round(covered_s / summary_s, 3),
+        })
     if "chronology_missing" in assessment.reasons or "chronology_incomplete" in assessment.reasons:
         anomalies.append({"code": "chronology_unverified"})
     if "pause_unverifiable" in assessment.reasons:
         anomalies.append({"code": "pause_unverifiable"})
     labels = sorted({lap.get("intensity_type") for lap in laps if lap.get("intensity_type") not in (None, "ACTIVE")})
     if labels:
-        anomalies.append({"code": "intensity_labels_recorded_not_interpreted", "labels": labels})
+        anomalies.append({
+            "code": "intensity_labels_recorded_not_interpreted", "labels": labels,
+            "lap_positions_by_label": {
+                label: [i + 1 for i, lap in enumerate(laps) if lap.get("intensity_type") == label]
+                for label in labels},
+        })
 
     if count < 2 * PATTERN_MIN_REPETITIONS - 1:
         return _unknown("unknown", "too_few_laps", count, anomalies)
@@ -510,10 +584,10 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     excluded = set()
     for position, lap in enumerate(laps):
         elapsed, moving = lap.get("elapsed_duration_s"), lap.get("moving_duration_s")
-        if elapsed is not None and elapsed - lap["duration_s"] > CHRONOLOGY_TOLERANCE_S:
+        if elapsed is not None and elapsed - lap["duration_s"] > PAUSE_TOLERANCE_S:
             excluded.add(position)
             anomalies.append({"code": "recorded_pause", "lap_position": position + 1})
-        elif moving is not None and lap["duration_s"] - moving > CHRONOLOGY_TOLERANCE_S:
+        elif moving is not None and lap["duration_s"] - moving > PAUSE_TOLERANCE_S:
             excluded.add(position)
             anomalies.append({"code": "stationary_time", "lap_position": position + 1})
     all_paces = [lap["duration_s"] / lap["distance_m"] * 1000 for lap in laps]
@@ -538,7 +612,7 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     if contrast < PATTERN_MIN_PACE_CONTRAST:
         return _unknown("no_pattern_observed", "no_pace_contrast", count, anomalies)
 
-    chains = [c for c in _chains(laps, fast, slow) if len(c) >= PATTERN_MIN_REPETITIONS]
+    chains = [c for c in _chains(laps, fast, slow, breaks) if len(c) >= PATTERN_MIN_REPETITIONS]
     if not chains:
         return _unknown("no_pattern_observed", "no_repeated_alternation", count, anomalies)
     chain = max(chains, key=lambda c: (len(c), -c[0]))
@@ -546,7 +620,7 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     fast_segments = [_segment(laps[p], p + 1) for p in chain]
     between = [_segment(laps[p + 1], p + 2) for p in chain[:-1]]
     after = chain[-1] + 1
-    if after < count and after in slow and _near(
+    if after < count and after in slow and after not in breaks and _near(
             laps[after]["duration_s"], _median([s["duration_s"] for s in between])):
         between.append(_segment(laps[after], after + 1))
         after += 1
@@ -574,13 +648,15 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     warmup = cooldown = None
     prefix, suffix = range(0, chain[0]), range(after, count)
     if prefix:
-        if all(i in slow for i in prefix):
+        if all(i in slow for i in prefix) and not partial and not any(
+                i in breaks for i in range(1, chain[0] + 1)):
             warmup = {**_block(laps, 0, chain[0] - 1),
                       "basis": "laps before the first repeated fast lap; not a recorded phase"}
         else:
             unclassified.extend(i + 1 for i in prefix)
     if suffix:
-        if all(i in slow for i in suffix):
+        if all(i in slow for i in suffix) and not partial and not any(
+                i in breaks for i in range(after, count)):
             cooldown = {**_block(laps, after, count - 1),
                         "basis": "laps after the last repeated segment; not a recorded phase"}
         else:
@@ -592,7 +668,8 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     if len(chain) >= 4 and contrast >= 0.20 and not anomalies:
         confidence = "high"
     elif any(a["code"] in ("recorded_pause", "stationary_time", "aberrant_lap", "incomplete_final_lap",
-                           "laps_outside_pattern_unclassified") for a in anomalies):
+                           "laps_outside_pattern_unclassified", "laps_cover_partial_session",
+                           "chronology_gap", "chronology_overlap") for a in anomalies):
         confidence = "low"
     result = {
         "schema": LAP_PATTERN_SCHEMA, "status": "pattern_observed",
