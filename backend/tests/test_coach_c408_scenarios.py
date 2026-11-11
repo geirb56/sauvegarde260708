@@ -229,16 +229,16 @@ async def _three_turns(goal):
 async def test_scenario_e_same_workout_on_three_turns_with_one_llm_call_each():
     fake_db, contexts, histories, calls = await _three_turns(goal=True)
     assert calls == 3
-    assert all("workout_id" not in c["session_coaching_frame"] for c in contexts)  # C408-C
-    assert contexts[0]["session_coaching_frame"] == contexts[2]["session_coaching_frame"]  # no factual drift
+    assert all('"workout_id"' not in json.dumps(c) for c in contexts)  # C408-C (C421: whole chat context)
+    assert contexts[0] == contexts[2]  # no factual drift (C421: the whole conversational context)
     assert [len(h) for h in histories] == [0, 2, 4]
     assert histories[2][0]["content"] == "Analyse cette séance."
     assert {d["workout_id"] for d in fake_db.conversations._docs} == {"w1"}
-    assert all(c["session_coaching_frame"]["athlete_goal_declared"] is True for c in contexts)
+    assert all("declared_goal" in c["athlete_context"] for c in contexts)
 
 
 @pytest.mark.asyncio
 async def test_scenario_e_goal_is_referenced_only_when_known():
     _, contexts, _, _ = await _three_turns(goal=False)
-    assert all(c["session_coaching_frame"]["athlete_goal_declared"] is False for c in contexts)
+    assert all("declared_goal" not in c["athlete_context"] for c in contexts)
     assert all("goal" not in c for c in contexts)

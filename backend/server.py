@@ -2193,7 +2193,7 @@ async def _build_coach_llm_context(
             workout_analysis_allowed=True, workout_id=workout_id, now_utc=now_utc,
             load_training_payloads=read_only_training_payloads, goal_optional=True,
         )
-        return coach_session_comment.build_session_chat_context(llm_context), narrative
+        return coach_session_comment.build_conversation_context(llm_context), narrative
 
     async def load_training_payloads():
         return (await get_training_v2_week(user=user)), (await get_today_adaptive_session(user=user))

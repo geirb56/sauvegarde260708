@@ -38,11 +38,12 @@ async def test_validated_observations_reach_llm_context_once_without_recommendat
         context = llm.await_args.kwargs["context"]
     assert response.status_code == 200
     loader.assert_awaited_once()
-    obs = context["validated_workout_observations"]
-    assert obs["source"] == "workout_intelligence_v3_deterministic"
-    assert obs["analysis"] == "Synthetic: 3 efforts recorded."
-    assert obs["limitations"] == ["Synthetic: no HR."]
-    assert "SHOULD NOT APPEAR" not in str(obs) and "recommendation" not in obs
+    obs = {o["code"]: o for o in context["key_observations"] if o["source"] == "v3_narrative"}
+    assert obs["narrative.analysis"]["text"] == "Synthetic: 3 efforts recorded."  # once, V3 deterministic
+    assert [o["code"] for o in context["key_observations"]].count("narrative.analysis") == 1
+    assert "SHOULD NOT APPEAR" not in str(context) and "recommendation" not in str(context["key_observations"])
+    # C421: the narrative's free-text limitations are consolidated into material_limitations, not copied
+    assert "Synthetic: no HR." not in str(context)
 
 
 async def test_failure_is_a_controlled_503_without_degraded_reply():
