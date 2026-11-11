@@ -449,7 +449,8 @@ def _chronology_breaks(laps):
         drift = (starts[i] - starts[anchor]).total_seconds() - cumulative
         allowed = TIMESTAMP_ROUNDING_TOLERANCE_S + TIMESTAMP_DRIFT_PER_LAP_S * (i - 1 - anchor)
         if starts[i] < starts[i - 1] or abs(local) > TIMESTAMP_ROUNDING_TOLERANCE_S or abs(drift) > allowed:
-            breaks[i] = "gap" if (local > 0 or drift > 0) and starts[i] >= starts[i - 1] else "overlap"
+            signed = local if abs(local) > TIMESTAMP_ROUNDING_TOLERANCE_S else drift
+            breaks[i] = "gap" if signed > 0 else "overlap"
             anchor, cumulative = i, 0.0
     return breaks, len(laps) - 1
 
@@ -530,7 +531,10 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     anomalies = []
     # C420B: chronology and coverage are judged locally here; the shared assessment
     # (C350) keeps its strict 1 s rule and is not weakened.
-    breaks, junctions = _chronology_breaks(laps)
+    try:
+        breaks, junctions = _chronology_breaks(laps)
+    except (OverflowError, TypeError, ValueError):
+        return _unknown("unavailable", "laps_invalid", count)
     if junctions and len(breaks) > CHRONOLOGY_MAX_BREAK_RATIO * junctions:
         return _unknown("unavailable", "chronology_incoherent", count)
     for position, kind in sorted(breaks.items()):
@@ -538,20 +542,24 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     covered_m = sum(lap["distance_m"] for lap in laps)
     covered_s = sum(lap["duration_s"] for lap in laps)
     summary_m, summary_s = workout["distance_km"] * 1000, workout["duration_minutes"] * 60
-    partial = False
-    if not (abs(covered_m - summary_m) <= SUMMARY_DISTANCE_TOLERANCE_M
-            and abs(covered_s - summary_s) <= SUMMARY_DURATION_TOLERANCE_S):
-        if (covered_m < summary_m and covered_s < summary_s
-                and covered_m >= PARTIAL_COVERAGE_MIN_RATIO * summary_m
-                and covered_s >= PARTIAL_COVERAGE_MIN_RATIO * summary_s):
-            partial = True
-            anomalies.append({
-                "code": "laps_cover_partial_session",
-                "covered_distance_ratio": round(covered_m / summary_m, 3),
-                "covered_duration_ratio": round(covered_s / summary_s, 3),
-            })
-        else:
-            return _unknown("unavailable", "coverage_incomplete", count)
+    def coverage(covered, summary, tolerance):
+        if abs(covered - summary) <= tolerance:
+            return "full"
+        if summary - tolerance > covered >= PARTIAL_COVERAGE_MIN_RATIO * summary:
+            return "partial"
+        return "incomplete"
+
+    states = (coverage(covered_m, summary_m, SUMMARY_DISTANCE_TOLERANCE_M),
+              coverage(covered_s, summary_s, SUMMARY_DURATION_TOLERANCE_S))
+    if "incomplete" in states:
+        return _unknown("unavailable", "coverage_incomplete", count)
+    partial = "partial" in states
+    if partial:
+        anomalies.append({
+            "code": "laps_cover_partial_session",
+            "covered_distance_ratio": round(covered_m / summary_m, 3),
+            "covered_duration_ratio": round(covered_s / summary_s, 3),
+        })
     if "chronology_missing" in assessment.reasons or "chronology_incomplete" in assessment.reasons:
         anomalies.append({"code": "chronology_unverified"})
     if "pause_unverifiable" in assessment.reasons:

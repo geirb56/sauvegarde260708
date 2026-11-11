@@ -397,3 +397,43 @@ def test_labels_are_reported_with_positions_without_changing_roles():
     label = next(a for a in result["anomalies"] if a["code"] == "intensity_labels_recorded_not_interpreted")
     assert label["lap_positions_by_label"] == {"INTERVAL": [5, 7]}
     assert result["pattern"]["repetition_count"] == 7
+
+
+# ---------------------------------------------------------------- PR #412 review regressions
+
+def test_break_direction_follows_the_sign_of_the_offending_offset():
+    workout, activity = session_0511()
+    restamp(activity, {i: -5 for i in range(12, 23)})  # lap 12 starts 5 s early: overlap
+    result = detect_lap_pattern(workout, activity)
+    assert {"code": "chronology_overlap", "lap_position": 13} in result["anomalies"]
+    workout, activity = session_0511()
+    restamp(activity, {i: 5 for i in range(12, 23)})
+    assert {"code": "chronology_gap", "lap_position": 13} in detect_lap_pattern(workout, activity)["anomalies"]
+
+
+def test_cumulative_drift_beyond_allowance_is_a_gap_even_with_small_local_offsets():
+    workout, activity = session_0511()
+    restamp(activity, {i: 1.9 * min(i, 2) for i in range(1, 23)})
+    anomalies = detect_lap_pattern(workout, activity)["anomalies"]
+    assert {"code": "chronology_gap", "lap_position": 3} in anomalies
+
+
+def test_unparseable_timestamp_is_laps_invalid_not_an_exception():
+    workout, activity = session_0511()
+    activity["activity_laps"]["laps"][9]["start_time_gmt"] = "2026-13-45T99:00:00+00:00"
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "unavailable" and result["reason"] == "laps_invalid"
+
+
+def test_partial_coverage_is_checked_per_dimension_with_inclusive_bounds():
+    workout, activity = session_0511()
+    laps = activity["activity_laps"]["laps"]
+    distance = sum(lap["distance_m"] for lap in laps)
+    duration = sum(lap["duration_s"] for lap in laps)
+    workout["distance_km"], workout["duration_minutes"] = distance * 2 / 1000, duration * 2 / 60
+    assert detect_lap_pattern(workout, activity)["status"] == "pattern_observed"  # exactly 50 %
+    workout["duration_minutes"] = duration * 3 / 60  # distance fine, duration too low
+    assert detect_lap_pattern(workout, activity)["reason"] == "coverage_incomplete"
+    workout["duration_minutes"] = duration * 2 / 60
+    workout["distance_km"] = (distance - 10) / 1000  # distance exceeds the summary
+    assert detect_lap_pattern(workout, activity)["reason"] == "coverage_incomplete"
