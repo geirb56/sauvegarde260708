@@ -206,3 +206,94 @@ def test_unverifiable_laps_abstain(mutate, reason):
 def test_result_is_deterministic():
     workout, activity = session_0511(hr=lambda i: 130 + i)
     assert detect_lap_pattern(workout, activity) == detect_lap_pattern(workout, activity)
+
+
+# ---------------------------------------------------------------- PR #411 review regressions
+
+def test_zero_or_invalid_hr_is_unknown_never_a_trend():
+    workout, activity = session_0511()
+    for lap in activity["activity_laps"]["laps"][4:6]:
+        lap["average_hr"] = 0
+    fast = detect_lap_pattern(workout, activity)["pattern"]["fast_segments"]
+    assert fast["segments"][0]["avg_hr_bpm"] is None
+    assert fast["hr_evolution_available"] is False
+    assert "avg_hr_change_first_to_last_bpm" not in fast
+
+
+def test_small_pause_above_recording_tolerance_is_excluded_from_alternation():
+    specs = [(300, 360)] + [(60, 230), (60, 390)] * 4 + [(60, 230)] + [(300, 360)]
+    workout, activity = build(specs, **{"4": {"elapsed_duration_s": 70}})  # 60 s lap, 10 s paused
+    laps = activity["activity_laps"]["laps"]
+    start = datetime.fromisoformat(laps[0]["start_time_gmt"])
+    for lap in laps:
+        lap["start_time_gmt"] = start.isoformat()
+        start += timedelta(seconds=lap["elapsed_duration_s"])
+    result = detect_lap_pattern(workout, activity)
+    assert {"code": "recorded_pause", "lap_position": 5} in result["anomalies"]
+    assert result["confidence"] != "high"
+    assert 5 not in [s["lap_position"] for s in result["pattern"]["slow_segments"]["segments"]]
+
+
+@pytest.mark.parametrize("repetitions", [3, 4])
+def test_complete_short_final_repetition_is_kept(repetitions):
+    specs = [(300, 360)] + [(20, 230), (40, 390)] * (repetitions - 1) + [(20, 230)]
+    workout, activity = build(specs)
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "pattern_observed"
+    assert result["pattern"]["repetition_count"] == repetitions
+    assert result["pattern"]["fast_segments"]["typical_duration_s"] == 20
+    assert not any(a["code"] == "incomplete_final_lap" for a in result["anomalies"])
+
+
+def test_truncated_final_effort_is_still_flagged_incomplete():
+    specs = [(300, 360)] + [(60, 230), (60, 390)] * 4 + [(15, 230)]
+    workout, activity = build(specs)
+    result = detect_lap_pattern(workout, activity)
+    assert {"code": "incomplete_final_lap", "lap_position": 10} in result["anomalies"]
+    assert result["pattern"]["repetition_count"] == 4
+
+
+def test_efforts_after_a_pause_are_not_labelled_cooldown():
+    specs = [(300, 360)] + [(60, 230), (60, 390)] * 3 + [(60, 230), (60, 390), (60, 230)] + [(300, 360)]
+    workout, activity = build(specs, **{"6": {"elapsed_duration_s": 120}})
+    laps = activity["activity_laps"]["laps"]
+    start = datetime.fromisoformat(laps[0]["start_time_gmt"])
+    for lap in laps:
+        lap["start_time_gmt"] = start.isoformat()
+        start += timedelta(seconds=lap["elapsed_duration_s"])
+    result = detect_lap_pattern(workout, activity)
+    assert "probable_cooldown" not in result
+    unclassified = next(a for a in result["anomalies"] if a["code"] == "laps_outside_pattern_unclassified")
+    assert 8 in unclassified["lap_positions"]  # the later fast effort stays unclassified
+    assert result["probable_warmup"]["last_lap_position"] == 1
+
+
+def test_efforts_before_a_stationary_lap_are_not_labelled_warmup():
+    specs = [(300, 360)] + [(60, 230), (60, 390)] * 2 + [(60, 230), (60, 390)] * 4 + [(300, 360)]
+    workout, activity = build(specs, **{"5": {"moving_duration_s": 20}})
+    result = detect_lap_pattern(workout, activity)
+    assert result["status"] == "pattern_observed"
+    assert result["pattern"]["first_lap_position"] == 8  # the earlier efforts precede the stationary lap
+    assert "probable_warmup" not in result
+    assert any(a["code"] == "laps_outside_pattern_unclassified" for a in result["anomalies"])
+
+
+def test_aberrant_19m_lap_does_not_distort_detection():
+    specs = [(360, 360)] * 3 + [(60, 230), (60, 390)] * 7 + [(360, 360)] * 3
+    workout, activity = build(specs)
+    laps = activity["activity_laps"]["laps"]
+    laps[16].update(distance_m=19.0, duration_s=180, moving_duration_s=180, elapsed_duration_s=180,
+                    average_speed_mps=19 / 180)
+    start = datetime.fromisoformat(laps[0]["start_time_gmt"])
+    for lap in laps:
+        lap["start_time_gmt"] = start.isoformat()
+        start += timedelta(seconds=lap["elapsed_duration_s"])
+    workout["distance_km"] = round(sum(l["distance_m"] for l in laps) / 1000, 2)
+    workout["duration_minutes"] = sum(l["duration_s"] for l in laps) / 60
+    result = detect_lap_pattern(workout, activity)
+    assert {"code": "aberrant_lap", "lap_position": 17} in result["anomalies"]
+    assert result["status"] == "pattern_observed"
+    assert result["confidence"] == "low"
+    assert 17 not in [s["lap_position"] for r in ("fast_segments", "slow_segments")
+                      for s in result["pattern"][r]["segments"]]
+    assert result["pattern"]["fast_segments"]["typical_pace_sec_per_km"] == 230

@@ -337,9 +337,7 @@ PATTERN_MIN_REPETITIONS = 3
 PATTERN_MIN_PACE_CONTRAST = 0.10      # slow cluster at least 10 % slower than the fast one
 PATTERN_DURATION_TOLERANCE_S = 10     # same-role laps must match within max(10 s, 15 %)
 PATTERN_DURATION_TOLERANCE_RATIO = 0.15
-PATTERN_PAUSE_MIN_S = 10              # recorded pause / stationary time: max(10 s, 20 % of lap)
-PATTERN_PAUSE_RATIO = 0.20
-PATTERN_MIN_LAP_S = 30                # a shorter final lap is an incomplete tail
+PATTERN_ABERRANT_PACE_RATIO = 3.0     # lap pace > 3x or < 1/3 of the median lap pace is aberrant
 _BLOCKING_REASONS = frozenset({
     "not_garmin", "activity_missing", "laps_missing", "laps_invalid", "laps_empty",
     "summary_missing", "chronology_incoherent", "time_incoherent", "coverage_incomplete",
@@ -374,6 +372,11 @@ def _two_means(paces):
     return set(order[:best[1]]), set(order[best[1]:])
 
 
+def _valid_hr(value):
+    """Heart rate in bpm only when strictly positive and finite; otherwise unknown (never 0)."""
+    return value if _positive(value) else None
+
+
 def _segment(lap, position):
     distance, duration = lap["distance_m"], lap["duration_s"]
     return {
@@ -381,7 +384,7 @@ def _segment(lap, position):
         "duration_s": round(duration, 1),
         "length_m": round(distance, 1),
         "pace_sec_per_km": round(duration / distance * 1000, 1),
-        "avg_hr_bpm": lap.get("average_hr"),
+        "avg_hr_bpm": _valid_hr(lap.get("average_hr")),
     }
 
 
@@ -405,7 +408,7 @@ def _role_summary(segments):
         "typical_pace_sec_per_km": round(_median([s["pace_sec_per_km"] for s in segments]), 1),
         "segments": segments,
     }
-    if all(isinstance(hr, (int, float)) for hr in hrs):
+    if all(hr is not None for hr in hrs):
         summary["avg_hr_first_bpm"] = hrs[0]
         summary["avg_hr_last_bpm"] = hrs[-1]
         summary["avg_hr_change_first_to_last_bpm"] = round(hrs[-1] - hrs[0], 1)
@@ -501,22 +504,29 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
     if all(math.isclose(lap["distance_m"], 1000, rel_tol=0, abs_tol=1) for lap in laps[:-1]):
         return _unknown("unknown", "kilometre_laps_hide_intra_lap_structure", count, anomalies)
 
-    pauses = set()
+    # Pauses, stationary time and aberrant laps are never effort or slow laps: they
+    # are excluded from clustering and break any chain. The tolerance is the
+    # chronology tolerance shared with the structure assessment, not a percentage.
+    excluded = set()
     for position, lap in enumerate(laps):
-        limit = max(PATTERN_PAUSE_MIN_S, PATTERN_PAUSE_RATIO * lap["duration_s"])
         elapsed, moving = lap.get("elapsed_duration_s"), lap.get("moving_duration_s")
-        if elapsed is not None and elapsed - lap["duration_s"] > limit:
-            pauses.add(position)
+        if elapsed is not None and elapsed - lap["duration_s"] > CHRONOLOGY_TOLERANCE_S:
+            excluded.add(position)
             anomalies.append({"code": "recorded_pause", "lap_position": position + 1})
-        elif moving is not None and lap["duration_s"] - moving > limit:
-            pauses.add(position)
+        elif moving is not None and lap["duration_s"] - moving > CHRONOLOGY_TOLERANCE_S:
+            excluded.add(position)
             anomalies.append({"code": "stationary_time", "lap_position": position + 1})
-    if laps[-1]["duration_s"] < PATTERN_MIN_LAP_S:
-        pauses.add(count - 1)
-        anomalies.append({"code": "incomplete_final_lap", "lap_position": count})
+    all_paces = [lap["duration_s"] / lap["distance_m"] * 1000 for lap in laps]
+    reference = _median(all_paces)
+    for position, pace in enumerate(all_paces):
+        if position not in excluded and (
+                pace > PATTERN_ABERRANT_PACE_RATIO * reference
+                or pace < reference / PATTERN_ABERRANT_PACE_RATIO):
+            excluded.add(position)
+            anomalies.append({"code": "aberrant_lap", "lap_position": position + 1})
 
-    usable = [i for i in range(count) if i not in pauses]
-    paces = {i: laps[i]["duration_s"] / laps[i]["distance_m"] * 1000 for i in usable}
+    usable = [i for i in range(count) if i not in excluded]
+    paces = {i: all_paces[i] for i in usable}
     if len(usable) < 2 * PATTERN_MIN_REPETITIONS - 1:
         return _unknown("unknown", "too_few_usable_laps", count, anomalies)
     split = _two_means([paces[i] for i in usable])
@@ -550,11 +560,39 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
         "pace_contrast_ratio": round(contrast, 3),
         "slow_segments_meaning": "observed slower laps between fast laps; not proof of a programmed recovery",
     }
+    # A final lap is incomplete only relative to the efforts it resembles: a short
+    # but complete repetition matching the others stays inside the chain.
+    last = count - 1
+    if last >= after and last in fast and last not in excluded and laps[last]["duration_s"] < _median(
+            [s["duration_s"] for s in fast_segments]) and not _near(
+            laps[last]["duration_s"], _median([s["duration_s"] for s in fast_segments])):
+        anomalies.append({"code": "incomplete_final_lap", "lap_position": count})
+
+    # Surrounding roles are assigned only when every lap of the prefix/suffix is an
+    # eligible slow lap; otherwise those laps stay unclassified.
+    unclassified = []
+    warmup = cooldown = None
+    prefix, suffix = range(0, chain[0]), range(after, count)
+    if prefix:
+        if all(i in slow for i in prefix):
+            warmup = {**_block(laps, 0, chain[0] - 1),
+                      "basis": "laps before the first repeated fast lap; not a recorded phase"}
+        else:
+            unclassified.extend(i + 1 for i in prefix)
+    if suffix:
+        if all(i in slow for i in suffix):
+            cooldown = {**_block(laps, after, count - 1),
+                        "basis": "laps after the last repeated segment; not a recorded phase"}
+        else:
+            unclassified.extend(i + 1 for i in suffix)
+    if unclassified:
+        anomalies.append({"code": "laps_outside_pattern_unclassified", "lap_positions": unclassified})
+
     confidence = "medium"
-    if (len(chain) >= 4 and contrast >= 0.20 and not anomalies):
+    if len(chain) >= 4 and contrast >= 0.20 and not anomalies:
         confidence = "high"
-    elif any(a["code"] in ("recorded_pause", "stationary_time", "incomplete_final_lap")
-                                       for a in anomalies):
+    elif any(a["code"] in ("recorded_pause", "stationary_time", "aberrant_lap", "incomplete_final_lap",
+                           "laps_outside_pattern_unclassified") for a in anomalies):
         confidence = "low"
     result = {
         "schema": LAP_PATTERN_SCHEMA, "status": "pattern_observed",
@@ -565,14 +603,8 @@ def detect_lap_pattern(workout: dict, activity_doc: Any) -> dict:
         "pattern": pattern,
         "anomalies": anomalies,
     }
-    if chain[0] > 0:
-        result["probable_warmup"] = {
-            **_block(laps, 0, chain[0] - 1),
-            "basis": "laps before the first repeated fast lap; not a recorded phase",
-        }
-    if after < count:
-        result["probable_cooldown"] = {
-            **_block(laps, after, count - 1),
-            "basis": "laps after the last repeated segment; not a recorded phase",
-        }
+    if warmup:
+        result["probable_warmup"] = warmup
+    if cooldown:
+        result["probable_cooldown"] = cooldown
     return result
