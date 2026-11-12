@@ -7,7 +7,7 @@ export const Layout = () => {
   const location = useLocation();
   const { t } = useLanguage();
   const { user, logout } = useAuth();
-  const authenticatedBrandSrc = "/runindex-mark.svg";
+  const authenticatedBrandSrc = "/runindex-mark-official.png";
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.home", testId: "mobile-nav-dashboard" },

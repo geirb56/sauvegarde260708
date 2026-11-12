@@ -321,11 +321,7 @@ export default function Coach() {
 
   if (initialLoading) {
     return (
-      <div
-      className={`coach-page-shell flex min-w-0 flex-col${composerFocused ? " coach-keyboard-open" : ""}`}
-      style={viewportHeight ? { "--coach-vh": `${viewportHeight}px` } : undefined}
-      data-testid="coach-page"
-    >
+      <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
         <div className="px-4 py-3 md:px-8 md:py-4 border-b border-border">
           <div className="h-8 w-32 bg-muted rounded animate-pulse" />
         </div>
@@ -337,7 +333,11 @@ export default function Coach() {
   }
 
   return (
-    <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
+    <div
+      className={`coach-page-shell flex min-w-0 flex-col${composerFocused ? " coach-keyboard-open" : ""}`}
+      style={viewportHeight ? { "--coach-vh": `${viewportHeight}px` } : undefined}
+      data-testid="coach-page"
+    >
       {/* Header */}
       <div className="shrink-0 px-4 py-3 md:px-8 md:py-4 border-b border-border">
         <div className="flex items-center justify-between gap-3">
