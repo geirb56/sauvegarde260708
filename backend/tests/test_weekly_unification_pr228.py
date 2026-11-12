@@ -318,7 +318,11 @@ class TestSessionsPreferencePrescription:
         assert canonical.reconciliation_result.action == WeeklyReconciliationAction.KEEP
         assert canonical.original_target is canonical.reconciliation_result.original_target
         assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
-        assert canonical.weekly_plan.session_count == preference
+        # C423: fewer sessions rather than any ordinary session under 4 km.
+        assert 1 <= canonical.weekly_plan.session_count <= preference
+        assert all(
+            s.distance_km >= 4.0 for s in canonical.weekly_plan.sessions if s.workout_type != "rest"
+        )
         assert canonical.weekly_plan.planned_km == pytest.approx(expected_km, abs=0.1)
         long_run = next(s for s in canonical.weekly_plan.sessions if s.workout_type == "long_easy")
         assert long_run.distance_km == pytest.approx(0.35 * expected_km, abs=0.7)
@@ -741,8 +745,7 @@ class TestProtectionsConserved:
         canonical = build_canonical_weekly_plan(**kwargs)
         assert canonical.original_target.continuity_state == continuity
         assert canonical.reconciled_target.continuity_state == continuity
-        assert canonical.weekly_plan.session_count == canonical.reconciled_target.target_sessions
-        assert canonical.weekly_plan.session_count > 0
+        assert 0 < canonical.weekly_plan.session_count <= canonical.reconciled_target.target_sessions
         if days_since >= 7:
             assert canonical.original_target.allow_intensity is False
             assert canonical.reconciled_target.allow_intensity is False

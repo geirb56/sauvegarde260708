@@ -1538,12 +1538,28 @@ def build_weekly_plan(
                 race_week=race_week,
             )
             reason_codes = list(reason_codes) + list(constraint_codes)
+            if target_basis == "distance":
+                placed_km = sum(
+                    s.distance_km for s in sessions if _is_training_session(s) and s.distance_km is not None
+                )
+                sessions, min_codes = _enforce_minimum_distance(
+                    sessions,
+                    target_km=round(placed_km, 1),
+                    goal_type=goal_type,
+                    min_km=_minimum_session_km(continuity),
+                )
+                reason_codes = _merge_reason_codes(reason_codes, min_codes)
         else:
             skeleton, constraint_codes = _assign_days(session_types, runner_profile)
             reason_codes = list(reason_codes) + constraint_codes
             sessions, reason_codes = _route_normal(
                 weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase,
                 race_distance_km=None,
+                blocked_days=(
+                    frozenset({cross_week_race_eve.race_eve_day})
+                    if cross_week_race_eve is not None
+                    else frozenset()
+                ),
             )
 
     sessions, cross_week_codes = _apply_cross_week_race_eve_guard(
@@ -1745,6 +1761,165 @@ def _route_partial_reprise(
     return sessions, reason_codes
 
 
+def _minimum_session_km(continuity_state: Optional[str]) -> Optional[float]:
+    """C423 minimum, None only for explicit structured reprise states.
+
+    The periodization ``race`` phase is deliberately NOT an exemption: no
+    contract authorises short ordinary sessions there (post-race recovery needs
+    RACE_DATE_PASSED plus an explicit session code, see ``is_post_race_recovery``).
+    """
+    return None if short_sessions_allowed(continuity_state) else MIN_ORDINARY_SESSION_KM
+
+
+_MIN_DROP_ORDER = ("recovery", "steady", "easy", "quality")
+
+
+def _min_aware_distribution(
+    slots: list[tuple[str, str]],
+    target_km: float,
+    goal_type: str,
+    min_km: float,
+) -> tuple[dict[str, float], list[str], float]:
+    """Spread ``target_km`` over the largest feasible subset of ``slots`` (C423).
+
+    Every kept session is >= ``min_km``; the long run never exceeds the engine cap
+    (goal absolute cap, 45 % of the week, or ``min_km`` when the week is that
+    small); the total never exceeds ``target_km``.  Sessions are dropped one at a
+    time (recovery, steady, easy, quality, then the long run; later days first)
+    until the minimum is feasible.  Returns (km by day, dropped days,
+    unallocated km) -- unallocated volume is never pushed into a capped session.
+    """
+    kept = list(slots)
+    dropped: list[str] = []
+    while kept:
+        if _required_km(kept, target_km, goal_type, min_km) <= target_km + 1e-9:
+            km = _allocate_with_bounds(kept, target_km, goal_type, min_km)
+            return km, dropped, round(max(0.0, target_km - sum(km.values())), 1)
+        victim = next(
+            (
+                max((x for x in kept if x[1] == kind), key=lambda x: _DAY_ORDER.get(x[0], 0))
+                for kind in _MIN_DROP_ORDER
+                if any(x[1] == kind for x in kept)
+            ),
+            kept[-1],
+        )
+        kept.remove(victim)
+        dropped.append(victim[0])
+    return {}, dropped, round(target_km, 1)
+
+
+def _long_run_bounds(target_km: float, goal_type: str, min_km: float) -> tuple[float, float]:
+    """(floor, cap) of the long run: it keeps its planned distance when possible."""
+    cap = min(
+        _LONG_RUN_ABS_CAP.get(goal_type, 18.0),
+        max(LONG_RUN_MAX_FRACTION * target_km, min_km),
+    )
+    cap = int(cap * 10 + 1e-9) / 10
+    floor = min(cap, max(min_km, _compute_long_run_km(target_km, goal_type)))
+    return floor, cap
+
+
+def _required_km(
+    slots: list[tuple[str, str]], target_km: float, goal_type: str, min_km: float
+) -> float:
+    long_floor, _ = _long_run_bounds(target_km, goal_type, min_km)
+    return sum(long_floor if t == "long_easy" else min_km for _, t in slots)
+
+
+def _allocate_with_bounds(
+    slots: list[tuple[str, str]], target_km: float, goal_type: str, min_km: float
+) -> dict[str, float]:
+    has_long = any(t == "long_easy" for _, t in slots)
+    long_pref = _compute_long_run_km(target_km, goal_type) if has_long else 0.0
+    long_floor, long_cap = _long_run_bounds(target_km, goal_type, min_km)
+    others = [(d, t) for d, t in slots if t != "long_easy"]
+    weight_sum = sum(_SESSION_DISTANCE_WEIGHTS.get(t, 1.0) for _, t in others) or 1.0
+    lo: dict[str, float] = {}
+    hi: dict[str, float] = {}
+    x: dict[str, float] = {}
+    for day, kind in slots:
+        lo[day] = min_km
+        if kind == "long_easy":
+            lo[day] = long_floor
+            hi[day] = long_cap
+            x[day] = long_pref
+        else:
+            hi[day] = float("inf")
+            x[day] = max(0.0, target_km - long_pref) * _SESSION_DISTANCE_WEIGHTS.get(kind, 1.0) / weight_sum
+        x[day] = min(hi[day], max(lo[day], x[day]))
+    for _ in range(30):
+        diff = target_km - sum(x.values())
+        if abs(diff) < 1e-9:
+            break
+        movable = [d for d in x if (x[d] < hi[d] - 1e-9 if diff > 0 else x[d] > lo[d] + 1e-9)]
+        if not movable:
+            break
+        weight = (lambda d: x[d]) if diff > 0 else (lambda d: x[d] - lo[d])
+        total_w = sum(weight(d) for d in movable) or 1.0
+        for d, w in [(d, weight(d)) for d in movable]:
+            x[d] = min(hi[d], max(lo[d], x[d] + diff * w / total_w))
+    out = {d: max(lo[d], round(v, 1)) for d, v in x.items()}
+    out = {d: min(v, hi[d]) if hi[d] != float("inf") else v for d, v in out.items()}
+    residual = round(target_km - sum(out.values()), 1)
+    if residual > 0:
+        room = [d for d in out if out[d] + residual <= hi[d] + 1e-9]
+        if room:
+            d = max(room, key=lambda k: out[k])
+            out[d] = round(out[d] + residual, 1)
+    elif residual < 0:
+        room = [d for d in out if out[d] + residual >= lo[d] - 1e-9]
+        if room:
+            d = max(room, key=lambda k: out[k])
+            out[d] = round(out[d] + residual, 1)
+    return out
+
+
+def _enforce_minimum_distance(
+    sessions: list[WorkoutPrescription],
+    *,
+    target_km: float,
+    goal_type: str,
+    min_km: Optional[float],
+    blocked_days: frozenset[str] = frozenset(),
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    """Apply the C423 minimum to a generated distance week.
+
+    ``blocked_days`` (calendar constraints such as the rest day before a race)
+    are removed BEFORE the arbitration so earlier sessions are kept and the
+    volume is spread on the days that really remain.  A plan whose remaining
+    sessions already reach the minimum is returned untouched.  The total never
+    exceeds ``target_km``; an unplaceable remainder is reported, never hidden.
+    """
+    if min_km is None:
+        return sessions, []
+    eligible = [
+        s for s in sessions
+        if _is_training_session(s) and s.distance_km is not None and s.day not in blocked_days
+    ]
+    if all(s.distance_km >= min_km - 1e-9 for s in eligible):
+        return sessions, []
+
+    km_by_day, dropped, unallocated = _min_aware_distribution(
+        [(s.day, s.workout_type) for s in eligible], target_km, goal_type, min_km
+    )
+    result: list[WorkoutPrescription] = []
+    for s in sessions:
+        if not _is_training_session(s):
+            result.append(s)
+        elif s.day in km_by_day:
+            result.append(s.model_copy(update={"distance_km": km_by_day[s.day]}))
+        elif s.day in blocked_days:
+            result.append(_make_rest(s.day, reason_codes=("RACE_EVE_REST_RESERVED",)))
+        else:
+            result.append(_make_rest(s.day, reason_codes=("ORDINARY_SESSION_MIN_KM_NOT_MET",)))
+    codes: list[str] = []
+    if dropped:
+        codes.append("MIN_SESSION_KM_FEWER_SESSIONS")
+    if unallocated >= 0.1:
+        codes.append("MIN_SESSION_KM_VOLUME_REDUCED")
+    return result, codes
+
+
 def _route_normal(
     weekly_target: WeeklyTarget,
     skeleton: list[tuple[str, str]],
@@ -1753,6 +1928,7 @@ def _route_normal(
     reason_codes: list[str],
     phase: PeriodizationPhase,
     race_distance_km: Optional[float] = None,
+    blocked_days: frozenset[str] = frozenset(),
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Route for reprise_exit / normal weeks."""
     reason_codes = list(reason_codes)
@@ -1772,6 +1948,14 @@ def _route_normal(
             race_distance_km=race_distance_km,
         )
         sessions = _correct_rounding_drift_distance(sessions, target_km)
+        sessions, min_codes = _enforce_minimum_distance(
+            sessions,
+            target_km=target_km,
+            goal_type=goal_type,
+            min_km=_minimum_session_km(weekly_target.continuity_state),
+            blocked_days=blocked_days,
+        )
+        reason_codes.extend(min_codes)
 
     elif weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes is not None:
         total_minutes = weekly_target.target_duration_minutes
