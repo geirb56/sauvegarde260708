@@ -205,6 +205,6 @@ describe.each([["fr", "Analyse de séance"], ["en", "Session analysis"], ["es", 
       expect(screen.getByTestId("workout-evidence")).toHaveTextContent(/6/);
       expect(screen.getByTestId("narrative-comparisons")).toHaveTextContent("-4");
       expect(all).toContain("LIMIT ONE");
-      expect(screen.queryByTestId("workout-limitations-details")).not.toBeInTheDocument();
+      expect(all).toContain("LIMIT TWO");
     });
   });
