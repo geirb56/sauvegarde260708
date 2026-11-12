@@ -948,6 +948,14 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
+      <div className="flex justify-center pt-1" data-testid="dashboard-brand">
+        <img
+          src="/runindex-wordmark.svg"
+          alt="RunIndex"
+          className="h-9 w-auto max-w-[70%] sm:h-10"
+          data-testid="dashboard-logo"
+        />
+      </div>
 
       {/* ── RUN READINESS SECTION (first) ───────────────────────────── */}
       {cardioLoading ? (
