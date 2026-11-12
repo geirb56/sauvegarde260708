@@ -10,7 +10,9 @@ import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatPaceDisplay, getSessionClassification, getAnalysisObservations, getAnalysisFallback, getSessionSynthesis, getRenderableAnalysisPhases } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
-import WorkoutFacts, { getWorkoutNarrative, getWorkoutFacts } from "@/components/workout/WorkoutFacts";
+import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
+import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
+import WorkoutFacts, { DetailsDisclosure, getWorkoutNarrative, getWorkoutFacts } from "@/components/workout/WorkoutFacts";
 import useWorkoutIntelligence from "@/hooks/useWorkoutIntelligence";
 import WorkoutCoachPending from "@/components/workout/WorkoutCoachPending";
 import { formatAnalysisNumber } from "@/lib/analysisFormat";
@@ -206,6 +208,15 @@ export default function WorkoutDetail() {
   const fallback = synthesis ? null : getAnalysisFallback(analysisForRender, t);
   const classification = hasFacts ? null : getSessionClassification(analysisForRender, t);
   const intensity = analysisForRender?.signals?.intensity;
+  const detailsAvailable = (analysisForRender?.phase_analysis?.available === true
+    && getRenderableAnalysisPhases(analysisForRender.phase_analysis).length > 0)
+    || (Array.isArray(workout.km_splits) && workout.km_splits.some((split) =>
+      Number.isFinite(split?.km) && split.km > 0
+      && Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0));
+  const analysisDetails = <>
+    <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
+    <WorkoutKilometerSplits splits={workout.km_splits} workoutType={workout.type} unitSystem={unitSystem} t={t} lang={lang} />
+  </>;
 
   const coachButton = canAccessAnalysis ? (
     <Button
@@ -271,13 +282,17 @@ export default function WorkoutDetail() {
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
       {intelligenceLoading && <WorkoutCoachPending t={t} />}
+      {intelligenceLoading && detailsAvailable && <DetailsDisclosure>{analysisDetails}</DetailsDisclosure>}
       {canAccessAnalysis && !factsRendered && coachButton}
-      {!intelligenceLoading && <WorkoutFacts data={canAccessAnalysis ? intelligence : null} lang={lang} t={t}
-        synthesis={synthesisForFacts} action={coachButton} />}
+      {!intelligenceLoading && <WorkoutFacts data={canAccessAnalysis ? intelligence : null} lang={lang} t={t} detailsAvailable={detailsAvailable}
+        synthesis={synthesisForFacts} action={coachButton}>
+        {analysisDetails}
+      </WorkoutFacts>}
       {!intelligenceLoading && <>
       {synthesis && !hasAvailableSynthesis && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
         {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
       </p>}
+      {!factsRendered && detailsAvailable && <DetailsDisclosure>{analysisDetails}</DetailsDisclosure>}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>

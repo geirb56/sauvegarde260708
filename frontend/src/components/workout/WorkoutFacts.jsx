@@ -1,5 +1,5 @@
 import { formatAnalysisNumber, formatAnalysisDelta } from "@/lib/analysisFormat";
-import { Activity, ArrowLeftRight, ChevronDown, Gauge, Info, Repeat, Tag } from "lucide-react";
+import { Activity, ArrowLeftRight, Gauge, Info, Repeat, Tag } from "lucide-react";
 import { describeMarker, projectSynthesisMarker } from "@/lib/workoutMarkers";
 import { mergeWorkoutLimitations, splitWorkoutLimitations } from "@/lib/workoutLimitations";
 
@@ -19,17 +19,9 @@ const classificationTypes = [
 ];
 const reliable = (confidence) => ["high", "medium"].includes(confidence);
 
-// Native <details>: keyboard, mouse and touch accessible, closed by default.
-export function DetailsDisclosure({ title, children }) {
-  return (
-    <details className="group min-w-0 rounded-2xl border border-border/60 bg-card" data-testid="workout-analysis-details">
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden">
-        <span className="min-w-0">{title}</span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
-      </summary>
-      <div className="min-w-0 space-y-4 px-4 pb-4 pt-1">{children}</div>
-    </details>
-  );
+// Flat, always-visible container for the supplementary session data (no accordion).
+export function DetailsDisclosure({ children }) {
+  return <div className="min-w-0 space-y-4" data-testid="workout-session-details">{children}</div>;
 }
 
 export const getWorkoutFacts = (data) =>
@@ -127,6 +119,10 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
       comparisonRows.push(["hrAtPace", formatAnalysisDelta(hr.hr_difference_bpm, lang, "bpm")]);
     }
   }
+  // "Insufficient history" alone is a state, not a reason to offer an otherwise empty disclosure.
+  const hasDetails = detailsAvailable || comparisonRows.length > 0
+    || referenceRows.some(([key]) => key !== "history" || history?.status === "available")
+    || rest.length > 0 || otherMarkers.length > 0 || observationTexts.length > 0;
 
   return (
     <div className="min-w-0 space-y-4 break-words" data-testid="workout-facts">
@@ -160,6 +156,32 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
         <span className="min-w-0">{essential.text}</span>
       </p>}
       {action}
+      {hasDetails && <DetailsDisclosure>
+          {otherMarkers.length > 0 && <ul className="space-y-2 text-sm" data-testid="other-markers">
+            {otherMarkers.map(({ key, label, value, structured }) => <li key={key}>
+              {(label || structured?.label) && <span className="block text-xs text-muted-foreground">{label || structured.label}</span>}
+              {value || structured.headline}
+            </li>)}
+          </ul>}
+          {observationTexts.length > 0 && <section data-testid="observation-details">
+            <h3 className="mb-2 text-sm font-semibold">{text("observationDetail")}</h3>
+            <ul className="space-y-2 text-sm text-muted-foreground">
+              {observationTexts.map(([code, value]) => <li key={code}>{value}</li>)}
+            </ul>
+          </section>}
+          {children}
+          {comparisonRows.length > 0 && <section data-testid="narrative-comparisons">
+            <h3 className="mb-2 text-sm font-semibold">{text("history")}</h3>
+            <dl className="space-y-2 text-sm">{comparisonRows.map(([key, value]) =>
+              <div key={key}><dt className="text-muted-foreground">{text(key)}</dt><dd>{value}</dd></div>)}</dl>
+          </section>}
+          {referenceRows.length > 0 && <section data-testid="reference-populations">
+            <h3 className="mb-1 text-sm font-semibold">{text("references")}</h3>
+            <p className="mb-2 text-xs text-muted-foreground">{text("referencesNote")}</p>
+            <dl className="space-y-2 text-sm">{referenceRows.map(([key, label, value]) =>
+              <div key={key}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl>
+          </section>}
+      </DetailsDisclosure>}
     </div>
   );
 }
