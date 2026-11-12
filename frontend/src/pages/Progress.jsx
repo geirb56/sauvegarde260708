@@ -21,6 +21,7 @@ import {
   Timer,
   Zap,
   Heart,
+  Target,
   Moon,
   TrendingDown,
   Minus,
@@ -244,11 +245,12 @@ export default function Progress() {
   const km7Days = stats?.km_7_days || 0;
   const km30Days = stats?.km_30_days || 0;
 
+  // Same icons/colors as the Dashboard RunIndex pillars
   const pillarIcons = {
-    speed: "⚡",
-    endurance: "🫀",
-    consistency: "📈",
-    efficiency: "🧠",
+    speed: { Icon: Zap, color: "#f59e0b" },
+    endurance: { Icon: Heart, color: "#ef4444" },
+    consistency: { Icon: TrendingUp, color: "#6EEB5A" },
+    efficiency: { Icon: Target, color: "#3b82f6" },
   };
   const pillarLabels = {
     speed: t("progressExtended.pillarSpeed"),
@@ -557,6 +559,7 @@ export default function Progress() {
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(runIndexHistory.pillars).map(([pillar, data]) => {
                     const evo = data.evolution;
+                    const PillarIcon = pillarIcons[pillar]?.Icon;
                     const evoColor = evo > 0 ? "text-emerald-500" : evo < 0 ? "text-red-400" : "text-muted-foreground";
                     return (
                       <div
@@ -564,7 +567,7 @@ export default function Progress() {
                         className="flex items-center gap-2 p-3 rounded-xl"
                         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
                       >
-                        <span className="text-xl">{pillarIcons[pillar]}</span>
+                        {PillarIcon && <PillarIcon className="w-4 h-4 shrink-0" style={{ color: pillarIcons[pillar].color }} data-testid={`progress-pillar-icon-${pillar}`} />}
                         <div className="flex-1 min-w-0">
                           <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                             {pillarLabels[pillar]}

@@ -429,7 +429,7 @@ body {
 }
 
 .header-logo-img {
-  width: 28px;
+  width: auto;
   height: 28px;
   display: block;
   object-fit: contain;
@@ -520,6 +520,20 @@ body {
 /* ========== SAFE AREA ========== */
 .safe-area-pb {
   padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* ========== COACH COMPOSER ========== */
+.coach-page-shell {
+  height: calc(var(--coach-vh, 100dvh) - 4.5rem - 5.25rem - env(safe-area-inset-bottom));
+}
+
+/* Virtual keyboard open: the bottom nav is hidden so the composer sits right above the keyboard. */
+.coach-page-shell.coach-keyboard-open {
+  height: calc(var(--coach-vh, 100dvh) - 4.5rem);
+}
+
+body:has(.coach-keyboard-open) .bottom-nav-modern {
+  display: none;
 }
 
 /* ========== RESPONSIVE ========== */

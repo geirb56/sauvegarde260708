@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
@@ -36,6 +36,43 @@ describe("Coach page", () => {
     for (const [url] of axios.delete.mock.calls) {
       expect(url).toMatch(/\/coach\/history$/);
     }
+  });
+
+  test("loaded chat uses the keyboard-aware shell and composer stays sticky", async () => {
+    const listeners = {};
+    const vv = {
+      height: 800,
+      addEventListener: (e, cb) => { listeners[e] = cb; },
+      removeEventListener: jest.fn(),
+    };
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
+    axios.get.mockResolvedValue({ data: [
+      { role: "user", content: "q" },
+      { role: "assistant", content: "a" },
+    ] });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    const input = await screen.findByTestId("coach-input");
+    const page = screen.getByTestId("coach-page");
+    expect(page).toHaveClass("coach-page-shell");
+    expect(page).not.toHaveClass("coach-keyboard-open");
+    expect(page.style.getPropertyValue("--coach-vh")).toBe("800px");
+    expect(screen.getByTestId("coach-composer")).toHaveClass("sticky", "bottom-0");
+
+    vv.height = 450;
+    act(() => listeners.resize());
+    fireEvent.focus(input);
+    expect(page).toHaveClass("coach-keyboard-open");
+    expect(page.style.getPropertyValue("--coach-vh")).toBe("450px");
+
+    fireEvent.blur(input);
+    expect(page).not.toHaveClass("coach-keyboard-open");
+    delete window.visualViewport;
   });
 
   test.each([

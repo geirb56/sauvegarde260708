@@ -57,6 +57,18 @@ export default function Coach() {
   const hasTriggeredAnalysis = useRef(null);
   // Monotonic id shared by analyses and follow-ups: only the latest request owns loading/context state.
   const requestSeq = useRef(0);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [viewportHeight, setViewportHeight] = useState(null);
+
+  // Track the visual viewport so the composer stays above the virtual keyboard.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    const update = () => setViewportHeight(Math.round(vv.height));
+    update();
+    vv.addEventListener("resize", update);
+    return () => vv.removeEventListener("resize", update);
+  }, []);
 
   // Load conversation history on mount
   useEffect(() => {
@@ -321,7 +333,11 @@ export default function Coach() {
   }
 
   return (
-    <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
+    <div
+      className={`coach-page-shell flex min-w-0 flex-col${composerFocused ? " coach-keyboard-open" : ""}`}
+      style={viewportHeight ? { "--coach-vh": `${viewportHeight}px` } : undefined}
+      data-testid="coach-page"
+    >
       {/* Header */}
       <div className="shrink-0 px-4 py-3 md:px-8 md:py-4 border-b border-border">
         <div className="flex items-center justify-between gap-3">
@@ -377,7 +393,7 @@ export default function Coach() {
       )}
 
       {/* Messages Area */}
-      <ScrollArea viewportRef={viewportRef} onViewportScroll={handleViewportScroll} className="min-h-0 flex-1 p-4 md:p-8">
+      <ScrollArea viewportRef={viewportRef} onViewportScroll={handleViewportScroll} className="min-h-0 flex-1 overscroll-contain p-4 md:p-8">
         {historyLoadError && messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center py-12" data-testid="coach-history-load-error">
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
@@ -497,7 +513,7 @@ export default function Coach() {
       </ScrollArea>
 
       {/* Input Area */}
-      <div className="shrink-0 p-4 md:p-6 border-t border-border bg-background">
+      <div className="coach-composer sticky bottom-0 z-10 shrink-0 p-4 md:p-6 border-t border-border bg-background" data-testid="coach-composer">
         <form onSubmit={handleSubmit} className="flex gap-3">
           <Textarea
             ref={inputRef}
@@ -505,7 +521,8 @@ export default function Coach() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            onFocus={() => { forceScrollRef.current = true; setTimeout(scrollToBottom, 300); }}
+            onFocus={() => { setComposerFocused(true); forceScrollRef.current = true; setTimeout(scrollToBottom, 300); }}
+            onBlur={() => setComposerFocused(false)}
             placeholder={t("coach.placeholder")}
             aria-label={t("coach.placeholder")}
             className="flex-1 min-w-0 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-2xl font-sans text-sm"
