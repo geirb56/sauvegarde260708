@@ -19,8 +19,12 @@ const classificationTypes = [
 ];
 const reliable = (confidence) => ["high", "medium"].includes(confidence);
 
-// Native <details>: keyboard, mouse and touch accessible, closed by default.
-export function DetailsDisclosure({ title, children }) {
+// Collapsible (default): native <details>, keyboard, mouse and touch accessible, closed by default.
+// direct: same content, always visible and without disclosure chrome.
+export function DetailsDisclosure({ title, children, direct = false }) {
+  if (direct) {
+    return <div className="min-w-0 space-y-4" data-testid="workout-session-details">{children}</div>;
+  }
   return (
     <details className="group min-w-0 rounded-2xl border border-border/60 bg-card" data-testid="workout-analysis-details">
       <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden">
@@ -40,7 +44,7 @@ export const getWorkoutFacts = (data) =>
 // recommendation) and the coach comment stay in the backend contracts and are interpreted in the Coach chat.
 // C417: compact "markers" (max 3), one essential limitation, the Coach action, then a details section.
 // `synthesis` carries the already validated V2 items/limitations; it is never recomputed here.
-export default function WorkoutFacts({ data, lang, t, children, detailsAvailable = true, synthesis = null, action = null }) {
+export default function WorkoutFacts({ data, lang, t, children, detailsAvailable = true, synthesis = null, action = null, detailsMode = "collapsible" }) {
   const narrative = getWorkoutNarrative(data, lang);
   const facts = getWorkoutFacts(data);
   const synthesisItems = Array.isArray(synthesis?.items) ? synthesis.items : [];
@@ -128,6 +132,7 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
     }
   }
   // "Insufficient history" alone is a state, not a reason to offer an otherwise empty disclosure.
+  const direct = detailsMode === "direct";
   const hasDetails = detailsAvailable || comparisonRows.length > 0
     || referenceRows.some(([key]) => key !== "history" || history?.status === "available")
     || rest.length > 0 || otherMarkers.length > 0 || observationTexts.length > 0;
@@ -164,7 +169,7 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
         <span className="min-w-0">{essential.text}</span>
       </p>}
       {action}
-      {hasDetails && <DetailsDisclosure title={text("details")}>
+      {hasDetails && <DetailsDisclosure title={text("details")} direct={direct}>
           {otherMarkers.length > 0 && <ul className="space-y-2 text-sm" data-testid="other-markers">
             {otherMarkers.map(({ key, label, value, structured }) => <li key={key}>
               {(label || structured?.label) && <span className="block text-xs text-muted-foreground">{label || structured.label}</span>}
@@ -189,7 +194,7 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
             <dl className="space-y-2 text-sm">{referenceRows.map(([key, label, value]) =>
               <div key={key}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl>
           </section>}
-          {rest.length > 0 && <section data-testid="workout-limitations-details">
+          {!direct && rest.length > 0 && <section data-testid="workout-limitations-details">
             <h3 className="mb-2 text-sm font-semibold">{text("methodLimits")}</h3>
             <ul className="space-y-2 text-sm text-muted-foreground">
               {rest.map((item) => <li key={item.key} data-sources={item.sources.join(",")}>{item.text}</li>)}

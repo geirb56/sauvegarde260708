@@ -282,9 +282,9 @@ export default function WorkoutDetail() {
 
       {canAccessAnalysis && intelligenceError && <p role="status" className="text-sm text-muted-foreground">{t("workoutNarrative.unavailable")}</p>}
       {intelligenceLoading && <WorkoutCoachPending t={t} />}
-      {intelligenceLoading && detailsAvailable && <DetailsDisclosure title={t("workoutNarrative.details")}>{analysisDetails}</DetailsDisclosure>}
+      {intelligenceLoading && detailsAvailable && <DetailsDisclosure direct>{analysisDetails}</DetailsDisclosure>}
       {canAccessAnalysis && !factsRendered && coachButton}
-      {!intelligenceLoading && <WorkoutFacts data={canAccessAnalysis ? intelligence : null} lang={lang} t={t} detailsAvailable={detailsAvailable}
+      {!intelligenceLoading && <WorkoutFacts data={canAccessAnalysis ? intelligence : null} lang={lang} t={t} detailsAvailable={detailsAvailable} detailsMode="direct"
         synthesis={synthesisForFacts} action={coachButton}>
         {analysisDetails}
       </WorkoutFacts>}
@@ -292,7 +292,7 @@ export default function WorkoutDetail() {
       {synthesis && !hasAvailableSynthesis && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="synthesis-abstention">
         {synthesis.status === "available" ? t("workoutDetailExtended.noReliableObservations") : synthesis.abstention}
       </p>}
-      {!factsRendered && detailsAvailable && <DetailsDisclosure title={t("workoutNarrative.details")}>{analysisDetails}</DetailsDisclosure>}
+      {!factsRendered && detailsAvailable && <DetailsDisclosure direct>{analysisDetails}</DetailsDisclosure>}
 
       {(observations.length > 0 || fallback || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>

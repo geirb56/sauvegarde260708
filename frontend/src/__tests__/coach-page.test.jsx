@@ -489,9 +489,9 @@ describe("Coach page", () => {
   });
 
   test.each([
-    ["en", "RunIndex Coach", "Ask your coach…", "How does this compare with my other runs?", "What should I take away most of all?"],
-    ["fr", "Coach RunIndex", "Pose une question à ton coach…", "Et par rapport à mes autres sorties ?", "Qu’est-ce que je dois retenir surtout ?"],
-    ["es", "Coach RunIndex", "Pregunta a tu coach…", "¿Y en comparación con mis otras salidas?", "¿Qué es lo más importante que debo recordar?"],
+    ["en", "RunIndex Coach", "Ask your coach…", "How can I improve my next session of this type?", "What should I take away most of all?"],
+    ["fr", "Coach RunIndex", "Pose une question à ton coach…", "Comment améliorer ma prochaine séance de ce type ?", "Qu’est-ce que je dois retenir surtout ?"],
+    ["es", "Coach RunIndex", "Pregunta a tu coach…", "¿Cómo puedo mejorar mi próxima sesión de este tipo?", "¿Qué es lo más importante que debo recordar?"],
   ])("contextual chips, Coach reply/loader labels and composer are localized in %s", async (language, label, placeholder, compare, takeaway) => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     axios.get.mockImplementation(url => Promise.resolve({
@@ -660,11 +660,11 @@ describe("Coach page", () => {
 
     expect(await screen.findByText("Initial analysis")).toBeInTheDocument();
     const input = screen.getByTestId("coach-input");
-    fireEvent.click(screen.getByRole("button", { name: "How does this compare with my other runs?" }));
+    fireEvent.click(screen.getByRole("button", { name: "How can I improve my next session of this type?" }));
     expect(axios.post).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(input, { key: "Enter" });
     expect(axios.post.mock.calls[1][1]).toEqual({
-      message: "How does this compare with my other runs?", workout_id: "w28", language: "en",
+      message: "How can I improve my next session of this type?", workout_id: "w28", language: "en",
     });
     expect(input).toBeDisabled();
     expect(screen.getByTestId("coach-submit")).toBeDisabled();

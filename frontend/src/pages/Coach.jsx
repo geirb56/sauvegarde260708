@@ -473,7 +473,7 @@ export default function Coach() {
                     </div>
                     {idx === lastWorkoutReplyIndex && (
                       <div className="mt-3 flex flex-wrap gap-2" data-testid="coach-followup-chips">
-                        {["compare", "takeaway"].map(key => (
+                        {["improve", "takeaway"].map(key => (
                           <button
                             key={key}
                             type="button"

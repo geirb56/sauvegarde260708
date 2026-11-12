@@ -111,7 +111,7 @@ describe("auth pages and oauth UI", () => {
 
     const loginLogo = first.container.querySelector('[data-testid="login-brand-logo"]');
     expect(loginLogo).toBeTruthy();
-    expect(loginLogo.getAttribute("src")).toBe("/runindex-logo.png");
+    expect(loginLogo.getAttribute("src")).toBe("/runindex-logo-official.png");
     expect(loginLogo.getAttribute("alt")).toBe("RunIndex");
     expect(loginLogo.className).toContain("h-auto");
     expect(loginLogo.className).toContain("w-full");
@@ -125,7 +125,7 @@ describe("auth pages and oauth UI", () => {
     expect(second.container.textContent).toContain("Inicia sesión en tu cuenta");
     const secondLoginLogo = second.container.querySelector('[data-testid="login-brand-logo"]');
     expect(secondLoginLogo).toBeTruthy();
-    expect(secondLoginLogo.getAttribute("src")).toBe("/runindex-logo.png");
+    expect(secondLoginLogo.getAttribute("src")).toBe("/runindex-logo-official.png");
     second.unmount();
   });
 
