@@ -57,9 +57,9 @@ def test_preferred_days_and_long_run_are_used_without_changing_training_load():
 
 @pytest.mark.parametrize("sessions", range(2, 7))
 def test_restrictive_preferences_never_remove_sessions(sessions):
-    plan = _build(_wt_distance(40, sessions=sessions), _profile(["sunday"], "sunday"))
+    plan = _build(_wt_distance(48, sessions=sessions), _profile(["sunday"], "sunday"))
     assert plan.session_count == sessions
-    assert plan.planned_km == 40
+    assert plan.planned_km == 48
     assert "PREFERRED_TRAINING_DAYS_FALLBACK" in plan.reason_codes
     assert next(s.day for s in plan.sessions if s.workout_type == "long_easy") == "sunday"
 

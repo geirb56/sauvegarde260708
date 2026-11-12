@@ -203,7 +203,7 @@ def _quality_sessions(plan: WeeklyPlan) -> list[WorkoutPrescription]:
 @pytest.mark.parametrize("basis", ("distance", "duration"))
 def test_reprise_exit_generator_preserves_session_count_without_reprise_cap(sessions, basis):
     target = (
-        _wt_distance(24.0, sessions=sessions, allow_intensity=False, continuity_state="reprise_exit")
+        _wt_distance(42.0, sessions=sessions, allow_intensity=False, continuity_state="reprise_exit")
         if basis == "distance"
         else _wt_duration(120, sessions=sessions, continuity_state="reprise_exit")
     )

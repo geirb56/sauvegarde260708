@@ -1745,6 +1745,27 @@ def _route_partial_reprise(
     return sessions, reason_codes
 
 
+def _session_to_drop_for_minimum(
+    sessions: list[WorkoutPrescription], min_km: Optional[float]
+) -> Optional[str]:
+    """Day of the session to remove so the others reach ``min_km`` (C423).
+
+    The volume target is never inflated: fewer, coherent sessions are preferred.
+    Drop order: recovery, steady, easy, then quality; the long run is kept.
+    Returns None when no session is below the minimum or only one remains.
+    """
+    if min_km is None:
+        return None
+    training = [s for s in sessions if _is_training_session(s) and s.distance_km is not None]
+    if len(training) < 2 or all(s.distance_km >= min_km - 1e-9 for s in training):
+        return None
+    for kind in ("recovery", "steady", "easy", "quality"):
+        candidates = [s for s in training if s.workout_type == kind]
+        if candidates:
+            return min(candidates, key=lambda s: (s.distance_km, s.day)).day
+    return None
+
+
 def _route_normal(
     weekly_target: WeeklyTarget,
     skeleton: list[tuple[str, str]],
@@ -1763,15 +1784,30 @@ def _route_normal(
 
     if weekly_target.target_basis == "distance" and weekly_target.target_km is not None:
         target_km = weekly_target.target_km
-        sessions = _build_distance_sessions(
-            skeleton=skeleton,
-            target_km=target_km,
-            goal_type=goal_type,
-            allow_intensity=allow_intensity,
-            base_reason_codes=(),
-            race_distance_km=race_distance_km,
+        min_km = (
+            None
+            if short_sessions_allowed(weekly_target.continuity_state)
+            or phase == PeriodizationPhase.race
+            else MIN_ORDINARY_SESSION_KM
         )
-        sessions = _correct_rounding_drift_distance(sessions, target_km)
+        dropped = 0
+        while True:
+            sessions = _build_distance_sessions(
+                skeleton=skeleton,
+                target_km=target_km,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+                base_reason_codes=(),
+                race_distance_km=race_distance_km,
+            )
+            sessions = _correct_rounding_drift_distance(sessions, target_km)
+            drop_day = _session_to_drop_for_minimum(sessions, min_km)
+            if drop_day is None:
+                break
+            skeleton = [(d, "rest" if d == drop_day else t) for d, t in skeleton]
+            dropped += 1
+        if dropped:
+            reason_codes.append("MIN_SESSION_KM_FEWER_SESSIONS")
 
     elif weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes is not None:
         total_minutes = weekly_target.target_duration_minutes
