@@ -201,10 +201,8 @@ describe.each([["fr", "Analyse de séance"], ["en", "Session analysis"], ["es", 
       ["C388 HEADLINE", "C388 ANALYSIS", "C388 INTERPRETATION", "C388 RECOMMENDATION", "Commentaire"]
         .forEach(s => expect(all).not.toContain(s));
       expect(screen.queryByTestId("coach-session-comment")).not.toBeInTheDocument();
-      expect(screen.getByTestId("reference-populations")).toHaveTextContent(/29/);
       expect(screen.getByTestId("workout-evidence")).toHaveTextContent(/6/);
-      expect(screen.getByTestId("narrative-comparisons")).toHaveTextContent("-4");
+      expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
       expect(all).toContain("LIMIT ONE");
-      expect(all).toContain("LIMIT TWO");
     });
   });

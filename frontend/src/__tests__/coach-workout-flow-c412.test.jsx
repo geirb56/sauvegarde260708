@@ -147,7 +147,7 @@ describe("C412 workout / coach flow", () => {
     for (const key of ["activeWorkout", "backToWorkout", "closeContext", "workoutNotFound", "limitReached", "rateLimited"]) {
       expect(typeof dict[key]).toBe("string");
     }
-    expect(Object.keys(dict.followups)).toEqual(expect.arrayContaining(["compare", "takeaway"]));
+    expect(Object.keys(dict.followups)).toEqual(expect.arrayContaining(["improve", "takeaway"]));
     expect(screen.getByTestId("back-to-workout")).toHaveAccessibleName(dict.backToWorkout);
   });
 

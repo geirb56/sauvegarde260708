@@ -275,6 +275,18 @@ const coachConclusion = (updates = {}) => ({
   ...updates,
 });
 
+const detailsAccordionId = "workout-analysis-details";
+// WorkoutDetail no longer renders phase/split analysis; the other screens still do.
+const awaitSessionLoaded = async (Page, testId = "kilometer-splits") => {
+  if (Page === WorkoutDetail) {
+    await screen.findByTestId("ask-coach-btn");
+    expect(screen.queryByTestId(detailsAccordionId)).not.toBeInTheDocument();
+    expect(screen.queryByTestId(testId)).not.toBeInTheDocument();
+  } else {
+    expect(await screen.findByTestId(testId)).toBeInTheDocument();
+  }
+};
+
 const coachScreens = [
   ["workout", "/workout/w1", "/workout/:id", WorkoutDetail],
   ["session", "/session/w1", "/session/:id", SessionDetail],
@@ -415,8 +427,9 @@ test.each([
   expect(screen.getByTestId("session-classification")).toBeInTheDocument();
   expect(screen.getByTestId("available-intensity")).toHaveTextContent("Backend intensity.");
   expect(section.compareDocumentPosition(screen.getByTestId("ask-coach-btn")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByTestId("ask-coach-btn").compareDocumentPosition(screen.getByTestId("structured-phase-analysis")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
+  expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
 });
 
 test.each([
@@ -517,8 +530,8 @@ test.each([
   const section = await screen.findByTestId("workout-evidence");
   expect(within(section).getByText(text)).toBeInTheDocument();
   expect(screen.getAllByText(limitation)).toHaveLength(1);
-  expect(screen.getAllByTestId("effort-regularity")).toHaveLength(1);
-  expect(within(section).queryByTestId("effort-regularity")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
   expect(screen.queryByText("Legacy dispersion narrative.")).not.toBeInTheDocument();
   expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
 });
@@ -567,7 +580,8 @@ test.each(["fr", "en", "es"])("WorkoutDetail shows no synthesis card when only i
   expect(screen.getByTestId("workout-limitations")).toHaveTextContent(limitation);
   expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
   expect(screen.queryByTestId("workout-evidence")).not.toBeInTheDocument();
-  expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
+  expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
 });
 
 test("WorkoutDetail preserves backend limitations with compact insufficient abstention", async () => {
@@ -660,12 +674,12 @@ test.each(coachScreens)("%s renders Coach V1 before factual phase and split deta
     ] },
   } });
   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
-  expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
+  await awaitSessionLoaded(Page, "structured-phase-analysis");
   expect(screen.queryByTestId("coach-language")).not.toBeInTheDocument();
   expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
   expect(screen.queryByText(primary.text)).not.toBeInTheDocument();
   expect(screen.queryByText(extra.text)).not.toBeInTheDocument();
-  expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
+  if (Page !== WorkoutDetail) expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
   expect(screen.getByText("A distinct factual detail.")).toBeInTheDocument();
   expect(screen.getByText("Replaced pace fact.")).toBeInTheDocument();
   expect(screen.getByText("Replaced HR fact.")).toBeInTheDocument();
@@ -716,7 +730,7 @@ describe.each(coachScreens)("%s post-audit Coach conclusions", (_, route, path, 
       })],
     } } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
-    expect(await screen.findByTestId("kilometer-splits")).toBeInTheDocument();
+    await awaitSessionLoaded(Page);
     expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
     expect(screen.queryByText(text)).not.toBeInTheDocument();
     expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
@@ -737,7 +751,7 @@ describe.each(coachScreens)("%s post-audit Coach conclusions", (_, route, path, 
       version: "v1", conclusions: [unchanged, history],
     } } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, "fr");
-    expect(await screen.findByTestId("kilometer-splits")).toBeInTheDocument();
+    await awaitSessionLoaded(Page);
     expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
     expect(screen.queryByText(history.text)).not.toBeInTheDocument();
     expect(screen.queryByText(unchanged.text)).not.toBeInTheDocument();
@@ -754,7 +768,7 @@ describe.each(coachScreens)("%s Coach V1 access and localization", (_, route, pa
       version: "v1", conclusions: [coachConclusion({ text })],
     } } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
-    expect(await screen.findByTestId("kilometer-splits")).toBeInTheDocument();
+    await awaitSessionLoaded(Page);
     expect(screen.queryByTestId("coach-primary")).not.toBeInTheDocument();
     expect(screen.queryByText(text)).not.toBeInTheDocument();
     expect(axios.get.mock.calls.some(([url]) => url.includes(`language=${language}`))).toBe(true);
@@ -835,11 +849,12 @@ test.each(["fr", "en", "es"])("interval analysis hides diagnostics and history i
   };
   mockAxios({ analysisPayload: payload, workoutPayload: { ...workout, km_splits: [] } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
-  const section = await screen.findByTestId("structured-phase-analysis");
+  await screen.findByTestId("ask-coach-btn");
+  expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
   expect(screen.getByTestId("session-classification")).toHaveTextContent(`${labels.structure}: ${labels.structureIntervals}`);
   expect(screen.queryByText(/Standard session/)).not.toBeInTheDocument();
-  expect(section).toHaveTextContent(labels.averageEffortPace);
-  expect(screen.getByTestId("effort-regularity")).toHaveTextContent("7,7 s/km".replace(",", language === "en" ? "." : ","));
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
@@ -976,8 +991,8 @@ test("structured phases show compact 4×4 efforts with collapsed ordered recover
   mockAxios({ analysisPayload: { ...analysis, phase_analysis: phaseAnalysis } });
 
   renderWithProviders(
-    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
-    "/workout/w1",
+    <Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>,
+    "/workout/w1/analysis",
   );
 
   const section = await screen.findByTestId("structured-phase-analysis");
@@ -1014,13 +1029,23 @@ test("structured phases sort efforts and recoveries by their recorded order", as
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   const effortRows = within(section).getAllByTestId("phase-effort-row");
   expect(effortRows[0]).toHaveTextContent("Effort 1");
   expect(effortRows[0]).toHaveTextContent("4:48/km");
   expect(effortRows[3]).toHaveTextContent("Effort 4");
   expect(effortRows[3]).toHaveTextContent("4:51/km");
+});
+
+test("WorkoutDetail renders no details accordion, phase analysis or kilometer splits", async () => {
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
+  ["workout-analysis-details", "structured-phase-analysis", "phase-summary", "effort-regularity",
+    "kilometer-splits", "reference-populations", "narrative-comparisons", "workout-limitations-details"].forEach((id) => {
+    expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+  });
 });
 
 test("unavailable or absent phase_analysis preserves standard Workout Detail without an empty phase section", async () => {
@@ -1060,6 +1085,11 @@ test.each([
   });
   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
   await screen.findByTestId(pageId);
+  if (Page === WorkoutDetail) {
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
+    return;
+  }
   const section = screen.getByTestId("kilometer-splits");
   expect(section.open).toBe(false);
   const rows = within(section).getAllByTestId("kilometer-split-row");
@@ -1096,10 +1126,16 @@ test.each([
   });
   renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
   await screen.findByTestId(pageId);
-  expect(screen.getByTestId("effort-regularity")).toHaveTextContent("7.7 s/km");
+  if (Page === WorkoutDetail) {
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+  } else {
+    expect(screen.getByTestId("effort-regularity")).toHaveTextContent("7.7 s/km");
+    expect(screen.getByTestId("structured-phase-analysis")).toBeInTheDocument();
+  }
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
-  expect(screen.getByTestId("structured-phase-analysis")).toHaveAttribute("data-testid", "structured-phase-analysis");
   expect(screen.queryByText("Execution details and unavailable intensity caveat.")).not.toBeInTheDocument();
   expect(screen.queryByText(/intensity.*unavailable/i)).not.toBeInTheDocument();
   expect(screen.queryByText("The final effort was faster. Physiological intensity cannot be reliably determined.")).not.toBeInTheDocument();
@@ -1127,23 +1163,9 @@ test.each([
   expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
 });
 
-test("kilometer split pace respects units and sport-specific speed display", async () => {
-  mockAxios({
-    workoutPayload: { ...workout, type: "cycle", km_splits: [{ km: 1, pace_min_km: 2.5 }] },
-  });
-  renderWithProviders(
-    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
-    "/workout/w1",
-    "en",
-    "imperial",
-  );
-  const section = await screen.findByTestId("kilometer-splits");
-  expect(within(section).getByTestId("kilometer-split-row")).toHaveTextContent("14.9 mph");
-});
-
 test("collapsed kilometer splits use a wrapping mobile layout without a chart", async () => {
   mockAxios();
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("kilometer-splits");
   const row = within(section).getAllByTestId("kilometer-split-row")[0];
   expect(section).toHaveClass("min-w-0");
@@ -1169,7 +1191,7 @@ test("one effort is shown without a regularity judgment", async () => {
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   expect(within(section).getAllByRole("listitem")).toHaveLength(1);
   expect(section).toHaveTextContent("4:00");
@@ -1203,7 +1225,7 @@ test("unknown phases remain chronological, use a neutral label, and do not inven
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   const effortRows = within(section).getAllByTestId("phase-effort-row");
   expect(within(effortRows[0]).queryByTestId("phase-recovery-row")).not.toBeInTheDocument();
@@ -1228,7 +1250,7 @@ test("missing recoveries are reported as zero without inferred associations", as
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   expect(screen.getByTestId("phase-summary")).toHaveTextContent("Recoveries: 0");
   expect(screen.queryByTestId("phase-recovery-row")).not.toBeInTheDocument();
@@ -1250,7 +1272,7 @@ test("missing effort heart-rate values are omitted rather than fabricated", asyn
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   within(section).getAllByTestId("phase-effort-row").forEach((row) => expect(row.firstElementChild).not.toHaveTextContent("bpm"));
   expect(section).not.toHaveTextContent("undefined");
@@ -1273,7 +1295,7 @@ test("missing effort paces and incomplete coverage do not produce technical pane
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   expect(section).not.toHaveTextContent("Average effort pace");
   expect(section).toHaveTextContent("Effort 1");
@@ -1293,7 +1315,7 @@ test("available partial regularity shows one concise indicator and required cave
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const regularity = await screen.findByTestId("effort-regularity");
   expect(regularity).toHaveTextContent("7.7 s/km");
   expect(regularity).toHaveTextContent(translations.en.workoutDetailExtended.partialEffortComparison);
@@ -1313,7 +1335,7 @@ test("unavailable regularity does not display a performance judgment or regulari
       },
     },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
   expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
   expect(section).not.toHaveTextContent("perfect");
@@ -1325,7 +1347,7 @@ test("structured phases without kilometer splits remain distinct from split data
     workoutPayload: { ...workout, km_splits: [] },
     analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() },
   });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
   expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
   expect(screen.queryByText(translations.en.workoutDetailExtended.splitsUnavailable)).not.toBeInTheDocument();
@@ -1333,7 +1355,7 @@ test("structured phases without kilometer splits remain distinct from split data
 
 test("kilometer splits are not added as a fourth detail layer", async () => {
   mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
   expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
 });
@@ -1353,12 +1375,12 @@ test.each([
 
   await screen.findByTestId("workout-detail");
   if (allowed) {
-    expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
+    expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
     expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(1);
     expect(screen.queryByTestId("analysis-upgrade-notice")).not.toBeInTheDocument();
   } else {
     expect(await screen.findByTestId("analysis-upgrade-notice")).toBeVisible();
-    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ask-coach-btn")).not.toBeInTheDocument();
     expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
     expect(screen.queryByTestId("takeaways-title")).not.toBeInTheDocument();
     expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
@@ -1402,7 +1424,7 @@ test("WorkoutDetail waits for entitlement resolution before requesting analysis"
       </UnitProvider>
     </LanguageProvider>,
   );
-  expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
+  expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
   expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(1);
 });
 
@@ -1411,11 +1433,11 @@ test("WorkoutDetail hides loaded analysis immediately on downgrade and reloads a
   mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
   const route = <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>;
   const view = renderWithProviders(route, "/workout/w1");
-  expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
+  expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
 
   setAnalysisAccess({ loading: true, allowed: true });
   view.rerender(<LanguageProvider><UnitProvider><MemoryRouter initialEntries={["/workout/w1"]}>{route}</MemoryRouter></UnitProvider></LanguageProvider>);
-  expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("ask-coach-btn")).not.toBeInTheDocument();
   expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
 
   setAnalysisAccess({ allowed: false });
@@ -1425,15 +1447,15 @@ test("WorkoutDetail hides loaded analysis immediately on downgrade and reloads a
 
   setAnalysisAccess({ allowed: true });
   view.rerender(<LanguageProvider><UnitProvider><MemoryRouter initialEntries={["/workout/w1"]}>{route}</MemoryRouter></UnitProvider></LanguageProvider>);
-  expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
+  expect(await screen.findByTestId("ask-coach-btn")).toBeInTheDocument();
   expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(2);
 });
 
 test.each(["fr", "en", "es"])("structured phase headings and labels are localized in %s", async (language) => {
   mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
   renderWithProviders(
-    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
-    "/workout/w1",
+    <Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>,
+    "/workout/w1/analysis",
     language,
   );
   const section = await screen.findByTestId("structured-phase-analysis");
@@ -1448,9 +1470,9 @@ test("structured phase cards keep a compact, wrapping layout at a 360px mobile v
   const originalWidth = window.innerWidth;
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 360 });
   mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
-  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  renderWithProviders(<Routes><Route path="/workout/:id/analysis" element={<DetailedAnalysis />} /></Routes>, "/workout/w1/analysis");
   const section = await screen.findByTestId("structured-phase-analysis");
-  expect(screen.getByTestId("workout-detail")).toHaveClass("min-w-0");
+  expect(screen.getByTestId("detailed-analysis")).toHaveClass("min-w-0");
   expect(section.querySelectorAll(".min-w-0").length).toBeGreaterThan(0);
   expect(section.querySelector("table")).toBeNull();
   expect(section.innerHTML).not.toContain("min-w-max");
@@ -2455,8 +2477,13 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       ] },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
-    expect(await screen.findByTestId("effort-regularity")).toHaveTextContent("7.7 s/km");
-    expect(screen.getAllByTestId("phase-effort-row")).toHaveLength(4);
+    if (Page === WorkoutDetail) {
+      await awaitSessionLoaded(Page, "effort-regularity");
+      expect(screen.queryAllByTestId("phase-effort-row")).toHaveLength(0);
+    } else {
+      expect(await screen.findByTestId("effort-regularity")).toHaveTextContent("7.7 s/km");
+      expect(screen.getAllByTestId("phase-effort-row")).toHaveLength(4);
+    }
     expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
     expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
     expect(screen.queryByText("Already represented in phase regularity.")).not.toBeInTheDocument();
@@ -2493,8 +2520,8 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       phase_analysis: { available: true, phases: [{ phase_type: "effort", ...metric }] },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
-    expect(await screen.findByTestId("structured-phase-analysis")).toBeInTheDocument();
-    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    await awaitSessionLoaded(Page, "structured-phase-analysis");
+    if (Page !== WorkoutDetail) expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
   });
 
   test("actually rendered average effort pace prevents a false fallback", async () => {
@@ -2506,8 +2533,11 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
-    expect(await screen.findByTestId("phase-summary")).toHaveTextContent("5:00/km");
-    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    await awaitSessionLoaded(Page, "phase-summary");
+    if (Page !== WorkoutDetail) {
+      expect(screen.getByTestId("phase-summary")).toHaveTextContent("5:00/km");
+      expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    }
   });
 
   test.each(["fr", "en", "es"].flatMap((language) => [
@@ -2524,6 +2554,11 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+    if (Page === WorkoutDetail) {
+      await awaitSessionLoaded(Page, "phase-recovery-row");
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+      return;
+    }
     const recovery = await screen.findByTestId("phase-recovery-row");
     fireEvent.click(within(recovery).getByText(translations[language].workoutDetailExtended.phaseRecoveryNumber.replace("{number}", "1"), { exact: false }));
     expect(within(recovery).getByText(text)).toBeInTheDocument();
@@ -2539,8 +2574,11 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
       },
     } });
     renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
-    expect(await screen.findByTestId("effort-regularity")).toHaveTextContent("0 s/km");
-    expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    await awaitSessionLoaded(Page, "effort-regularity");
+    if (Page !== WorkoutDetail) {
+      expect(screen.getByTestId("effort-regularity")).toHaveTextContent("0 s/km");
+      expect(screen.queryByTestId("analysis-fallback")).not.toBeInTheDocument();
+    }
   });
 
   test("pace-only evidence needs no HR or intensity and deduplicates valid observations", async () => {
@@ -2621,8 +2659,8 @@ describe.each(editorialPages)("%s factual observation contract", (_name, route, 
      ] },
    } });
    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
-   expect(await screen.findByTestId("effort-regularity")).toBeInTheDocument();
-   expect(screen.getByTestId("meaning-text")).toHaveTextContent("Measured HR increases from 151 to 159 bpm.");
+   expect(await screen.findByTestId("meaning-text")).toHaveTextContent("Measured HR increases from 151 to 159 bpm.");
+   expect(Boolean(screen.queryByTestId("effort-regularity"))).toBe(Page !== WorkoutDetail);
    expect(screen.queryByText("Dispersion already shown in phases.")).not.toBeInTheDocument();
   });
 

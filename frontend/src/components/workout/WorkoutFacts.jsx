@@ -127,10 +127,6 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
       comparisonRows.push(["hrAtPace", formatAnalysisDelta(hr.hr_difference_bpm, lang, "bpm")]);
     }
   }
-  // "Insufficient history" alone is a state, not a reason to offer an otherwise empty disclosure.
-  const hasDetails = detailsAvailable || comparisonRows.length > 0
-    || referenceRows.some(([key]) => key !== "history" || history?.status === "available")
-    || rest.length > 0 || otherMarkers.length > 0 || observationTexts.length > 0;
 
   return (
     <div className="min-w-0 space-y-4 break-words" data-testid="workout-facts">
@@ -164,38 +160,6 @@ export default function WorkoutFacts({ data, lang, t, children, detailsAvailable
         <span className="min-w-0">{essential.text}</span>
       </p>}
       {action}
-      {hasDetails && <DetailsDisclosure title={text("details")}>
-          {otherMarkers.length > 0 && <ul className="space-y-2 text-sm" data-testid="other-markers">
-            {otherMarkers.map(({ key, label, value, structured }) => <li key={key}>
-              {(label || structured?.label) && <span className="block text-xs text-muted-foreground">{label || structured.label}</span>}
-              {value || structured.headline}
-            </li>)}
-          </ul>}
-          {observationTexts.length > 0 && <section data-testid="observation-details">
-            <h3 className="mb-2 text-sm font-semibold">{text("observationDetail")}</h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              {observationTexts.map(([code, value]) => <li key={code}>{value}</li>)}
-            </ul>
-          </section>}
-          {children}
-          {comparisonRows.length > 0 && <section data-testid="narrative-comparisons">
-            <h3 className="mb-2 text-sm font-semibold">{text("history")}</h3>
-            <dl className="space-y-2 text-sm">{comparisonRows.map(([key, value]) =>
-              <div key={key}><dt className="text-muted-foreground">{text(key)}</dt><dd>{value}</dd></div>)}</dl>
-          </section>}
-          {referenceRows.length > 0 && <section data-testid="reference-populations">
-            <h3 className="mb-1 text-sm font-semibold">{text("references")}</h3>
-            <p className="mb-2 text-xs text-muted-foreground">{text("referencesNote")}</p>
-            <dl className="space-y-2 text-sm">{referenceRows.map(([key, label, value]) =>
-              <div key={key}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl>
-          </section>}
-          {rest.length > 0 && <section data-testid="workout-limitations-details">
-            <h3 className="mb-2 text-sm font-semibold">{text("methodLimits")}</h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              {rest.map((item) => <li key={item.key} data-sources={item.sources.join(",")}>{item.text}</li>)}
-            </ul>
-          </section>}
-      </DetailsDisclosure>}
     </div>
   );
 }

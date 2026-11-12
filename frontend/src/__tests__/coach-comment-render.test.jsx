@@ -29,10 +29,10 @@ test.each([
   expect(screen.getByTestId("workout-evidence")).toHaveTextContent("3");
 });
 
-test("keeps every narrative limitation visible on the sheet", () => {
+test("keeps the essential narrative limitation visible and no details accordion", () => {
   renderIt({ narrative_coach_v3: narrative, workout_intelligence_v3: facts });
   expect(screen.getByTestId("workout-limitations")).toHaveTextContent("LIMIT ONE");
-  expect(screen.getByTestId("workout-limitations-details")).toHaveTextContent("LIMIT TWO");
+  expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
 });
 
 test("renders nothing without facts or valid narrative", () => {

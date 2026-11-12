@@ -305,27 +305,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(evidence).not.toHaveTextContent(/6[,.]6|standard deviation|Écart-type|Desviación estándar/);
     expect(narrative.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    const phases = screen.getByTestId("structured-phase-analysis");
-    const phaseDetails = phases.closest("details");
-    expect(phaseDetails).not.toBeNull();
-    expect(phaseDetails).not.toHaveAttribute("open");
-    const phaseSummary = phaseDetails.querySelector("summary");
-    expect(phaseSummary).toHaveTextContent(/\S/);
-    fireEvent.click(phaseSummary);
-    expect(phaseDetails).toHaveAttribute("open");
-    expect(within(phases).getAllByTestId("phase-effort-row")).toHaveLength(6);
-    expect(within(phases).getAllByTestId("phase-recovery-row")).toHaveLength(5);
-    expect(within(phases).getByTestId("effort-regularity"))
-      .toHaveTextContent(language === "en" ? "6.6 s/km" : "6,6 s/km");
-    expect(within(phases).getByTestId("effort-regularity"))
-      .toHaveTextContent(translations[language].workoutNarrative.regularity);
-
-    const splits = screen.getByTestId("kilometer-splits");
-    expect(splits.tagName).toBe("DETAILS");
-    expect(splits).not.toHaveAttribute("open");
-    fireEvent.click(splits.querySelector("summary"));
-    expect(splits).toHaveAttribute("open");
-    expect(within(splits).getAllByTestId("kilometer-split-row")).toHaveLength(2);
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
     expect(screen.getByTestId("ask-coach-btn")).toBeInTheDocument();
     expect(JSON.stringify(intelligence)).toBe(original);
     expectIndependentRequests("w1", language);
@@ -361,7 +343,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     await screen.findByTestId("workout-facts");
     expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent("0 s/km");
-    expect(screen.getByTestId("effort-regularity")).toHaveTextContent("0 s/km");
+    expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
   });
 
   test.each(languages)("preserves probable easy classification without claiming a physiological zone in %s", async (language) => {
@@ -439,8 +421,8 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page, language);
     await screen.findByTestId("workout-facts");
     const evidence = screen.getByTestId("workout-evidence");
-    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
-    expect(screen.getByTestId("reference-populations")).toHaveTextContent(translations[language].workoutNarrative.insufficientHistory);
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reference-populations")).not.toBeInTheDocument();
     expect(evidence).not.toHaveTextContent(copy[language].improvement);
     expect(evidence).not.toHaveTextContent(/insufficient_data|NaN|undefined/);
   });
@@ -454,7 +436,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     await waitFor(() => expectIndependentRequests("w1", language));
     expect(await screen.findByTestId("workout-facts")).toBeInTheDocument();
     expect(screen.queryByText("Private deterministic diagnosis.")).not.toBeInTheDocument();
-    expect(screen.getByTestId("kilometer-splits")).toBeInTheDocument();
+    expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
   });
 
   test.each([
@@ -484,7 +466,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(status).not.toHaveTextContent(/Private upstream|Error:|workout-intelligence|HTTP/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByTestId("workout-facts")).not.toBeInTheDocument();
-    expect(screen.getByTestId("structured-phase-analysis")).toBeInTheDocument();
+    expect(Boolean(screen.queryByTestId("structured-phase-analysis"))).toBe(Page !== WorkoutDetail);
     expectIndependentRequests("w1", language);
   });
 
@@ -519,7 +501,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(await screen.findByTestId("coach-pending")).toHaveTextContent(translations[language].workoutNarrative.pending);
     expectNoNarrativeProse();
     expect(screen.queryByText("Recorded session.")).not.toBeInTheDocument();
-    expect(screen.getByTestId("structured-phase-analysis")).toBeInTheDocument();
+    expect(Boolean(screen.queryByTestId("structured-phase-analysis"))).toBe(Page !== WorkoutDetail);
     expect(screen.getAllByText(/150 bpm/).length).toBeGreaterThan(0);
     expectIndependentRequests("w1", language);
     await act(async () => { pending.resolve({ data: makeIntelligence(language) }); });
@@ -557,9 +539,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expect(evidence).toHaveTextContent("4");
     expect(evidence).toHaveTextContent("3");
     expect(screen.getByTestId("workout-limitations")).toHaveTextContent("Only four recorded efforts.");
-    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
-    expect(screen.getAllByTestId("phase-effort-row")).toHaveLength(4);
-    expect(screen.getAllByTestId("phase-recovery-row")).toHaveLength(3);
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId("phase-effort-row")).toHaveLength(0);
+    expect(screen.queryAllByTestId("phase-recovery-row")).toHaveLength(0);
   });
 
   test("keeps Garmin facts and the comparison population of a continuous run", async () => {
@@ -577,9 +559,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page);
     expect(await screen.findByTestId("workout-evidence")).toHaveTextContent(translations.en.workoutNarrative.easy_run_probable);
     expect(document.body.textContent).toMatch(/150/);
-    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
-    expect(screen.getByTestId("reference-populations")).toHaveTextContent("7 comparable sessions");
-    expect(screen.getByTestId("narrative-comparisons")).toHaveTextContent("5");
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reference-populations")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("narrative-comparisons")).not.toBeInTheDocument();
   });
 
   test("ignores a late response for a previous workout route", async () => {
@@ -631,16 +613,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     renderPage(route, path, Page, language);
     expect(await screen.findByTestId("workout-facts")).not.toHaveTextContent("MAD");
     expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(/6[,.]6|7[,.]7/);
-    const details = screen.getByTestId("workout-analysis-details");
-    expect(details).not.toHaveAttribute("open");
-    fireEvent.click(details.querySelector("summary"));
-    const deviation = within(details).getByTestId("effort-regularity");
-    expect(deviation).toBeVisible();
-    expect(deviation).toHaveTextContent(translations[language].workoutNarrative.regularity);
-    expect(deviation).toHaveTextContent(language === "en" ? "7.7 s/km" : "7,7 s/km");
-    expect(deviation).toHaveTextContent("4/6");
-    expect(deviation).toHaveTextContent(translations[language].workoutDetailExtended.partialEffortComparison);
-    expect(screen.getAllByText(/7[,.]7 s\/km/)).toHaveLength(1);
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
+    expect(screen.queryByText(/7[,.]7 s\/km/)).not.toBeInTheDocument();
     expectNoNarrativeProse();
   });
 
@@ -656,7 +631,7 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     expectIndependentRequests("w1", language);
     await act(async () => { pending.resolve({ data: makeAnalysis() }); });
     expect(screen.getByTestId("workout-facts")).toBeVisible();
-    expect(screen.getByTestId("structured-phase-analysis").closest("details")).toBeInTheDocument();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
     expectNoNarrativeProse();
   });
 
@@ -850,11 +825,9 @@ describe.each(pages)("%s narrative V3 integration", (_, route, path, Page) => {
     mockRequests({ analysis });
     renderPage(route, path, Page, language);
     await screen.findByTestId("workout-facts");
-    const details = screen.getByTestId("workout-analysis-details");
-    fireEvent.click(details.querySelector("summary"));
-    expect(screen.getByTestId("effort-regularity")).toHaveTextContent(translations[language].workoutDetailExtended.firstToLastPace);
-    expect(screen.getByTestId("effort-regularity")).toHaveTextContent("+12 s/km");
-    expect(screen.getByTestId("effort-regularity")).not.toHaveTextContent(translations[language].workoutNarrative.regularity);
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
+    expect(screen.queryByText("+12 s/km")).not.toBeInTheDocument();
   });
 
   test("revocation hides completed Premium data and restoration starts a fresh scope", async () => {
@@ -1014,24 +987,24 @@ describe("WorkoutDetail C417 consolidation", () => {
     expect(screen.getAllByText("Same limit.")).toHaveLength(1);
   });
 
-  test("keeps different limitations: one in the main flow, the rest in the details", async () => {
+  test("keeps different limitations: one in the main flow, the rest out of the page", async () => {
     await open(
       analysisWith(synthesisWith([{ code: "synthesis.hr_observation", text: "HR limit.", source_paths: [] }])),
       continuousIntelligence(["Different V3 limit."]),
     );
     expect(screen.getByTestId("workout-limitations")).toHaveTextContent("HR limit.");
-    const details = screen.getByTestId("workout-analysis-details");
-    expect(within(details).getByTestId("workout-limitations-details")).toHaveTextContent("Different V3 limit.");
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workout-limitations-details")).not.toBeInTheDocument();
+    expect(screen.queryByText("Different V3 limit.")).not.toBeInTheDocument();
     expect(screen.getAllByText("HR limit.")).toHaveLength(1);
   });
 
-  test("never repeats the primary observation and keeps it out of any synthesis card", async () => {
+  test("keeps the primary observation sentence off the page and out of any synthesis card", async () => {
     await open(analysisWith(synthesisWith()), continuousIntelligence());
-    expect(screen.getAllByText(paceText)).toHaveLength(1);
+    expect(screen.queryByText(paceText)).not.toBeInTheDocument();
     expect(screen.getByTestId("workout-evidence")).not.toHaveTextContent(paceText);
     expect(screen.getByTestId("marker-headline")).toHaveTextContent("21.4 s/km faster than your references");
     expect(screen.getByTestId("marker-detail")).toHaveTextContent("This session: 6:06/km · References: 6:27/km");
-    expect(screen.getByTestId("workout-analysis-details")).toContainElement(screen.getByText(paceText));
     expect(screen.getAllByTestId("session-marker").length).toBeLessThanOrEqual(3);
     expect(screen.queryByTestId("synthesis-primary")).not.toBeInTheDocument();
   });
@@ -1056,35 +1029,28 @@ describe("WorkoutDetail C417 consolidation", () => {
     expect(screen.queryByTestId("comparable-note")).not.toBeInTheDocument();
   });
 
-  test("shows the four primary metrics in the header card, closed details and one Coach button", async () => {
+  test("shows the four primary metrics in the header card, no details accordion and one Coach button", async () => {
     await open(analysisWith(synthesisWith()), continuousIntelligence());
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(translations.en.workoutDetailExtended.sessionSummary);
     expect(within(screen.getByTestId("primary-metrics")).getAllByRole("definition")).toHaveLength(4);
     expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
-    expect(screen.getByTestId("workout-analysis-details")).not.toHaveAttribute("open");
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
   });
 
-  test("places the Coach button before the long technical sections and keeps its URL", async () => {
+  test("places the Coach button after the evidence and keeps its URL", async () => {
     await open(analysisWith(synthesisWith()), continuousIntelligence());
     const button = screen.getByTestId("ask-coach-btn");
     expect(screen.getAllByTestId("ask-coach-btn")).toHaveLength(1);
-    const details = screen.getByTestId("workout-analysis-details");
-    expect(details).not.toHaveAttribute("open");
-    expect(button.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
     expect(screen.getByTestId("workout-evidence").compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(details).toContainElement(screen.getByTestId("kilometer-splits"));
+    expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
   });
 
-  test("keeps reference populations distinct and unchanged in the details", async () => {
+  test("keeps the comparable-distance population in the evidence and no reference-populations block", async () => {
     await open(analysisWith(synthesisWith()), continuousIntelligence());
-    fireEvent.click(screen.getByTestId("workout-analysis-details").querySelector("summary"));
-    const references = screen.getByTestId("reference-populations");
-    expect(references).toHaveTextContent("25 reference sessions");
-    expect(references).toHaveTextContent("3 comparable sessions");
-    expect(references).not.toHaveTextContent("5 earlier sessions");
+    expect(screen.queryByTestId("workout-analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reference-populations")).not.toBeInTheDocument();
     expect(screen.getByTestId("workout-evidence")).toHaveTextContent("5 sessions of comparable distance");
-    expect(references).toHaveTextContent(translations.en.workoutNarrative.referencesNote);
-    expect(references.textContent).not.toMatch(/33|\b8\b/);
   });
 
   test("excludes interpretations and narrative prose, and never calls the AI on open", async () => {

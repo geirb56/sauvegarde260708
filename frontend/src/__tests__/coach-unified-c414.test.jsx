@@ -63,7 +63,7 @@ describe("C414 unified Coach experience", () => {
     renderCoach("/coach?analyze=wA");
     const chips = await screen.findByTestId("coach-followup-chips");
     fireEvent.click(chips.querySelector("button"));
-    expect(screen.getByTestId("coach-input").value).toBe(translations.en.coach.followups.compare);
+    expect(screen.getByTestId("coach-input").value).toBe(translations.en.coach.followups.improve);
     expect(axios.post).toHaveBeenCalledTimes(1);
   });
 
@@ -109,7 +109,7 @@ describe("C414 unified Coach experience", () => {
     renderCoach("/coach?analyze=wA", lang);
     const chips = await screen.findByTestId("coach-followup-chips");
     const dict = translations[lang].coach;
-    expect(chips).toHaveTextContent(dict.followups.compare);
+    expect(chips).toHaveTextContent(dict.followups.improve);
     expect(chips).toHaveTextContent(dict.followups.takeaway);
     expect(screen.getByTestId("back-to-workout")).toHaveAttribute("aria-label", dict.backToWorkout);
     expect(screen.getByTestId("close-workout-context")).toHaveAttribute("aria-label", dict.closeContext);

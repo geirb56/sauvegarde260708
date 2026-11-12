@@ -8,7 +8,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import OAuthButtons from "@/components/OAuthButtons";
-import AuthBrand from "@/components/AuthBrand";
 import { mapAuthErrorDetail } from "@/lib/authErrors";
 
 export default function Login() {
@@ -51,7 +50,7 @@ export default function Login() {
             {`${t("auth.title")} — ${t("auth.signIn")}`}
           </h1>
           <CardTitle>
-            <AuthBrand testId="login-brand-logo" />
+            <img src="/runindex-logo-official.png" alt="RunIndex" className="mx-auto h-auto w-full max-w-[280px]" data-testid="login-brand-logo" />
           </CardTitle>
           <p className="text-muted-foreground text-sm mt-1">{t("auth.signIn")}</p>
         </CardHeader>

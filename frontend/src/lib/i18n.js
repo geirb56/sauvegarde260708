@@ -316,7 +316,7 @@ export const translations = {
       limitReached: "You have reached your monthly Coach limit. See your subscription for more.",
       rateLimited: "You are sending requests too quickly. Please wait a moment and try again.",
       followups: {
-        compare: "How does this compare with my other runs?",
+        improve: "How can I improve my next session of this type?",
         takeaway: "What should I take away most of all?",
       },
       emptyState: "What do you want to work on?",
@@ -1394,7 +1394,7 @@ export const translations = {
       limitReached: "Vous avez atteint votre limite mensuelle du Coach. Consultez votre abonnement.",
       rateLimited: "Vous envoyez trop de demandes en peu de temps. Patientez un instant puis réessayez.",
       followups: {
-        compare: "Et par rapport à mes autres sorties ?",
+        improve: "Comment améliorer ma prochaine séance de ce type ?",
         takeaway: "Qu’est-ce que je dois retenir surtout ?",
       },
       emptyState: "Sur quoi veux-tu qu’on travaille ?",
@@ -2392,7 +2392,7 @@ export const translations = {
       limitReached: "Has alcanzado tu límite mensual del Coach. Consulta tu suscripción.",
       rateLimited: "Estás enviando solicitudes demasiado rápido. Espera un momento e inténtalo de nuevo.",
       followups: {
-        compare: "¿Y en comparación con mis otras salidas?",
+        improve: "¿Cómo puedo mejorar mi próxima sesión de este tipo?",
         takeaway: "¿Qué es lo más importante que debo recordar?",
       },
       emptyState: "¿En qué quieres que trabajemos?",
