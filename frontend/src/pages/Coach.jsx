@@ -163,10 +163,8 @@ export default function Coach() {
     setLoading(true);
 
     // Fetch workout details for display
-    let workoutName = "";
     try {
       const workoutRes = await axios.get(`${API}/workouts/${workoutId}`);
-      workoutName = workoutRes.data.name || workoutId;
       const metadata = workoutMetaFrom(workoutRes.data);
       requestedMetaRef.current.add(workoutId);
       setWorkoutMetaById(current => ({ ...current, [workoutId]: metadata }));
@@ -174,7 +172,7 @@ export default function Coach() {
         setActiveWorkoutMetadata(current => current === null ? null : metadata);
       }
     } catch (e) {
-      workoutName = workoutId;
+      // The workout metadata is optional: the analysis is selected by workout_id.
     }
 
     // Superseded (even by a later reopening of the same workout) or closed: no message, no POST.
@@ -186,7 +184,7 @@ export default function Coach() {
       return;
     }
 
-    const analysisMessage = t("coachExtended.analysisPrompt").replace("{name}", workoutName);
+    const analysisMessage = t("coachExtended.analysisPrompt");
 
     setMessages(prev => [...prev, { role: "user", content: analysisMessage, workout_id: workoutId }]);
 
