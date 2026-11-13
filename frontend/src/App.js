@@ -1,5 +1,5 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { Loader2 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
@@ -17,6 +17,7 @@ import Subscription from "@/pages/Subscription";
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
 import Coach from "@/pages/Coach";
 import Onboarding from "@/pages/Onboarding";
+import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ForgotPassword from "@/pages/ForgotPassword";
@@ -36,6 +37,19 @@ function ProtectedRoute({ children }) {
   }
   if (!user) return <Navigate to="/login" replace />;
   return children;
+}
+
+// "/" is the public Landing for visitors and the app shell (Dashboard) once
+// authenticated; every other path under it stays protected.
+function RootRoute() {
+  const { user, loading } = useAuth();
+  const { pathname } = useLocation();
+  if (!loading && !user && pathname === "/") return <Landing />;
+  return (
+    <ProtectedRoute>
+      <Layout />
+    </ProtectedRoute>
+  );
 }
 
 function AdminRoute({ children }) {
@@ -68,11 +82,7 @@ function App() {
                   <Route path="/reset-password" element={<ResetPassword />} />
                   <Route
                     path="/"
-                    element={
-                      <ProtectedRoute>
-                        <Layout />
-                      </ProtectedRoute>
-                    }
+                    element={<RootRoute />}
                   >
                     <Route index element={<Dashboard />} />
                     <Route path="sessions" element={<Sessions />} />
