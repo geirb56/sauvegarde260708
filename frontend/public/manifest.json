@@ -1,7 +1,7 @@
 {
   "name": "RunIndex - Coach Running Personnel",
   "short_name": "RunIndex",
-  "description": "Coach running personnel avec synchronisation Strava, analyses RAG et suivi de progression",
+  "description": "Application de suivi et coaching running connectée à Garmin.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
