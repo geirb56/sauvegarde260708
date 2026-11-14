@@ -37,8 +37,10 @@ AUTH_ENV_VALUE = "yes"
 PREMIUM_PRICE_EUR = 4.99
 QUESTIONS_PER_USER_MONTH = 30
 SUBSCRIBER_COUNTS = (100, 500, 1000)
-CHARS_PER_TOKEN_UPPER = 2.5  # conservative: overestimates input tokens for the pre-call budget guard
-SYSTEM_PROMPT_HEADROOM_CHARS = 9000
+PROMPT_WRAPPER_TOKENS = 500  # template, directives and message framing around the serialized context
+WORST_CASE_MARGIN = 1.25
+MAX_PLAUSIBLE_PRICE_PER_MTOK = 1000.0
+DEFAULT_FIXED_PROMPT_BYTES = 20000  # fallback when llm_coach cannot be imported (tests)
 
 
 @dataclass(frozen=True)
@@ -117,33 +119,79 @@ class Price:
     output_per_mtok: float
 
 
+def _finite_nonneg(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
 def parse_price(spec: str) -> tuple[str, Price]:
-    """MODEL=input,cached,output in USD per 1M tokens."""
+    """MODEL=input,cached,output in USD per 1M tokens. Rejects NaN/Inf/negative/incoherent grids."""
     try:
         model, rest = spec.split("=", 1)
         inp, cached, out = (float(x) for x in rest.split(","))
     except ValueError as exc:
         raise ValueError(f"invalid --price '{spec}', expected MODEL=input,cached,output") from exc
-    if min(inp, cached, out) < 0 or not model.strip():
-        raise ValueError(f"invalid --price '{spec}'")
-    return model.strip(), Price(inp, cached, out)
+    model = model.strip()
+    if not model:
+        raise ValueError(f"invalid --price '{spec}': empty model")
+    if not all(_finite_nonneg(v) for v in (inp, cached, out)):
+        raise ValueError(f"invalid --price for {model}: values must be finite and non-negative")
+    if inp <= 0 or out <= 0:
+        raise ValueError(f"invalid --price for {model}: input and output prices must be > 0")
+    if cached > inp:
+        raise ValueError(f"invalid --price for {model}: cached price exceeds input price")
+    if max(inp, cached, out) > MAX_PLAUSIBLE_PRICE_PER_MTOK:
+        raise ValueError(f"invalid --price for {model}: implausible value (USD per 1M tokens)")
+    return model, Price(inp, cached, out)
+
+
+def parse_prices(specs: list[str], models: list[str]) -> dict[str, Price]:
+    prices: dict[str, Price] = {}
+    for spec in specs:
+        model, price = parse_price(spec)
+        if model in prices:
+            raise ValueError(f"duplicate --price for {model}")
+        prices[model] = price
+    missing = [m for m in models if m not in prices]
+    if missing:
+        raise ValueError(f"no verified --price for {', '.join(missing)}")
+    return prices
+
+
+def valid_usage(input_tokens: Any, cached_tokens: Any, output_tokens: Any) -> bool:
+    ints = (input_tokens, cached_tokens, output_tokens)
+    if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in ints):
+        return False
+    return cached_tokens <= input_tokens
 
 
 def cost_usd(price: Price, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
-    uncached = max(input_tokens - cached_tokens, 0)
-    return (uncached * price.input_per_mtok + cached_tokens * price.cached_per_mtok
-            + output_tokens * price.output_per_mtok) / 1_000_000
+    if not valid_usage(input_tokens, cached_tokens, output_tokens):
+        raise ValueError("invalid token usage")
+    uncached = input_tokens - cached_tokens
+    result = (uncached * price.input_per_mtok + cached_tokens * price.cached_per_mtok
+              + output_tokens * price.output_per_mtok) / 1_000_000
+    if not _finite_nonneg(result):
+        raise ValueError("non-finite cost")
+    return result
 
 
-def worst_case_call_cost(price: Price, prompt_chars: int, max_output_tokens: int) -> float:
-    est_input = math.ceil(prompt_chars / CHARS_PER_TOKEN_UPPER)
-    return cost_usd(price, est_input, 0, max_output_tokens)
+def worst_case_call_cost(price: Price, prompt_bytes: int, max_output_tokens: int) -> float:
+    """Upper-bound heuristic, not a billing guarantee: a token never covers less than one UTF-8 byte, so
+    input tokens <= bytes; all output tokens (reasoning included) are assumed to hit max_output_tokens;
+    the result is inflated by WORST_CASE_MARGIN. Real invoices can still differ (tiers, rounding)."""
+    est_input = prompt_bytes + PROMPT_WRAPPER_TOKENS
+    return cost_usd(price, est_input, 0, max_output_tokens) * WORST_CASE_MARGIN
 
 
 class BudgetGuard:
-    """Stops the run before a call that could exceed the ceiling, or when usage is untrackable."""
+    """Cumulative spend counter. Stops before a call that could exceed the ceiling, when the ceiling is
+    reached, and as soon as consumption can no longer be measured reliably."""
 
     def __init__(self, ceiling_usd: float, max_calls: int):
+        if not (_finite_nonneg(ceiling_usd) and 0 < ceiling_usd <= HARD_BUDGET_CEILING_USD):
+            raise ValueError(f"budget must be finite and in (0, {HARD_BUDGET_CEILING_USD}] USD")
+        if not isinstance(max_calls, int) or max_calls < 1:
+            raise ValueError("max_calls must be a positive integer")
         self.ceiling = ceiling_usd
         self.max_calls = max_calls
         self.spent = 0.0
@@ -153,7 +201,9 @@ class BudgetGuard:
     def check(self, worst_case: float) -> bool:
         if self.stop_reason:
             return False
-        if self.calls >= self.max_calls:
+        if not _finite_nonneg(worst_case):
+            self.stop_reason = "invalid_cost_estimate"
+        elif self.calls >= self.max_calls:
             self.stop_reason = "max_calls_reached"
         elif self.spent + worst_case > self.ceiling:
             self.stop_reason = "budget_ceiling_would_be_exceeded"
@@ -161,12 +211,15 @@ class BudgetGuard:
 
     def record(self, actual_cost: Optional[float], worst_case: float) -> None:
         self.calls += 1
-        if actual_cost is None:
-            # Usage not reported: charge the worst case and stop, consumption is no longer reliable.
-            self.spent += worst_case
+        if actual_cost is None or not _finite_nonneg(actual_cost):
+            # Usage missing/invalid (also after an API error: the call may have been billed): charge the
+            # worst case and stop, consumption is no longer measurable.
+            self.spent += worst_case if _finite_nonneg(worst_case) else self.ceiling
             self.stop_reason = "usage_untrackable"
         else:
             self.spent += actual_cost
+            if self.spent >= self.ceiling and not self.stop_reason:
+                self.stop_reason = "budget_ceiling_reached"
 
 
 # ---------------------------------------------------------------- safety checks
@@ -238,9 +291,60 @@ def build_schedule(scenarios: list[Scenario], models: list[str], repetitions: in
                 step += 1
 
 
-def _prompt_chars(turn: Turn, context: dict, history: list[dict]) -> int:
-    return (len(json.dumps(context, ensure_ascii=False)) + len(turn.message)
-            + sum(len(str(m.get("content", ""))) for m in history) + SYSTEM_PROMPT_HEADROOM_CHARS)
+def total_turns(scenarios: list[Scenario]) -> int:
+    return sum(len(s.turns) for s in scenarios)
+
+
+def planned_calls(scenarios: list[Scenario], n_models: int, repetitions: int) -> int:
+    """Every turn is sent once per model and per repetition (8 scenarios = 12 turns)."""
+    return total_turns(scenarios) * n_models * repetitions
+
+
+def runnable_scenarios(contexts: dict[str, Any]) -> tuple[list[Scenario], list[str]]:
+    scenarios, skipped = [], []
+    for scenario in SCENARIOS:
+        missing = sorted({t.context_key for t in scenario.turns} - set(contexts))
+        if missing:
+            skipped.append(f"{scenario.id}: skipped, missing context(s) {', '.join(missing)}")
+        else:
+            scenarios.append(scenario)
+    return scenarios, skipped
+
+
+def validate_campaign(*, models: list[str], repetitions: int, max_calls: int, scenarios: list[Scenario],
+                      allow_missing_scenarios: bool = False) -> int:
+    """Return the planned call count or raise ValueError. Run before the first paid call."""
+    if len(models) != 2 or len(set(models)) != 2:
+        raise ValueError("exactly two distinct models are compared, so both get the same number of calls")
+    if repetitions < 1:
+        raise ValueError("repetitions must be >= 1")
+    if not scenarios:
+        raise ValueError("no runnable scenario: fixtures contain none of the required contexts")
+    if len(scenarios) != len(SCENARIOS) and not allow_missing_scenarios:
+        raise ValueError(f"only {len(scenarios)}/{len(SCENARIOS)} scenarios have fixtures "
+                         "(use --allow-missing-scenarios to accept a reduced campaign)")
+    planned = planned_calls(scenarios, len(models), repetitions)
+    if planned > max_calls:
+        per_rep = planned_calls(scenarios, len(models), 1)
+        raise ValueError(f"campaign needs {planned} calls ({total_turns(scenarios)} turns x {len(models)} models x "
+                         f"{repetitions} repetitions) but --max-calls is {max_calls}; raise --max-calls to at "
+                         f"least {planned} or lower --repetitions (max {max_calls // per_rep} fits)")
+    return planned
+
+
+def campaign_status(records: list["CallRecord"], models: list[str], planned: int,
+                    skipped: list[str], stop_reason: Optional[str]) -> dict[str, Any]:
+    per_model = {m: sum(1 for r in records if r.model == m) for m in models}
+    balanced = len(set(per_model.values())) == 1
+    complete = (len(records) == planned and balanced and not skipped and stop_reason is None
+                and all(r.success for r in records))
+    return {"complete": complete, "executed": len(records), "planned": planned,
+            "per_model": per_model, "balanced": balanced, "stop_reason": stop_reason}
+
+
+def _prompt_bytes(turn: Turn, context: dict, history: list[dict], fixed_prompt_bytes: int) -> int:
+    return (len(json.dumps(context, ensure_ascii=False).encode("utf-8")) + len(turn.message.encode("utf-8"))
+            + sum(len(str(m.get("content", "")).encode("utf-8")) for m in history) + fixed_prompt_bytes)
 
 
 async def run_benchmark(
@@ -253,14 +357,9 @@ async def run_benchmark(
     max_output_tokens: int,
     caller: Caller,
     set_model: Callable[[str], None],
+    fixed_prompt_bytes: int = DEFAULT_FIXED_PROMPT_BYTES,
 ) -> tuple[list[CallRecord], list[str]]:
-    scenarios, skipped = [], []
-    for scenario in SCENARIOS:
-        missing = sorted({t.context_key for t in scenario.turns} - set(contexts))
-        if missing:
-            skipped.append(f"{scenario.id}: skipped, missing context(s) {', '.join(missing)}")
-        else:
-            scenarios.append(scenario)
+    scenarios, skipped = runnable_scenarios(contexts)
 
     records: list[CallRecord] = []
     histories: dict[tuple[str, int, str], list[dict]] = {}
@@ -272,29 +371,40 @@ async def run_benchmark(
         for model in order:
             key = (scenario.id, rep, model)
             if key in failed_chains:
+                skipped.append(f"{scenario.id} rep{rep} turn{turn_index} {model}: skipped after earlier failure")
                 continue
             history = histories.setdefault(key, []) if scenario.chained else []
-            worst = worst_case_call_cost(prices[model], _prompt_chars(turn, context, history), max_output_tokens)
+            worst = worst_case_call_cost(
+                prices[model], _prompt_bytes(turn, context, history, fixed_prompt_bytes), max_output_tokens)
             if not budget.check(worst):
                 return records, skipped + [f"stopped: {budget.stop_reason}"]
             set_model(model)
             started = time.perf_counter()
-            text, ok, meta = await caller(
-                user_message=turn.message,
-                context=context,
-                conversation_history=list(history),
-                user_id="benchmark",
-            )
+            try:
+                text, ok, meta = await caller(
+                    user_message=turn.message,
+                    context=context,
+                    conversation_history=list(history),
+                    user_id="benchmark",
+                )
+            except (Exception, asyncio.CancelledError) as exc:
+                # Interrupted or crashed mid-call: it may have been billed, so charge the worst case and stop.
+                budget.record(None, worst)
+                return records, skipped + [f"stopped: interrupted ({type(exc).__name__})"]
             total = time.perf_counter() - started
+            meta = meta if isinstance(meta, dict) else {}
             in_t, cached_t, out_t = (meta.get(k) for k in ("input_tokens", "cached_input_tokens", "output_tokens"))
-            actual = (cost_usd(prices[model], in_t, cached_t or 0, out_t)
-                      if in_t is not None and out_t is not None else None)
+            cached_t = 0 if cached_t is None else cached_t
+            actual = (cost_usd(prices[model], in_t, cached_t, out_t)
+                      if valid_usage(in_t, cached_t, out_t) else None)
             budget.record(actual, worst)
             records.append(CallRecord(
                 scenario=scenario.id, turn=turn_index, model=model, repetition=rep, success=bool(ok and text),
                 error=None if ok else str(meta.get("error") or "unknown"),
                 api_duration_sec=meta.get("duration_sec"), total_duration_sec=round(total, 3),
-                input_tokens=in_t, cached_tokens=cached_t, output_tokens=out_t,
+                input_tokens=in_t if actual is not None else None,
+                cached_tokens=cached_t if actual is not None else None,
+                output_tokens=out_t if actual is not None else None,
                 reasoning_tokens=meta.get("reasoning_tokens"), cost_usd=actual,
                 response_chars=len(text or ""), response=text,
             ))
@@ -304,6 +414,8 @@ async def run_benchmark(
                                     {"role": "assistant", "content": text}])
                 else:
                     failed_chains.add(key)
+    if budget.stop_reason:
+        skipped.append(f"stopped: {budget.stop_reason}")
     return records, skipped
 
 
@@ -350,11 +462,20 @@ def _fmt(value: Any) -> str:
 
 def render_report(stats: dict[str, dict], econ: dict[str, dict], meta: dict[str, Any]) -> str:
     models = list(stats)
+    status = meta.get("status") or {}
+    banner = ("**STATUS: COMPLETE**" if status.get("complete")
+              else f"**STATUS: INCOMPLETE / PARTIAL - {status.get('executed', meta['calls'])}/"
+                   f"{status.get('planned', '?')} planned calls executed; results must not be read as a full "
+                   "benchmark.**")
     lines = [
         "# C427B - Coach model benchmark report",
         "",
-        f"Mode: **{meta['mode']}**. Spent (estimated from measured tokens, USD): {_fmt(meta['spent_usd'])}. "
-        f"Calls: {meta['calls']}. Stop reason: {_fmt(meta['stop_reason'])}.",
+        banner,
+        "",
+        f"Mode: **{meta['mode']}**. Spent (estimated from measured tokens and the supplied price grid, not an "
+        f"invoice or a billing guarantee, USD): {_fmt(meta['spent_usd'])}. "
+        f"Calls: {meta['calls']}. Stop reason: {_fmt(meta['stop_reason'])}. "
+        f"Calls per model: {_fmt(status.get('per_model'))}.",
         "Small sample: medians/P95 are indicative, not statistically representative. "
         "No response text, identifier or Garmin value appears in this report.",
         "",
@@ -457,52 +578,85 @@ def install_live_instrumentation(llm_coach, max_output_tokens: int) -> None:
     llm_coach.LLM_MAX_OUTPUT_TOKENS = max_output_tokens
 
 
+def finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(f"'{text}' must be a finite, non-negative number")
+    return value
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--fixtures", required=True, type=Path, help="private anonymised fixtures JSON (outside the repo)")
     p.add_argument("--out-dir", required=True, type=Path, help="private output directory (outside the repo)")
     p.add_argument("--models", nargs="+", default=list(DEFAULT_MODELS))
-    p.add_argument("--repetitions", type=int, default=3)
+    p.add_argument("--repetitions", type=int, default=3,
+                   help="12 turns x 2 models x repetitions = calls (72 for 3, 48 for 2, 24 for 1)")
     p.add_argument("--price", action="append", default=[], metavar="MODEL=IN,CACHED,OUT",
                    help="verified USD per 1M tokens; required for every model in live mode")
-    p.add_argument("--eur-per-usd", type=float, default=None, help="needed only for the 4.99 EUR share")
-    p.add_argument("--budget-usd", type=float, default=HARD_BUDGET_CEILING_USD)
-    p.add_argument("--remaining-budget-usd", type=float, default=None)
-    p.add_argument("--max-calls", type=int, default=60)
+    p.add_argument("--eur-per-usd", type=finite_float, default=None, help="needed only for the 4.99 EUR share")
+    p.add_argument("--budget-usd", type=finite_float, default=HARD_BUDGET_CEILING_USD)
+    p.add_argument("--remaining-budget-usd", type=finite_float, default=None)
+    p.add_argument("--max-calls", type=int, default=None,
+                   help="hard cap on paid calls; default = exactly the planned campaign. A value below the "
+                        "planned count is refused before the first call.")
     p.add_argument("--max-output-tokens", type=int, default=2000)
+    p.add_argument("--allow-missing-scenarios", action="store_true",
+                   help="accept a reduced campaign when some fixtures are absent (reported as incomplete)")
     p.add_argument("--live", action="store_true", help="perform paid OpenAI calls")
     p.add_argument("--i-authorize-paid-calls", action="store_true")
     p.add_argument("--seed", type=int, default=427)
     return p.parse_args(argv)
 
 
+def write_outputs(out_dir: Path, records: list[CallRecord], models: list[str], budget: BudgetGuard,
+                  status: dict[str, Any], notes: list[str], eur_per_usd: Optional[float], seed: int) -> str:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stats = {m: model_stats(records, m) for m in models}
+    econ = {m: economics(stats[m]["cost_usd_per_response_mean"], eur_per_usd) for m in models}
+    report = render_report(stats, econ, {
+        "mode": "live (real OpenAI calls)", "spent_usd": round(budget.spent, 6),
+        "calls": budget.calls, "stop_reason": budget.stop_reason, "status": status,
+    })
+    if notes:
+        report += "\n## Notes\n\n" + "\n".join(f"- {n}" for n in notes) + "\n"
+    (out_dir / "report.md").write_text(report, encoding="utf-8")
+    metrics = [{k: v for k, v in r.__dict__.items() if k != "response"} for r in records]
+    (out_dir / "metrics.json").write_text(
+        json.dumps({"status": status, "calls": metrics}, indent=2), encoding="utf-8")
+    write_blind_files(out_dir, records, seed)
+    return report
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     fixtures = assert_outside_repo(args.fixtures, "--fixtures")
     out_dir = assert_outside_repo(args.out_dir, "--out-dir")
-    if args.repetitions < 1 or args.max_calls < 1 or args.max_output_tokens < 1:
-        raise SystemExit("repetitions, max-calls and max-output-tokens must be >= 1.")
-    try:
-        prices = dict(parse_price(s) for s in args.price)
-    except ValueError as exc:
-        raise SystemExit(str(exc))
+    if args.max_output_tokens < 1 or args.max_output_tokens > 8000:
+        raise SystemExit("--max-output-tokens must be in [1, 8000].")
     contexts = load_fixtures(fixtures)
+    scenarios, skipped_scenarios = runnable_scenarios(contexts)
+    max_calls = args.max_calls if args.max_calls is not None else planned_calls(
+        scenarios, len(args.models), max(args.repetitions, 1))
+    try:
+        planned = validate_campaign(models=args.models, repetitions=args.repetitions, max_calls=max_calls,
+                                    scenarios=scenarios, allow_missing_scenarios=args.allow_missing_scenarios)
+        BudgetGuard(args.budget_usd, max_calls)  # validates ceiling and cap
+        prices = parse_prices(args.price, args.models) if (args.live or args.price) else {}
+    except ValueError as exc:
+        raise SystemExit(f"Refused before any call: {exc}")
 
-    runnable = [s for s in SCENARIOS if {t.context_key for t in s.turns} <= set(contexts)]
-    planned = sum(len(s.turns) for s in runnable) * len(args.models) * args.repetitions
-    print(f"Plan: {len(runnable)}/{len(SCENARIOS)} scenarios, {len(args.models)} models, "
-          f"{args.repetitions} repetitions = {planned} calls (cap {args.max_calls}, budget {args.budget_usd} USD).")
+    print(f"Plan: {len(scenarios)}/{len(SCENARIOS)} scenarios, {total_turns(scenarios)} turns x "
+          f"{len(args.models)} models x {args.repetitions} repetitions = {planned} calls "
+          f"(cap {max_calls}, budget {args.budget_usd} USD).")
+    for note in skipped_scenarios:
+        print("Note:", note)
     if not args.live:
         print("Dry run: no OpenAI call made. Add --live with the required authorisations to execute.")
         return 0
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
     check_live_authorization(args, api_key)
-    missing_prices = [m for m in args.models if m not in prices]
-    if missing_prices:
-        raise SystemExit(f"Live run refused: no verified --price for {', '.join(missing_prices)}.")
-    if planned > args.max_calls:
-        print(f"Warning: plan exceeds --max-calls; the run will stop after {args.max_calls} calls.")
 
     availability = asyncio.run(check_models_available(args.models, api_key))
     print("Model availability:", availability)
@@ -511,31 +665,22 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     import llm_coach
     install_live_instrumentation(llm_coach, args.max_output_tokens)
+    fixed_bytes = len(llm_coach.SYSTEM_PROMPT_COACH.encode("utf-8")) + 4000  # + directives/template
 
     def set_model(model: str) -> None:
         llm_coach.LLM_MODEL = model
 
-    budget = BudgetGuard(args.budget_usd, args.max_calls)
+    budget = BudgetGuard(args.budget_usd, max_calls)
     records, notes = asyncio.run(run_benchmark(
         contexts=contexts, models=args.models, prices=prices, repetitions=args.repetitions, budget=budget,
         max_output_tokens=args.max_output_tokens, caller=llm_coach.enrich_chat_response, set_model=set_model,
+        fixed_prompt_bytes=fixed_bytes,
     ))
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stats = {m: model_stats(records, m) for m in args.models}
-    econ = {m: economics(stats[m]["cost_usd_per_response_mean"], args.eur_per_usd) for m in args.models}
-    report = render_report(stats, econ, {
-        "mode": "live (real OpenAI calls)", "spent_usd": round(budget.spent, 6),
-        "calls": budget.calls, "stop_reason": budget.stop_reason,
-    })
-    if notes:
-        report += "\n## Notes\n\n" + "\n".join(f"- {n}" for n in notes) + "\n"
-    (out_dir / "report.md").write_text(report, encoding="utf-8")
-    metrics = [{k: v for k, v in r.__dict__.items() if k != "response"} for r in records]
-    (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    write_blind_files(out_dir, records, args.seed)
+    status = campaign_status(records, args.models, planned, skipped_scenarios, budget.stop_reason)
+    report = write_outputs(out_dir, records, args.models, budget, status, notes + skipped_scenarios,
+                           args.eur_per_usd, args.seed)
     print(report)
-    return 0
+    return 0 if status["complete"] else 3
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ Le modèle de production (`OPENAI_MODEL`), `backend-api`, les workers, Netlify e
 ## Fichiers
 - `backend/benchmarks/export_coach_contexts.py` : export ponctuel, lecture seule, des contextes Coach anonymisés (03/11, 05/11, comparaison).
 - `backend/benchmarks/coach_model_benchmark.py` : benchmark autonome (hors endpoints).
-- `backend/tests/test_c427b_model_benchmark.py` : 13 tests hors ligne, sans appel payant ni Mongo.
+- `backend/tests/test_c427b_model_benchmark.py` : 69 tests hors ligne, sans appel payant ni Mongo.
 
 ## Principe de mesure
 - Le script appelle `llm_coach.enrich_chat_response` : mêmes prompts, garde-fous, paramètres Responses API (`model`, `instructions`, `input`, `store=False`, `max_output_tokens`) et nettoyage que la production. Seul `llm_coach.LLM_MODEL` change entre les appels. Aucun paramètre de raisonnement n'est envoyé, donc `gpt-4.1` (non-reasoning) ne reçoit rien d'incompatible.
@@ -21,11 +21,13 @@ Le modèle de production (`OPENAI_MODEL`), `backend-api`, les workers, Netlify e
 - Économie : coût moyen/réponse, 30 q/mois/utilisateur, 100/500/1 000 abonnés, part des 4,99 € (nécessite `--eur-per-usd`).
 
 ## Garde-fous budget
-- Plafond 1 USD codé en dur (`--budget-usd` ≤ 1), `--max-calls` (60 par défaut = 10 tours × 2 modèles × 3 répétitions), `--max-output-tokens` (2000).
-- Avant chaque appel : coût pire cas (entrée majorée + sortie max) ; arrêt si dépassement du plafond.
-- Arrêt immédiat si l'usage n'est pas renvoyé (consommation non suivie).
-- `--live` refusé sans : `OPENAI_API_KEY`, `--i-authorize-paid-calls` **et** `C427B_PAID_CALLS_AUTHORIZED=yes`, `--remaining-budget-usd` ≥ plafond (à relever dans le dashboard OpenAI), prix pour chaque modèle.
-- Sans `--live` : plan uniquement (dry run).
+- **Nombre d'appels** : 8 scénarios = 12 tours ; appels = 12 × 2 modèles × répétitions → **24 (1 rép.), 48 (2), 72 (3)**. `--max-calls` vaut par défaut exactement la campagne prévue ; une valeur inférieure est **refusée avant tout appel** (message avec le minimum requis et le nombre de répétitions qui tient). Exactement deux modèles distincts, donc nombre d'appels identique par modèle. Scénarios sans fixture : refusés sauf `--allow-missing-scenarios` (campagne alors marquée incomplète).
+- **Statut** : le rapport indique `COMPLETE` uniquement si tous les appels prévus ont été exécutés, équilibrés entre modèles, sans erreur, sans arrêt ni scénario manquant ; sinon `INCOMPLETE / PARTIAL` (rapport partiel écrit, code de sortie 3).
+- **Tarifs** (`--price MODELE=entrée,cache,sortie`) : refus de NaN/Inf/négatifs, entrée et sortie > 0, cache ≤ entrée, valeur implausible, doublon ou modèle sans tarif. Idem pour `--budget-usd`, `--remaining-budget-usd`, `--eur-per-usd`.
+- **Plafond** 1 USD codé en dur (`--budget-usd` ≤ 1), compteur cumulatif. Avant chaque appel, coût pire cas = (octets UTF-8 du prompt + marge d'emballage, un token couvrant ≥ 1 octet) en entrée + `--max-output-tokens` en sortie (raisonnement inclus), × 1,25 ; arrêt si cumul + pire cas > plafond, et dès que le cumul atteint le plafond. Cette estimation est une **borne heuristique, pas une garantie de facturation** : la facture OpenAI fait foi.
+- **Usage non mesurable** (métriques absentes, négatives, non entières, cache > entrée, NaN, erreur API sans usage, exception ou interruption en cours d'appel) : le pire cas est imputé au cumul et la campagne s'arrête proprement avec rapport partiel.
+- `--live` refusé sans : `OPENAI_API_KEY`, `--i-authorize-paid-calls` **et** `C427B_PAID_CALLS_AUTHORIZED=yes`, `--remaining-budget-usd` ≥ plafond (à relever dans le dashboard OpenAI), prix pour chaque modèle. Sans `--live` : plan uniquement.
+- `--max-output-tokens` ∈ [1, 8000] (2000 par défaut).
 
 ## Procédure d'extraction sécurisée (exécution manuelle)
 1. Service/job Railway **temporaire et isolé** (pas d'endpoint public), même image que `backend-api`, Mongo en lecture seule si possible. Ne rien modifier sur `backend-api`, workers Garmin, Netlify.
@@ -38,7 +40,7 @@ Le modèle de production (`OPENAI_MODEL`), `backend-api`, les workers, Netlify e
      --comparison-message "<message désignant les deux séances>" \
      --out /tmp/c427b/fixtures_private.json
    ```
-   L'export vérifie l'identité (hash de l'email, non journalisé), exige l'accès analyse (Premium), n'utilise que des lectures, remplace les identifiants par des alias (`w1`…), retire e-mail/nom/titres/GPS/jetons, et **échoue** si un e-mail, URL, UUID, hex long ou `sk-…` subsiste. Les dates, allures, FC, tours et historique sportif sont conservés. Relire le fichier avant usage.
+   L'export vérifie l'identité (hash de l'email, non journalisé), exige l'accès analyse (Premium), n'utilise que des lectures, remplace par des alias (`w1`…) uniquement les identifiants **complets** reconnus (UUID, ObjectId, id numérique ≥ 8 chiffres sous une clé `id`/`*_id`), en deux passes (collecte puis remplacement, bornes strictes : jamais dans une allure `5:01/km`, une FC `132`/`148 bpm`, une distance ou une date), conserve les références croisées, retire e-mail/nom/titre/notes/GPS/jetons/polyline, et **échoue** (rien n'est écrit) en cas de doute : id de format inconnu, e-mail, URL, UUID, hex long, `sk-…`, suite de 9+ chiffres ou paire de coordonnées subsistant. Une vérification finale compare chaque valeur sportive avant/après (nombres identiques, jetons numériques des textes identiques). Les dates, allures, FC, tours et historique sportif sont conservés. Relire le fichier avant usage.
 4. Le fichier reste hors dépôt (les deux scripts refusent un chemin dans le dépôt), en `0600`, supprimé après le test.
 
 ## Exécution
@@ -62,6 +64,7 @@ Noter les réponses anonymisées /5 sur : exactitude des chiffres Garmin, struct
 Clé uniquement via `OPENAI_API_KEY` ; aucun secret/donnée personnelle dans le dépôt, les rapports ou les logs (`llm_coach` ne journalise que des métriques) ; aucune écriture Mongo, aucun quota modifié ; pas de routage multi-modèles ; `.gitignore` couvre `*_private.json`.
 
 ## Limites connues
+- Les clés `name`/`title`/`notes` sont supprimées (texte libre pouvant nommer lieux/personnes) ; si elles portaient une information sportive utile, elle est perdue.
 - Export non testé contre une vraie base : seules l'anonymisation, l'identité et le parsing sont testés hors ligne ; relire la sortie avant le benchmark.
 - Le P95 sur ~30 appels/modèle est indicatif.
 - Le statut de cycle de vie de `gpt-4.1` doit être confirmé sur la documentation OpenAI à la date du test.
