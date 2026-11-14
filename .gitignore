@@ -46,3 +46,7 @@ tmp/
 !/docs/reports/assets/c358/WorkoutDetail-mobile-en-delayed-local-placeholder.png
 !/docs/reports/assets/c358/WorkoutDetail-mobile-en-delayed-valid.png
 !/docs/reports/assets/c358/WorkoutDetail-mobile-en-http500-fallback.png
+
+# C427B private benchmark artefacts (never commit)
+backend/benchmarks/private/
+*_private.json
