@@ -19,10 +19,26 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Configuration
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
-LLM_MODEL = "gpt-4.1-mini"
+# Direct OpenAI Responses API (C426). The key is read from the backend environment only.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+LLM_MODEL = os.environ.get("OPENAI_MODEL", "").strip() or "gpt-6-luna"
 LLM_PROVIDER = "openai"
-LLM_TIMEOUT = 15
+
+
+def _env_float(name: str, default: Optional[float]) -> Optional[float]:
+    try:
+        value = float(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+LLM_TIMEOUT = _env_float("OPENAI_TIMEOUT_SECONDS", 30.0) or 30.0
+LLM_MAX_OUTPUT_TOKENS = int(_env_float("OPENAI_MAX_OUTPUT_TOKENS", 2000) or 2000)
+# Configurable price grid, USD per 1M tokens. Unset means the cost is not estimated.
+PRICE_INPUT_PER_MTOK = _env_float("OPENAI_PRICE_INPUT_PER_MTOK", None)
+PRICE_CACHED_INPUT_PER_MTOK = _env_float("OPENAI_PRICE_CACHED_INPUT_PER_MTOK", None)
+PRICE_OUTPUT_PER_MTOK = _env_float("OPENAI_PRICE_OUTPUT_PER_MTOK", None)
 # Chat replies are not cut at 700 characters; only an abnormal response is refused.
 CHAT_RESPONSE_HARD_LIMIT = 8000
 CHAT_HISTORY_MESSAGE_CHARS = 2000
@@ -186,6 +202,45 @@ Write the coach's remark on this session in {language.upper()}.{_lang_directive(
     )
 
 
+def _estimate_cost_usd(input_tokens: int, cached_tokens: int, output_tokens: int) -> Optional[float]:
+    if PRICE_INPUT_PER_MTOK is None or PRICE_OUTPUT_PER_MTOK is None:
+        return None
+    cached_price = PRICE_INPUT_PER_MTOK if PRICE_CACHED_INPUT_PER_MTOK is None else PRICE_CACHED_INPUT_PER_MTOK
+    uncached = max(input_tokens - cached_tokens, 0)
+    return round(
+        (uncached * PRICE_INPUT_PER_MTOK + cached_tokens * cached_price
+         + output_tokens * PRICE_OUTPUT_PER_MTOK) / 1_000_000, 6)
+
+
+def _record_usage(metadata: Dict, response) -> None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    details = getattr(usage, "input_tokens_details", None)
+    cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+    metadata.update({
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached_tokens,
+        "output_tokens": output_tokens,
+        "estimated_cost_usd": _estimate_cost_usd(input_tokens, cached_tokens, output_tokens),
+    })
+    actual_model = getattr(response, "model", None)
+    if isinstance(actual_model, str) and actual_model:
+        metadata["model"] = actual_model
+
+
+def _log_call(metadata: Dict) -> None:
+    # Metrics only: never prompts, responses, keys or user identifiers.
+    logger.info(
+        "[LLM] call context=%s model=%s success=%s duration=%ss in=%s cached=%s out=%s cost_usd=%s error=%s",
+        metadata.get("context_type"), metadata.get("model"), metadata.get("success"),
+        metadata.get("duration_sec"), metadata.get("input_tokens"), metadata.get("cached_input_tokens"),
+        metadata.get("output_tokens"), metadata.get("estimated_cost_usd"), metadata.get("error"),
+    )
+
+
 async def _call_gpt(
     system_prompt: str,
     user_prompt: str,
@@ -194,7 +249,11 @@ async def _call_gpt(
     sanitize_errors: bool = False,
     response_max_chars: Optional[int] = 700,
 ) -> Tuple[Optional[str], bool, Dict]:
-    """Call the configured LLM model via Emergent LLM Key."""
+    """Call the configured OpenAI model through the Responses API.
+
+    Single attempt, no retry: a failure returns (None, False, metadata) so callers
+    refund quotas and fall back exactly as before. user_id is deliberately not sent.
+    """
 
     if context_type == "chat":
         response_max_chars = None  # C418: the chat is never cut at 700 characters
@@ -207,36 +266,47 @@ async def _call_gpt(
         "success": False
     }
 
-    if not EMERGENT_LLM_KEY or not EMERGENT_LLM_KEY.startswith("sk-emergent"):
-        logger.warning("[LLM] Emergent LLM Key not configured")
+    if not OPENAI_API_KEY:
+        logger.warning("[LLM] OPENAI_API_KEY not configured")
+        metadata["error"] = "not_configured"
         return None, False, metadata
-    
+
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
-        session_id = f"runindex_{context_type}_{user_id}_{int(time.time())}"
-        
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=session_id,
-            system_message=system_prompt
-        ).with_model(LLM_PROVIDER, LLM_MODEL)
-        
-        response = await asyncio.wait_for(
-            chat.send_message(UserMessage(text=user_prompt)),
-            timeout=LLM_TIMEOUT
-        )
-        
+        from openai import AsyncOpenAI
+
+        # max_retries=0: no hidden retries, hence no duplicated billed calls.
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=LLM_TIMEOUT, max_retries=0)
+        try:
+            response = await asyncio.wait_for(
+                client.responses.create(
+                    model=LLM_MODEL,
+                    instructions=system_prompt,
+                    input=user_prompt,
+                    store=False,
+                    max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
+                ),
+                timeout=LLM_TIMEOUT + 2,
+            )
+        finally:
+            await client.close()
+
         elapsed = time.time() - start_time
         metadata["duration_sec"] = round(elapsed, 2)
+        _record_usage(metadata, response)
+        if getattr(response, "status", "completed") == "incomplete":
+            metadata["error"] = "incomplete_response"
+            logger.warning("[LLM] Incomplete response for %s", context_type)
+            _log_call(metadata)
+            return None, False, metadata
         metadata["success"] = True
-        response_text = str(response).strip()
+        response_text = str(getattr(response, "output_text", "") or "").strip()
         if response_max_chars is None:
             # Chat: never cut a sentence; a response beyond the transport limit is an error.
             if len(response_text) > CHAT_RESPONSE_HARD_LIMIT:
                 metadata["success"] = False
                 metadata["error"] = "response_exceeds_transport_limit"
                 logger.error("[LLM] Chat response exceeds the transport limit")
+                _log_call(metadata)
                 return None, False, metadata
             metadata["response_truncated"] = False
         else:
@@ -244,25 +314,34 @@ async def _call_gpt(
         response_text = _clean_response(response_text, max_chars=response_max_chars)
 
         if response_text:
-            logger.info(f"[LLM] ✅ {context_type} enriched in {elapsed:.2f}s")
+            _log_call(metadata)
             return response_text, True, metadata
-        else:
-            logger.warning(f"[LLM] Empty response for {context_type}")
-            return None, False, metadata
+        metadata["success"] = False
+        metadata["error"] = "empty_response"
+        logger.warning(f"[LLM] Empty response for {context_type}")
+        _log_call(metadata)
+        return None, False, metadata
 
     except asyncio.TimeoutError:
-        elapsed = time.time() - start_time
-        metadata["duration_sec"] = round(elapsed, 2)
-        logger.warning(f"[LLM] ⏱️ Timeout after {elapsed:.2f}s")
+        metadata["duration_sec"] = round(time.time() - start_time, 2)
+        metadata["error"] = "timeout"
+        logger.warning(f"[LLM] ⏱️ Timeout after {metadata['duration_sec']:.2f}s")
+        _log_call(metadata)
         return None, False, metadata
 
     except Exception as e:
-        elapsed = time.time() - start_time
-        metadata["duration_sec"] = round(elapsed, 2)
-        if sanitize_errors:
-            logger.error("[LLM] Provider error")
+        metadata["duration_sec"] = round(time.time() - start_time, 2)
+        status = getattr(e, "status_code", None)
+        name = type(e).__name__
+        if status == 429 or name == "RateLimitError":
+            metadata["error"] = "rate_limited"
+        elif name == "APITimeoutError":
+            metadata["error"] = "timeout"
         else:
-            logger.error(f"[LLM] ❌ Error: {e}")
+            metadata["error"] = f"provider_error_{status}" if status else "provider_error"
+        # Never log the exception message: it can echo request content.
+        logger.error("[LLM] Provider error (%s)", metadata["error"])
+        _log_call(metadata)
         return None, False, metadata
 
 

@@ -4,6 +4,7 @@ MongoDB and the LLM are mocked: these tests do NOT validate real model output.
 """
 
 import asyncio
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -389,7 +390,7 @@ async def test_session_comment_uses_dedicated_prompt_without_fake_question():
     assert not system.startswith(llm_coach.SYSTEM_PROMPT_COACH)
     assert "ATHLETE'S QUESTION" not in prompt and "RESPONSE PRESENTATION DIRECTIVE" not in prompt
     assert call.await_args.args[3] == "session_comment"
-    assert llm_coach.LLM_MODEL == "gpt-4.1-mini"
+    assert llm_coach.LLM_MODEL == (os.environ.get("OPENAI_MODEL", "").strip() or "gpt-6-luna")
 
 
 @pytest.mark.parametrize("lang", ["fr", "en", "es"])

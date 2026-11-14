@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -576,28 +576,20 @@ def test_default_adapter_uses_c360_limit_without_changing_chat_default(monkeypat
 
 def test_shared_adapter_marks_context_specific_truncation(monkeypatch):
     import llm_coach
-    monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "sk-emergent-test")
-    emergent = ModuleType("emergentintegrations")
-    emergent.__path__ = []
-    llm = ModuleType("emergentintegrations.llm")
-    llm.__path__ = []
-    chat = ModuleType("emergentintegrations.llm.chat")
+    monkeypatch.setattr(llm_coach, "OPENAI_API_KEY", "sk-test-key")
 
-    class LongResponseChat:
+    class _Responses:
+        async def create(self, **kwargs):
+            return SimpleNamespace(output_text="x" * 2500, status="completed", usage=None)
+
+    class _Client:
         def __init__(self, **kwargs):
+            self.responses = _Responses()
+
+        async def close(self):
             pass
 
-        def with_model(self, *args):
-            return self
-
-        async def send_message(self, message):
-            return "x" * 2500
-
-    chat.LlmChat = LongResponseChat
-    chat.UserMessage = lambda **kwargs: object()
-    monkeypatch.setitem(sys.modules, "emergentintegrations", emergent)
-    monkeypatch.setitem(sys.modules, "emergentintegrations.llm", llm)
-    monkeypatch.setitem(sys.modules, "emergentintegrations.llm.chat", chat)
+    monkeypatch.setattr("openai.AsyncOpenAI", _Client)
     response, success, metadata = asyncio.run(llm_coach._call_gpt(
         "system", "prompt", "anonymous", "c359_hybrid",
         sanitize_errors=True, response_max_chars=2400,
@@ -612,7 +604,7 @@ def test_shared_adapter_marks_context_specific_truncation(monkeypatch):
 def test_default_adapter_missing_key_has_no_placeholder_latency(monkeypatch):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     import llm_coach
-    monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "")
+    monkeypatch.setattr(llm_coach, "OPENAI_API_KEY", "")
     result = _run()
     assert result.mode == "editorial_realization" and not result.provider_attempted
     assert result.provider_duration_sec is None
@@ -621,30 +613,22 @@ def test_default_adapter_missing_key_has_no_placeholder_latency(monkeypatch):
 def test_default_adapter_sanitizes_provider_exception_logs(monkeypatch, caplog):
     monkeypatch.setenv(hybrid.FEATURE_FLAG, "true")
     import llm_coach
-    monkeypatch.setattr(llm_coach, "EMERGENT_LLM_KEY", "sk-emergent-test")
-    emergent = ModuleType("emergentintegrations")
-    emergent.__path__ = []
-    llm = ModuleType("emergentintegrations.llm")
-    llm.__path__ = []
-    chat = ModuleType("emergentintegrations.llm.chat")
+    monkeypatch.setattr(llm_coach, "OPENAI_API_KEY", "sk-test-key")
     calls = []
 
-    class FailingChat:
-        def __init__(self, **kwargs):
-            pass
-
-        def with_model(self, *args):
-            return self
-
-        async def send_message(self, message):
-            calls.append(message)
+    class _Responses:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
             raise RuntimeError("private-request-response-sentinel")
 
-    chat.LlmChat = FailingChat
-    chat.UserMessage = lambda **kwargs: object()
-    monkeypatch.setitem(sys.modules, "emergentintegrations", emergent)
-    monkeypatch.setitem(sys.modules, "emergentintegrations.llm", llm)
-    monkeypatch.setitem(sys.modules, "emergentintegrations.llm.chat", chat)
+    class _Client:
+        def __init__(self, **kwargs):
+            self.responses = _Responses()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _Client)
     with caplog.at_level(logging.ERROR, logger="llm_coach"):
         text, success, metadata = asyncio.run(hybrid._transport(
             "system", "prompt", "anonymous", "c359_hybrid",
