@@ -193,6 +193,12 @@ async def test_real_timeout_is_enforced(monkeypatch):
     assert resp.json()["status"] == "fallback"
 
 
+def test_comment_deadline_exceeds_openai_client_timeout():
+    # The global deadline must not cut a call still allowed by the OpenAI client (+2s guard).
+    assert csc.COMMENT_TIMEOUT_SEC > llm_coach.LLM_TIMEOUT + 2
+    assert csc.COMMENT_TIMEOUT_SEC <= llm_coach.LLM_TIMEOUT + 10
+
+
 async def test_no_c388_facts_means_unavailable_without_llm():
     stack, llm = _env(_FakeDB(), narrative=lambda _l: None)
     with stack:

@@ -176,6 +176,33 @@ def test_provider_errors_fail_without_retry_or_leak(caplog):
     assert "private-sentinel" not in caplog.text and "sk-test-key" not in caplog.text
 
 
+def test_incomplete_response_is_an_error_not_a_partial_answer():
+    class _Incomplete(_FakeOpenAI):
+        pass
+
+    _FakeOpenAI.reply, _FakeOpenAI.error, _FakeOpenAI.calls, _FakeOpenAI.inits = "partial", None, [], []
+
+    async def create(self, **kwargs):
+        return types.SimpleNamespace(output_text="partial", status="incomplete", usage=None)
+
+    with patch.object(llm_coach, "OPENAI_API_KEY", "sk-test-key"), \
+            patch("openai.AsyncOpenAI", _FakeOpenAI), \
+            patch.object(_FakeResponses, "create", create):
+        import asyncio
+        text, ok, meta = asyncio.run(llm_coach._call_gpt("s", "u", "u1", "session_comment"))
+    assert text is None and ok is False and meta["error"] == "incomplete_response"
+
+
+def test_cancellation_propagates_and_is_not_swallowed():
+    import asyncio
+    text = None
+    try:
+        _run_gpt("x", error=asyncio.CancelledError())
+    except BaseException as exc:
+        text = exc
+    assert isinstance(text, asyncio.CancelledError)
+
+
 def test_client_timeout_fails_cleanly():
     import asyncio
     text, ok, meta = _run_gpt("x", error=asyncio.TimeoutError())
