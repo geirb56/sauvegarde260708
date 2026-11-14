@@ -322,6 +322,12 @@ async def _call_gpt(
         _log_call(metadata)
         return None, False, metadata
 
+    except asyncio.CancelledError:
+        metadata["duration_sec"] = round(time.time() - start_time, 2)
+        metadata["error"] = "cancelled"
+        _log_call(metadata)
+        raise
+
     except asyncio.TimeoutError:
         metadata["duration_sec"] = round(time.time() - start_time, 2)
         metadata["error"] = "timeout"

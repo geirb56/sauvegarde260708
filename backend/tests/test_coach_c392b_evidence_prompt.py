@@ -193,14 +193,20 @@ def test_incomplete_response_is_an_error_not_a_partial_answer():
     assert text is None and ok is False and meta["error"] == "incomplete_response"
 
 
-def test_cancellation_propagates_and_is_not_swallowed():
+def test_cancellation_records_failure_metrics_and_propagates(caplog):
     import asyncio
-    text = None
-    try:
-        _run_gpt("x", error=asyncio.CancelledError())
-    except BaseException as exc:
-        text = exc
-    assert isinstance(text, asyncio.CancelledError)
+
+    with patch.object(llm_coach, "_log_call", wraps=llm_coach._log_call) as log_call, \
+            caplog.at_level("INFO", logger="llm_coach"):
+        with pytest.raises(asyncio.CancelledError):
+            _run_gpt("x", error=asyncio.CancelledError())
+
+    log_call.assert_called_once()
+    metadata = log_call.call_args.args[0]
+    assert metadata["success"] is False
+    assert metadata["error"] == "cancelled"
+    assert metadata["duration_sec"] >= 0
+    assert "success=False" in caplog.text and "error=cancelled" in caplog.text
 
 
 def test_client_timeout_fails_cleanly():

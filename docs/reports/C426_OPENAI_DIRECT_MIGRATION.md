@@ -44,7 +44,7 @@ Rejouer sur Railway/staging, avec les contextes des tests existants (`test_coach
 2. Vérifier l'accès modèle (un appel minimal borné) et qu'aucun log ne contient la clé.
 3. Compte PREMIUM : commentaire de séance puis question chat (FR/EN/ES) ; lire les logs `[LLM] call ...`.
 4. Compte FREE : analyse de séance refusée, quota décrémenté puis remboursé sur erreur simulée (clé invalide en staging).
-5. Retirer temporairement la clé en staging : le Coach doit retomber sur son fallback sans erreur 5xx.
+5. Retirer temporairement la clé en staging : une requête de chat doit volontairement répondre HTTP 503 et rembourser le quota réservé ; un commentaire automatique de séance doit retourner son fallback déterministe (sans transformer cet échec LLM en réponse 5xx).
 
 ## Tests
 Voir description de la PR.
