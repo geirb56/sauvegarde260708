@@ -5,6 +5,7 @@ only established by the C391 benchmark (NOT TESTED here).
 """
 import os
 import sys
+import types
 from unittest.mock import patch
 
 import pytest
@@ -98,37 +99,120 @@ def test_clean_response_and_truncation_flag_behaviour():
 
 @pytest.mark.asyncio
 async def test_llm_failure_returns_none_for_c393_fallback():
-    with patch.object(llm_coach, "EMERGENT_LLM_KEY", ""):
+    with patch.object(llm_coach, "OPENAI_API_KEY", ""):
         text, ok, meta = await llm_coach.enrich_chat_response("x", {"language": "fr"}, [], "u1")
     assert text is None and ok is False and meta["success"] is False
 
 
-class _FakeChat:
-    reply = ""
+class _FakeResponses:
+    def __init__(self, owner):
+        self.owner = owner
 
-    def __init__(self, **_):
+    async def create(self, **kwargs):
+        self.owner.calls.append(kwargs)
+        if self.owner.error:
+            raise self.owner.error
+        return types.SimpleNamespace(
+            output_text=self.owner.reply, status="completed", model="gpt-6-luna-2026",
+            usage=types.SimpleNamespace(
+                input_tokens=8000, output_tokens=1000,
+                input_tokens_details=types.SimpleNamespace(cached_tokens=2000)),
+        )
+
+
+class _FakeOpenAI:
+    reply = ""
+    error = None
+    calls = []
+    inits = []
+
+    def __init__(self, **kwargs):
+        type(self).inits.append(kwargs)
+        self.responses = _FakeResponses(type(self))
+
+    async def close(self):
         pass
 
-    def with_model(self, *_):
-        return self
 
-    async def send_message(self, _message):
-        return type(self).reply
-
-
-def _run_gpt(reply, **kwargs):
+def _run_gpt(reply, error=None, **kwargs):
     import asyncio
-    import types
 
-    _FakeChat.reply = reply
-    module = types.SimpleNamespace(LlmChat=_FakeChat, UserMessage=lambda text: text)
-    with patch.object(llm_coach, "EMERGENT_LLM_KEY", "sk-emergent-test"), \
-            patch.dict(sys.modules, {
-                "emergentintegrations": types.ModuleType("emergentintegrations"),
-                "emergentintegrations.llm": types.ModuleType("emergentintegrations.llm"),
-                "emergentintegrations.llm.chat": module,
-            }):
+    _FakeOpenAI.reply, _FakeOpenAI.error, _FakeOpenAI.calls, _FakeOpenAI.inits = reply, error, [], []
+    with patch.object(llm_coach, "OPENAI_API_KEY", "sk-test-key"), \
+            patch("openai.AsyncOpenAI", _FakeOpenAI):
         return asyncio.run(llm_coach._call_gpt("s", "u", "u1", kwargs.pop("context_type", "chat"), **kwargs))
+
+
+def test_openai_call_is_single_attempt_stateless_and_without_tools_or_user_id():
+    text, ok, meta = _run_gpt("Bonjour.")
+    call = _FakeOpenAI.calls[0]
+    assert ok and text == "Bonjour." and len(_FakeOpenAI.calls) == 1
+    assert call["store"] is False and call["model"] == llm_coach.LLM_MODEL
+    assert call["instructions"] == "s" and call["input"] == "u"
+    assert "tools" not in call and "user" not in call and "u1" not in str(call)
+    init = _FakeOpenAI.inits[0]
+    assert init["max_retries"] == 0 and init["timeout"] == llm_coach.LLM_TIMEOUT
+    assert meta["input_tokens"] == 8000 and meta["cached_input_tokens"] == 2000
+    assert meta["output_tokens"] == 1000 and meta["model"] == "gpt-6-luna-2026"
+    assert meta["estimated_cost_usd"] is None
+
+
+def test_estimated_cost_uses_configurable_price_grid():
+    with patch.object(llm_coach, "PRICE_INPUT_PER_MTOK", 1.0), \
+            patch.object(llm_coach, "PRICE_CACHED_INPUT_PER_MTOK", 0.1), \
+            patch.object(llm_coach, "PRICE_OUTPUT_PER_MTOK", 4.0):
+        _, _, meta = _run_gpt("Bonjour.")
+    assert meta["estimated_cost_usd"] == round((6000 * 1.0 + 2000 * 0.1 + 1000 * 4.0) / 1e6, 6)
+
+
+def test_provider_errors_fail_without_retry_or_leak(caplog):
+    class RateLimitError(Exception):
+        status_code = 429
+
+    with caplog.at_level("ERROR", logger="llm_coach"):
+        text, ok, meta = _run_gpt("x", error=RateLimitError("private-sentinel sk-test-key"))
+    assert text is None and ok is False and meta["error"] == "rate_limited"
+    assert len(_FakeOpenAI.calls) == 1
+    assert "private-sentinel" not in caplog.text and "sk-test-key" not in caplog.text
+
+
+def test_incomplete_response_is_an_error_not_a_partial_answer():
+    class _Incomplete(_FakeOpenAI):
+        pass
+
+    _FakeOpenAI.reply, _FakeOpenAI.error, _FakeOpenAI.calls, _FakeOpenAI.inits = "partial", None, [], []
+
+    async def create(self, **kwargs):
+        return types.SimpleNamespace(output_text="partial", status="incomplete", usage=None)
+
+    with patch.object(llm_coach, "OPENAI_API_KEY", "sk-test-key"), \
+            patch("openai.AsyncOpenAI", _FakeOpenAI), \
+            patch.object(_FakeResponses, "create", create):
+        import asyncio
+        text, ok, meta = asyncio.run(llm_coach._call_gpt("s", "u", "u1", "session_comment"))
+    assert text is None and ok is False and meta["error"] == "incomplete_response"
+
+
+def test_cancellation_records_failure_metrics_and_propagates(caplog):
+    import asyncio
+
+    with patch.object(llm_coach, "_log_call", wraps=llm_coach._log_call) as log_call, \
+            caplog.at_level("INFO", logger="llm_coach"):
+        with pytest.raises(asyncio.CancelledError):
+            _run_gpt("x", error=asyncio.CancelledError())
+
+    log_call.assert_called_once()
+    metadata = log_call.call_args.args[0]
+    assert metadata["success"] is False
+    assert metadata["error"] == "cancelled"
+    assert metadata["duration_sec"] >= 0
+    assert "success=False" in caplog.text and "error=cancelled" in caplog.text
+
+
+def test_client_timeout_fails_cleanly():
+    import asyncio
+    text, ok, meta = _run_gpt("x", error=asyncio.TimeoutError())
+    assert text is None and ok is False and meta["error"] == "timeout"
 
 
 def test_chat_keeps_long_reply_intact_and_default_still_truncates():

@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 COACH_COMMENT_VERSION = "c403-session-comment-v4"
 COMMENT_SOURCE = "coach_c396"
 VALIDATION_LEVEL = "heuristic_guard"  # explicitly not "factually validated"
-COMMENT_TIMEOUT_SEC = 20
+# Global deadline: OpenAI client timeout (+2s guard in _call_gpt) plus margin for context loading.
+COMMENT_TIMEOUT_SEC = llm_coach.LLM_TIMEOUT + 5
 SUCCESS_TTL_SEC = 6 * 3600
 FAILURE_TTL_SEC = 60
 CACHE_MAX = 512

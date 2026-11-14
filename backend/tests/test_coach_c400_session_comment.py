@@ -4,6 +4,7 @@ MongoDB and the LLM are mocked: these tests do NOT validate real model output.
 """
 
 import asyncio
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -190,6 +191,12 @@ async def test_real_timeout_is_enforced(monkeypatch):
     with stack:
         resp = await _get()
     assert resp.json()["status"] == "fallback"
+
+
+def test_comment_deadline_exceeds_openai_client_timeout():
+    # The global deadline must not cut a call still allowed by the OpenAI client (+2s guard).
+    assert csc.COMMENT_TIMEOUT_SEC > llm_coach.LLM_TIMEOUT + 2
+    assert csc.COMMENT_TIMEOUT_SEC <= llm_coach.LLM_TIMEOUT + 10
 
 
 async def test_no_c388_facts_means_unavailable_without_llm():
@@ -389,7 +396,7 @@ async def test_session_comment_uses_dedicated_prompt_without_fake_question():
     assert not system.startswith(llm_coach.SYSTEM_PROMPT_COACH)
     assert "ATHLETE'S QUESTION" not in prompt and "RESPONSE PRESENTATION DIRECTIVE" not in prompt
     assert call.await_args.args[3] == "session_comment"
-    assert llm_coach.LLM_MODEL == "gpt-4.1-mini"
+    assert llm_coach.LLM_MODEL == (os.environ.get("OPENAI_MODEL", "").strip() or "gpt-6-luna")
 
 
 @pytest.mark.parametrize("lang", ["fr", "en", "es"])
